@@ -1,0 +1,410 @@
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+import { apiGet, apiPost } from '@/api/client'
+import { UploadFile, OpenFileDialog } from '@/wailsjs/go/main/App'
+import { normalizeThemeID, useTheme } from '@/composables/useTheme'
+import { useToast } from '@/composables/useToast'
+import { t } from '@/i18n'
+import type { AiProvider, AiProviderKind, AiProviderReq, CircuitState, SmtpConfig, WebSearchConfig } from '@/types/api'
+
+/** 可选的代码字体（精简后只保留 3 个内置字体）。 */
+export const CODE_FONTS = [
+  'JetBrains Mono',
+  'Fira Code',
+  'Cascadia Code'
+] as const
+
+/** 把选中字体写到 --font-mono CSS 变量。 */
+function applyCodeFontToDom(font: string): void {
+  document.documentElement.style.setProperty('--font-mono', `'${font}', ui-monospace, monospace`)
+}
+
+/**
+ * 设置 store（适配后端 ai_provider 单表改造 + snake_case 契约）。
+ */
+export const useSettingsStore = defineStore('settings', () => {
+  const toast = useToast()
+  const providers = ref<AiProvider[]>([])
+  /** 后端实现的 ProviderKind 列表 + 展示元数据（前端从 /api/v1/ai-provider/kinds 拉，避免错配）。 */
+  const providerKinds = ref<AiProviderKind[]>([])
+  /** 所有 provider 的熔断状态 Map（id → CircuitState）。 */
+  const circuitStates = ref<Map<string, CircuitState>>(new Map())
+  const general = ref<Record<string, unknown>>({})
+  const smtpConfig = ref<SmtpConfig>({
+    enabled: 'false',
+    host: '',
+    port: '587',
+    username: '',
+    password: '',
+    from: '',
+    ssl: 'true'
+  })
+  /** 联网搜索配置（DuckDuckGo，无需 api_key；仅 enabled 生效）。 */
+  const webSearchConfig = ref<WebSearchConfig>({
+    enabled: 'true',
+    engine: 'duckduckgo',
+    api_key: ''
+  })
+  /** exec agent 二进制白名单。 */
+  const execWhitelist = ref<string[]>([])
+  /** 关闭主窗口是否隐藏到托盘（tray.close_to_tray）。 */
+  const closeToTray = ref(false)
+  /** 全局界面缩放（0.85~1.25；1 = 默认，经 CSS zoom 全局生效）。 */
+  const fontScale = ref(1)
+  const backgroundUrl = ref<string | null>(null)
+  const codeFont = ref<string>('JetBrains Mono')
+  const theme = ref<string>('light')
+  const error = ref<string | null>(null)
+  const loading = ref(false)
+
+  const form = ref<AiProviderReq>({
+    name: '',
+    kind: 'openai',
+    api_key: '',
+    base_url: '',
+    model: '',
+    alias: '',
+    tier: 'primary',
+    enabled: true,
+    context_window: null,
+    compress_ratio: 0.9,
+    capabilities_json: null,
+    pricing_json: null,
+    temperature: null,
+    thinking_effort: null
+  })
+
+  /** 同时加载模型配置列表、通用设置和 SMTP 配置。 */
+  async function load(): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      const [p, g, s, w, c, k] = await Promise.all([
+        apiGet<AiProvider[]>('/api/v1/ai-provider'),
+        // 注意：必须取 /settings/general（返回 theme/appearance/fontScale 的 JSON map）；
+        // /settings 返回的是全部 KV 数组，不是前端要读的外观对象 —— 取错会导致缩放/主题永远无法恢复。
+        apiGet<Record<string, unknown>>('/api/v1/settings/general'),
+        apiGet<SmtpConfig>('/api/v1/settings/smtp'),
+        apiGet<WebSearchConfig>('/api/v1/settings/websearch'),
+        apiGet<CircuitState[]>('/api/v1/ai-provider/circuit-status').catch(() => [] as CircuitState[]),
+        apiGet<AiProviderKind[]>('/api/v1/ai-provider/kinds').catch(() => [] as AiProviderKind[])
+      ])
+      providers.value = p
+      general.value = g
+      smtpConfig.value = s
+      webSearchConfig.value = w
+      providerKinds.value = Array.isArray(k) ? k : []
+      applyTheme(String(g.theme ?? theme.value))
+      // 设置页自身也要回填外观（缩放/代码字体），否则 Settings 里看到的值永远是默认 100%，
+      // 与后端已保存的实际值不一致（问题5：「全局界面大小没法配置」）。
+      syncAppearanceFromGeneral(g)
+      const map = new Map<string, CircuitState>()
+      for (const s2 of c) map.set(s2.id, s2)
+      circuitStates.value = map
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /** 新增模型配置。 */
+  async function addProvider(): Promise<boolean> {
+    error.value = null
+    if (!form.value.name.trim() || !form.value.model.trim()) {
+      error.value = t('settings.errNameModel')
+      toast.warning(t('settings.errNameModel'))
+      return false
+    }
+    // 额外提醒：本地协议（OpenAI 兼容 / Anthropic / Gemini / Ollama）通常需要 base_url 与 api_key，
+    // 没填的话能创建成功但实际无法联通；不阻断但 toast.info 提醒，避免「点了没反应」。
+    if (!form.value.base_url?.trim()) {
+      toast.info(t('settings.baseUrlMissingHint'))
+    }
+    if (!form.value.api_key?.trim() && form.value.kind !== 'ollama') {
+      toast.info(t('settings.apiKeyMissingHint'))
+    }
+    try {
+      await apiPost<AiProvider>('/api/v1/ai-provider', form.value)
+      form.value = { name: '', kind: 'openai', api_key: '', base_url: '', model: '', alias: '', tier: 'primary', enabled: true, context_window: null, compress_ratio: 0.9, capabilities_json: null, pricing_json: null, temperature: null, thinking_effort: null }
+      await load()
+      toast.success(t('settings.providerAdded'))
+      return true
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      error.value = msg
+      toast.error(t('common.saveFailed'), msg)
+      return false
+    }
+  }
+
+  /** 更新模型配置。 */
+  async function updateProvider(id: string, data: AiProviderReq): Promise<boolean> {
+    error.value = null
+    try {
+      await apiPost<AiProvider>(`/api/v1/ai-provider/${id}/update`, data)
+      await load()
+      toast.success(t('settings.providerUpdated'))
+      return true
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      error.value = msg
+      toast.error(t('common.saveFailed'), msg)
+      return false
+    }
+  }
+
+  /** 删除模型配置。 */
+  async function removeProvider(id: string): Promise<void> {
+    try {
+      await apiPost(`/api/v1/ai-provider/${id}/delete`)
+      await load()
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  /** 连通测试。 */
+  async function testProvider(id: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      return await apiPost<{ ok: boolean; error?: string }>(`/api/v1/ai-provider/${id}/test`)
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  }
+
+  /** 清空指定 provider 的熔断。 */
+  async function resetCircuit(id: string): Promise<boolean> {
+    try {
+      const r = await apiPost<{ reset: boolean }>(`/api/v1/ai-provider/${id}/reset-circuit`)
+      if (r.reset) {
+        const next = new Map(circuitStates.value)
+        next.delete(id)
+        circuitStates.value = next
+      }
+      return r.reset
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      return false
+    }
+  }
+
+  /** 保存 SMTP 配置。 */
+  async function saveSmtpConfig(): Promise<boolean> {
+    error.value = null
+    try {
+      await apiPost('/api/v1/settings/smtp', smtpConfig.value)
+      return true
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      return false
+    }
+  }
+
+  /** 保存联网搜索配置。 */
+  async function saveWebSearchConfig(): Promise<boolean> {
+    error.value = null
+    try {
+      await apiPost('/api/v1/settings/websearch', webSearchConfig.value)
+      return true
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      return false
+    }
+  }
+
+  /** 加载 exec agent 二进制白名单。 */
+  async function loadExecWhitelist(): Promise<void> {
+    try {
+      execWhitelist.value = await apiGet<string[]>('/api/v1/settings/exec/agent')
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  /** 保存 exec agent 白名单。 */
+  async function saveExecWhitelist(binaries: string[]): Promise<boolean> {
+    error.value = null
+    try {
+      execWhitelist.value = await apiPost<string[]>('/api/v1/settings/exec/agent', binaries)
+      return true
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      return false
+    }
+  }
+
+  /** 保存通用设置。 */
+  async function saveGeneral(): Promise<boolean> {
+    error.value = null
+    try {
+      general.value = await apiPost<Record<string, unknown>>('/api/v1/settings/general', general.value)
+      return true
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      return false
+    }
+  }
+
+  /** 读取 appearance（背景 + 代码字体）并应用到 DOM。 */
+  async function loadBackground(): Promise<void> {
+    try {
+      const g = await apiGet<Record<string, any>>('/api/v1/settings/general')
+      general.value = g
+      const bgID = g.appearance?.backgroundImageID as string | undefined
+      backgroundUrl.value = bgID
+        ? (await apiGet<{ url: string }>(`/api/v1/files/${bgID}/preview-url`)).url
+        : null
+      const font = (g.appearance?.fontMono as string) || 'JetBrains Mono'
+      codeFont.value = font
+      applyCodeFontToDom(font)
+      applyTheme((g.theme as string) || 'light')
+    } catch {
+      backgroundUrl.value = null
+    }
+  }
+
+  /** 切换代码字体。 */
+  async function setCodeFont(font: string): Promise<void> {
+    codeFont.value = font
+    applyCodeFontToDom(font)
+    const g = (general.value as Record<string, any>) ?? {}
+    const appearance = (g.appearance as Record<string, any>) ?? {}
+    appearance.fontMono = font
+    g.appearance = appearance
+    general.value = await apiPost<Record<string, unknown>>('/api/v1/settings/general', g)
+  }
+
+  /** 上传背景图。 */
+  async function setBackground(file: File | null): Promise<void> {
+    const g = (general.value as Record<string, any>) ?? {}
+    const appearance = (g.appearance as Record<string, any>) ?? {}
+    let bgID = ''
+    if (file) {
+      const selected = await OpenFileDialog(t('settings.appearance.backgroundUpload'), '*.png;*.jpg;*.jpeg;*.gif;*.webp')
+      if (!selected) return
+      const info = await UploadFile('', selected, '', '')
+      bgID = info.id
+    }
+    appearance.backgroundImageID = bgID
+    g.appearance = appearance
+    general.value = await apiPost<Record<string, unknown>>('/api/v1/settings/general', g)
+    backgroundUrl.value = bgID
+      ? (await apiGet<{ url: string }>(`/api/v1/files/${bgID}/preview-url`)).url
+      : null
+  }
+
+  /** 应用主题到 DOM。 */
+  function applyTheme(t: string): void {
+    const themeID = normalizeThemeID(t)
+    theme.value = themeID
+    useTheme().setTheme(themeID)
+  }
+
+  /** 把界面缩放应用到 DOM（WebView2 = Chromium，CSS zoom 全量生效）。 */
+  function applyFontScaleToDom(scale: number): void {
+    document.documentElement.style.zoom = String(scale)
+  }
+
+  /** 从后端 general.appearance 回填缩放/代码字体并应用到 DOM（load() / loadBackground() 共用）。 */
+  function syncAppearanceFromGeneral(g: Record<string, any>): void {
+    if (!g || typeof g !== 'object') return
+    const appearance = (g.appearance ?? {}) as Record<string, unknown>
+    const scale = Number(appearance.fontScale)
+    if (Number.isFinite(scale) && scale >= 0.8 && scale <= 1.3) {
+      fontScale.value = scale
+      applyFontScaleToDom(scale)
+    }
+    const font = appearance.fontMono as string | undefined
+    if (font) {
+      codeFont.value = font
+      applyCodeFontToDom(font)
+    }
+  }
+
+  /** 读取并应用托盘/缩放设置（App 启动调用一次）。 */
+  async function loadBehavior(): Promise<void> {
+    try {
+      const [trayRaw, g] = await Promise.all([
+        apiGet<{ value?: string } | null>('/api/v1/kv/tray.close_to_tray').catch(() => null),
+        apiGet<Record<string, any>>('/api/v1/settings/general')
+      ])
+      closeToTray.value = String(trayRaw?.value ?? '').toLowerCase() === 'true'
+      const scale = Number((g.appearance as Record<string, unknown> | undefined)?.fontScale)
+      if (Number.isFinite(scale) && scale >= 0.8 && scale <= 1.3) {
+        fontScale.value = scale
+        applyFontScaleToDom(scale)
+      }
+    } catch {
+      // 静默：默认退出行为 + 默认缩放
+    }
+  }
+
+  /** 切换关闭到托盘行为。 */
+  async function setCloseToTray(v: boolean): Promise<boolean> {
+    error.value = null
+    try {
+      await apiPost('/api/v1/kv/tray.close_to_tray', { value: String(v) })
+      closeToTray.value = v
+      return true
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      return false
+    }
+  }
+
+  /** 切换全局界面缩放并持久化。 */
+  async function setFontScale(scale: number): Promise<void> {
+    fontScale.value = scale
+    applyFontScaleToDom(scale)
+    const g = (general.value as Record<string, any>) ?? {}
+    const appearance = (g.appearance as Record<string, any>) ?? {}
+    appearance.fontScale = scale
+    g.appearance = appearance
+    general.value = await apiPost<Record<string, unknown>>('/api/v1/settings/general', g)
+  }
+
+  /** 切换主题并持久化。 */
+  async function setTheme(t: string): Promise<void> {
+    applyTheme(t)
+    const g = (general.value as Record<string, any>) ?? {}
+    g.theme = t
+    general.value = await apiPost<Record<string, unknown>>('/api/v1/settings/general', g)
+  }
+
+  return {
+    providers,
+    providerKinds,
+    general,
+    smtpConfig,
+    webSearchConfig,
+    execWhitelist,
+    backgroundUrl,
+    codeFont,
+    theme,
+    closeToTray,
+    fontScale,
+    circuitStates,
+    error,
+    loading,
+    form,
+    load,
+    addProvider,
+    updateProvider,
+    removeProvider,
+    testProvider,
+    resetCircuit,
+    saveGeneral,
+    saveSmtpConfig,
+    saveWebSearchConfig,
+    loadExecWhitelist,
+    saveExecWhitelist,
+    loadBackground,
+    setBackground,
+    setCodeFont,
+    setTheme,
+    loadBehavior,
+    setCloseToTray,
+    setFontScale
+  }
+})

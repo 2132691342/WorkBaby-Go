@@ -1,0 +1,232 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"WorkBaby/internal/event"
+	"github.com/gin-gonic/gin"
+)
+
+// SSEHub 把应用内 event.Bus 的 `chat:*` / `pet:*` / `app:*` 事件桥接到 SSE 长连接。
+// 每个客户端按 (scope, runID) 过滤；事件名与载荷与旧 Wails 事件完全一致（前端解码器零改动）。
+//
+// 断线重连：每条事件带 id（run 内单调 seq）。浏览器 EventSource 重连时自动回传
+// Last-Event-ID，服务端从 RunEventLog 重放该序号之后的事件；缓冲已被覆盖则推 chat:gap，
+// 由前端转全量回补。
+type SSEHub struct {
+	bus     *event.Bus
+	log     *event.RunEventLog
+	mu      sync.RWMutex
+	clients map[*sseClient]struct{}
+	closed  bool
+}
+
+// sseClient 一条 SSE 连接；done 由 close 保证只关一次（Serve 的 defer 与 hub.Close 都会调）。
+type sseClient struct {
+	scope string // chat | pet | app
+	runID string // 空 = 全部 run
+	ch    chan sseMsg
+	done  chan struct{}
+	once  sync.Once
+}
+
+// close 幂等关闭连接；channel 不关闭（交由 GC 回收），避免向已关闭 channel 发送 panic。
+func (c *sseClient) close() { c.once.Do(func() { close(c.done) }) }
+
+type sseMsg struct {
+	seq  int64
+	name string
+	data string
+}
+
+// NewSSEHub 构造 hub 并订阅 event.Bus。log 可为 nil（退化为无重放）。
+func NewSSEHub(bus *event.Bus, log *event.RunEventLog) *SSEHub {
+	h := &SSEHub{
+		bus:     bus,
+		log:     log,
+		clients: make(map[*sseClient]struct{}),
+	}
+	// 桥接 chat:*/pet:*/app:* 三类事件（前端订阅范围）
+	h.bus.Subscribe(event.MatchPrefix("chat:"), h.onEvent)
+	h.bus.Subscribe(event.MatchPrefix("pet:"), h.onEvent)
+	h.bus.Subscribe(event.MatchPrefix("app:"), h.onEvent)
+	return h
+}
+
+func (h *SSEHub) onEvent(name string, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	runID := extractRunID(payload)
+	msg := sseMsg{seq: extractSeq(payload), name: name, data: string(data)}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for c := range h.clients {
+		if c.scope != "" && !strings.HasPrefix(name, c.scope+":") {
+			continue
+		}
+		if c.runID != "" && c.runID != runID {
+			continue
+		}
+		select {
+		case c.ch <- msg:
+		default:
+			// 慢客户端：关闭连接触发浏览器重连（EventSource 自带 Last-Event-ID 重放），
+			// 不做丢帧——丢帧会让前端永久停在「正在输入」。
+			c.close()
+		}
+	}
+}
+
+// extractRunID 从事件载荷中提取 run_id 用于按 run 过滤；载荷为 map 或 struct。
+func extractRunID(payload any) string {
+	if m, ok := payload.(map[string]any); ok {
+		if v, ok := m["run_id"].(string); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// extractSeq 取出事件序号（service emit 时由 RunEventLog 注入）；无序号返回 0。
+func extractSeq(payload any) int64 {
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return 0
+	}
+	switch v := m["seq"].(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	}
+	return 0
+}
+
+// lastEventSeq 解析断线重连的起点序号：优先标准 Last-Event-ID 头，回退 query。
+func lastEventSeq(c *gin.Context) int64 {
+	raw := c.GetHeader("Last-Event-ID")
+	if raw == "" {
+		raw = c.Query("last_event_id")
+	}
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// Serve 处理 GET /api/v1/events?scope=chat&runId={runId}。
+func (h *SSEHub) Serve(c *gin.Context) {
+	scope := c.DefaultQuery("scope", "chat")
+	runID := c.Query("runId")
+	afterSeq := lastEventSeq(c)
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	client := &sseClient{
+		scope: scope,
+		runID: runID,
+		ch:    make(chan sseMsg, 256),
+		done:  make(chan struct{}),
+	}
+
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.clients[client] = struct{}{}
+	h.mu.Unlock()
+
+	defer func() {
+		h.mu.Lock()
+		delete(h.clients, client)
+		h.mu.Unlock()
+		client.close()
+	}()
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		Fail(c, fmt.Errorf("streaming unsupported"))
+		return
+	}
+
+	// 重连场景：先补发断线期间错过的事件
+	if afterSeq > 0 && runID != "" && h.log != nil {
+		events, covered := h.log.Replay(runID, afterSeq)
+		if !covered {
+			fmt.Fprintf(c.Writer, "event: chat:gap\ndata: {\"run_id\":%q,\"last_seq\":%d}\n\n", runID, afterSeq)
+		}
+		for _, e := range events {
+			writeEvent(c.Writer, e.Seq, e.Name, e.Data)
+		}
+		flusher.Flush()
+	}
+
+	// 主动通知前端已就绪（消费方以此确认连接建立）
+	fmt.Fprintf(c.Writer, "event: sse-ready\ndata: {\"scope\":%q}\n\n", scope)
+	flusher.Flush()
+
+	// 心跳：30s 一次具名 ping 事件（可靠性套件）。
+	// 具名事件（而非注释帧）让前端 EventSource 可见，watchdog 据此区分「连接活着但空闲」与「假死」。
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			return
+		case <-client.done:
+			return
+		case msg := <-client.ch:
+			writeEvent(c.Writer, msg.seq, msg.name, msg.data)
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprintf(c.Writer, "event: ping\ndata: {\"t\":%d}\n\n", time.Now().UnixMilli())
+			flusher.Flush()
+		}
+	}
+}
+
+// writeEvent 输出一帧；seq>0 时带 id，供浏览器重连时回传。
+func writeEvent(w http.ResponseWriter, seq int64, name, data string) {
+	if seq > 0 {
+		fmt.Fprintf(w, "id: %d\n", seq)
+	}
+	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", name, data)
+}
+
+// Close 关闭全部连接（Shutdown 时调用）；幂等，可安全重复调用。
+func (h *SSEHub) Close() {
+	h.mu.Lock()
+	clients := make([]*sseClient, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.clients = make(map[*sseClient]struct{})
+	h.closed = true
+	h.mu.Unlock()
+	for _, c := range clients {
+		c.close()
+	}
+}

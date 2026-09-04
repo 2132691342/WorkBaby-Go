@@ -1,0 +1,94 @@
+// Package skill 是 Skill 系统：SKILL.md 解析 + 注册中心 + 关键词路由。
+//
+// 边界：skill/ 不依赖 harness / agent / api / service / wails；
+// skills 表是唯一真相源，SKILL.md 只是导入/导出格式。
+package skill
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"WorkBaby/internal/domain"
+	"WorkBaby/internal/pkg"
+	"gopkg.in/yaml.v3"
+)
+
+// frontmatter SKILL.md 头部 YAML 结构。
+type frontmatter struct {
+	Name         string   `yaml:"name"`
+	Description  string   `yaml:"description"`
+	WhenToUse    []string `yaml:"when_to_use"`
+	AllowedTools []string `yaml:"allowed_tools"`
+	Version      string   `yaml:"version"`
+}
+
+// ParseSKILLMD 解析 SKILL.md → SkillDO。
+//
+// 格式：首行 `---`，YAML frontmatter，闭合 `---`，之后为 Markdown body。
+// 解析失败返回 8002。
+func ParseSKILLMD(data []byte, source domain.SkillSourceKind, ref string) (*domain.SkillDO, error) {
+	s := string(data)
+	if !strings.HasPrefix(strings.TrimSpace(s), "---") {
+		return nil, pkg.New(8002, "SKILL.md must start with ---", "")
+	}
+	// 去掉首行 ---
+	rest := strings.TrimSpace(s)[3:]
+	idx := strings.Index(rest, "\n---")
+	if idx < 0 {
+		return nil, pkg.New(8002, "SKILL.md missing closing ---", "")
+	}
+	head := rest[:idx]
+	body := strings.TrimSpace(rest[idx+4:])
+
+	var fm frontmatter
+	if err := yaml.Unmarshal([]byte(head), &fm); err != nil {
+		return nil, pkg.Wrap(8002, "parse frontmatter failed", err)
+	}
+	if fm.Name == "" {
+		return nil, pkg.New(8002, "frontmatter name is required", "")
+	}
+	if fm.Description == "" {
+		return nil, pkg.New(8002, "frontmatter description is required", "")
+	}
+	if body == "" {
+		return nil, pkg.New(8002, "SKILL.md body is empty", "")
+	}
+	tools, err := json.Marshal(fm.AllowedTools)
+	if err != nil {
+		return nil, pkg.Wrap(8002, "marshal allowed_tools failed", err)
+	}
+	whenToUse := strings.Join(fm.WhenToUse, "\n")
+	return &domain.SkillDO{
+		Name:         fm.Name,
+		Description:  fm.Description,
+		WhenToUse:    whenToUse,
+		Body:         body,
+		AllowedTools: string(tools),
+		Frontmatter:  strings.TrimSpace(head),
+		SourceKind:   source,
+		SourceRef:    ref,
+		Version:      fm.Version,
+		Enabled:      true,
+	}, nil
+}
+
+// allowedTools 解析 AllowedTools JSON → 切片。
+func allowedTools(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// FormatError 供测试断言使用。
+func FormatError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", err)
+}

@@ -1,0 +1,80 @@
+// Package tool 是 WorkBaby 工具系统：统一 Tool 抽象、注册中心、参数校验与执行策略。
+//
+// 边界：tool/ 不依赖 harness / agent / api / service / wails；
+// 通过构造注入依赖 rag.Retriever / memory.Service 等；
+// 工具自身不落库（消息落库由 harness/service 负责）。
+package tool
+
+import (
+	"context"
+	"encoding/json"
+)
+
+// RiskLevel 工具风险分级（用于审批与前端展示）。
+type RiskLevel string
+
+const (
+	RiskReadOnly    RiskLevel = "readonly"    // 读文件 / 检索
+	RiskWriteLocal  RiskLevel = "write_local" // 写本地文件
+	RiskExec        RiskLevel = "exec"        // 执行命令
+	RiskNetwork     RiskLevel = "network"     // 访问网络
+	RiskDestructive RiskLevel = "destructive" // 删文件 / 删数据
+)
+
+// ToolSchema 暴露给 LLM 的工具描述。
+type ToolSchema struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"` // JSON Schema object
+}
+
+// ToolResult 工具执行结果；Content 回填给 LLM，Data 供前端结构化展示。
+type ToolResult struct {
+	Content string            // 文本结果
+	Data    map[string]any    // 结构化数据（可选）
+	Err     error             // 执行失败（非 nil 时 Content 仍可携带错误说明）
+	Meta    map[string]string // 耗时 / exitCode 等元数据
+	Refused bool              // 审批拒绝（Refused 语义：非故障，不推进失败熔断）
+}
+
+// Tool 统一工具接口。
+type Tool interface {
+	Name() string
+	Description() string
+	Schema() ToolSchema
+	RiskLevel() RiskLevel
+	Execute(ctx context.Context, args json.RawMessage) ToolResult
+}
+
+// ToolMeta 声明式工具元信息。
+// 权限裁决、只读并发、前端呈现统一由元数据驱动，新增工具零硬编码分支。
+// RiskLevel 仍是审批的权威口径；Meta 提供更细的执行与呈现信号。
+type ToolMeta struct {
+	ReadOnly       bool     // 纯读，无副作用（可参与只读并行执行）
+	Destructive    bool     // 不可逆操作（删除 / 覆盖），前端红色标记
+	PathParams     []string // 指向文件系统路径的参数名（沙箱越界校验 + 前端路径展示）
+	TimeoutSec     int      // 建议单次执行超时；0 = 用 harness 默认
+	MaxResultChars int      // 结果回填 LLM 前的建议截断长度；0 = 用 harness 默认
+	UIHint         string   // 前端呈现提示（如 "editor" / "browser" / "diff"）；空 = 默认时间线样式
+}
+
+// MetaProvider 可选接口：实现它的工具可提供声明式元信息（未实现走零值兜底）。
+// 以可选接口而非直接扩 Tool，避免破坏既有 13 个工具包。
+type MetaProvider interface {
+	Meta() ToolMeta
+}
+
+// MetaOf 读取工具元信息：实现了 MetaProvider 用声明值，否则按 RiskLevel 兜底推导。
+func MetaOf(t Tool) ToolMeta {
+	if mp, ok := t.(MetaProvider); ok {
+		return mp.Meta()
+	}
+	m := ToolMeta{TimeoutSec: 0, MaxResultChars: 0}
+	switch t.RiskLevel() {
+	case RiskReadOnly, RiskNetwork:
+		m.ReadOnly = true
+	case RiskDestructive:
+		m.Destructive = true
+	}
+	return m
+}

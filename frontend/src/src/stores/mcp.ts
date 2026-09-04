@@ -1,0 +1,106 @@
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+import { apiGet, apiPost } from '@/api/client'
+import { t } from '@/i18n'
+import type { McpServer } from '@/types/api'
+
+/**
+ * MCP store（改为「直接编辑 mcp.json」）。
+ *
+ * <p><b>交互</b>：用户直接编辑 {@code mcp.json} 原始 JSON（后端原子写 + 校验 servers 数组），
+ * 不再用 transport 下拉表单逐项配置；保存后立即触发热重载生效。
+ *
+ * <p><b>与后端的契约</b>：
+ * <ul>
+ *   <li>列表：{@code GET /api/v1/mcp/servers}</li>
+ *   <li>原始 JSON 读取：{@code GET /api/v1/mcp/servers/raw}</li>
+ *   <li>原始 JSON 保存：{@code POST /api/v1/mcp/servers/raw}（写后自动 reload）</li>
+ *   <li>热重载：{@code POST /api/v1/mcp/servers/reload}</li>
+ * </ul>
+ */
+export const useMcpStore = defineStore('mcp', () => {
+  const servers = ref<McpServer[]>([])
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+  const info = ref<string | null>(null)
+  const activeCount = ref(0)
+
+  /** mcp.json 原始内容（JSON 编辑器绑定）。 */
+  const rawContent = ref<string>('')
+  const savingRaw = ref(false)
+
+  async function load(): Promise<void> {
+    loading.value = true
+    error.value = null
+    try {
+      servers.value = await apiGet<McpServer[]>('/api/v1/mcp/servers')
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /** 读取 mcp.json 原始内容到编辑器。 */
+  async function loadRaw(): Promise<void> {
+    error.value = null
+    try {
+      const r = await apiGet<{ content: string }>('/api/v1/mcp/servers/raw')
+      rawContent.value = r.content
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  /** 保存 mcp.json 原始内容（后端校验 + 原子写 + 自动 reload）。返回 true=成功。 */
+  async function saveRaw(): Promise<boolean> {
+    error.value = null
+    info.value = null
+    savingRaw.value = true
+    try {
+      const r = await apiPost<{ saved: boolean; active: number }>('/api/v1/mcp/servers/raw', {
+        content: rawContent.value
+      })
+      activeCount.value = r.active
+      info.value = t('mcp.savedJson', r.active)
+      await load()
+      return true
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      return false
+    } finally {
+      savingRaw.value = false
+    }
+  }
+
+  /** 触发后端热重载（让新 MCP server 配置立即生效）。 */
+  async function reload(): Promise<void> {
+    error.value = null
+    info.value = null
+    try {
+      const r = await apiPost<{ reloaded: boolean; active: number }>(
+        '/api/v1/mcp/servers/reload',
+        {}
+      )
+      activeCount.value = r.active
+      info.value = t('mcp.reloaded', r.active)
+      await load()
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  return {
+    servers,
+    loading,
+    error,
+    info,
+    activeCount,
+    rawContent,
+    savingRaw,
+    load,
+    loadRaw,
+    saveRaw,
+    reload
+  }
+})

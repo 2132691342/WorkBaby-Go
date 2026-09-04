@@ -1,0 +1,41 @@
+# Go
+/WorkBaby
+/WorkBaby.exe
+/workbaby.exe
+*.exe
+/build/bin/
+
+# Wails
+/build/darwin/
+/build/windows/
+
+# Runtimes (do not commit bundled runtime archives)
+/runtimes/*.zip
+/runtimes/*.tar.gz
+
+# Frontend
+/frontend/node_modules/
+/frontend/dist/
+/frontend/src/wailsjs/go/
+/frontend/src/wailsjs/runtime/
+
+# Local config / data
+/config.local.yaml
+/workbaby.db
+/workbaby.db-journal
+/workbaby.db-wal
+/workbaby.db-shm
+
+# 本地测试环境敏感信息（API Key / SMTP 授权码等，勿提交）
+/test.env
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Local user dir
+*.log
+
+# Nested git repos (submodules)
+assets/skills/project-standard/

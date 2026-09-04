@@ -1,0 +1,985 @@
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+import { apiGet, apiPost } from '@/api/client'
+import { streamChat, type StreamHandle } from '@/api/stream'
+import { toolsToBlocks } from '@/chat/models/blocks'
+import { useToast } from '@/composables/useToast'
+import { t } from '@/i18n'
+import type {
+  ApprovalPending,
+  Artifact,
+  ArtifactPayload,
+  AvailableModel,
+  BackgroundTask,
+  ChatStats,
+  ChatStreamEvent,
+  CircuitState,
+  CompactREQ,
+  CompactResultRESP,
+  ContextUsageRESP,
+  EffectiveParams,
+  FileChange,
+  Message as ApiMessage,
+  Page,
+  Session,
+  SlashCommand,
+  TodoStateRESP
+} from '@/types/api'
+import type { UiNode } from '@/components/genui/GenUiRenderer.vue'
+import {
+  applyStreamUpdate,
+  type ApprovalRequest,
+  type StreamEventUpdate,
+  type ToolCallInfo
+} from './chat/ChatStreamDecoder'
+import { StreamEventBatcher } from './chat/StreamEventBatcher'
+
+// ToolCallInfo / ApprovalRequest 类型从 decoder 模块 re-export（保持外部 import 兼容）。
+export type { ToolCallInfo, ApprovalRequest }
+
+/** 前端权限语义级别（后端 SessionMode 映射：restricted→restricted、confirm→default、auto→auto_edit、full→yolo）。 */
+export type PermissionLevel = 'restricted' | 'confirm' | 'auto' | 'full'
+
+/** 权限语义 ↔ 后端 SessionMode 双向映射（仅此一处，杜绝组件层散落字符串）。 */
+export const PERMISSION_MODE_MAP: Record<PermissionLevel, string> = {
+  restricted: 'restricted',
+  confirm: 'default',
+  auto: 'auto_edit',
+  full: 'yolo'
+}
+
+export function permissionModeToBackend(level: PermissionLevel): string {
+  return PERMISSION_MODE_MAP[level] ?? 'default'
+}
+
+export function backendModeToPermission(mode: string | null | undefined): PermissionLevel {
+  switch (mode) {
+    case 'restricted':
+      return 'restricted'
+    case 'auto_edit':
+      return 'auto'
+    case 'yolo':
+      return 'full'
+    default:
+      return 'confirm'
+  }
+}
+
+/**
+ * Chat store（E.3 · Pinia 重构）。
+ *
+ * <p>职责：当前 session 列表 / 选中会话的消息 / 流式发送 + 事件解析 + 取消。
+ * 替代原 ChatView.vue 内的本地 ref。
+ *
+ * <p><b>关键不变式</b>：
+ * <ul>
+ *   <li>{@code currentID} 一旦设置，{@code messages} 总是该会话的最新消息</li>
+ *   <li>{@code streaming} === true 时 SSE 监听中，UI 应显示 streamingContent/streamingTools</li>
+ *   <li>SSE 断流后调用 {@link loadMessages} 拉权威数据</li>
+ * </ul>
+ */
+export const useChatStore = defineStore('chat', () => {
+  const sessions = ref<Session[]>([])
+  const currentID = ref<string | null>(null)
+  const messages = ref<ApiMessage[]>([])
+  const models = ref<AvailableModel[]>([])
+  /** 所有模型的熔断状态（Map<id, CircuitState>）。 */
+  const circuitStates = ref<Map<string, CircuitState>>(new Map())
+  const selectedModelID = ref<string | null>(null)
+
+  const loadingSessions = ref(false)
+  const streaming = ref(false)
+  const streamingContent = ref('')
+  const streamingThinking = ref('')
+  const streamingTools = ref<ToolCallInfo[]>([])
+  const streamingStats = ref<ChatStats | null>(null)
+  const streamingArtifacts = ref<ArtifactPayload | null>(null)
+  const streamingGenUi = ref<UiNode | null>(null)
+  /** 建流瞬时错误自动重试提示（chat:retry；正文恢复自动清除）。 */
+  const streamingRetry = ref<{ attempt: number; delay_ms: number } | null>(null)
+  const error = ref<string | null>(null)
+  // ===== P2 扩展状态 =====
+  /** 会话计划状态（todo 工具共享；流式增量由 chat:todo 事件推送）。 */
+  const todoState = ref<TodoStateRESP | null>(null)
+  /** 会话文件变更列表（流式增量由 chat:file-change 事件推送）。 */
+  const fileChanges = ref<FileChange[]>([])
+  /** 会话工件列表（流式增量由 chat:artifact 事件推送）。 */
+  const artifacts = ref<Artifact[]>([])
+  /** 后台任务列表（流式增量由 task:* 事件推送）。 */
+  const tasks = ref<BackgroundTask[]>([])
+  /** 斜杠命令元数据（启动拉一次，命令面板消费）。 */
+  const commands = ref<SlashCommand[]>([])
+  /** 启动时拉回的未决审批（页面刷新后恢复，）。 */
+  const pendingApprovals = ref<ApprovalPending[]>([])
+  /** 流终止原因（stopped 事件写入；用户主动停止 → 'cancelled'，中性终态不弹错误）。 */
+  const stopReason = ref<string | null>(null)
+  /** 本轮流是否由用户主动取消。 */
+  const userCancelled = ref(false)
+  const pendingApproval = ref<ApprovalRequest | null>(null)
+  // ===== M2 会话体验增强状态 =====
+  /** 当前会话上下文占用快照；切会话或流式 stats 更新后刷新。 */
+  const contextUsage = ref<ContextUsageRESP | null>(null)
+  /** 当前会话实际生效的运行参数（温度/思考/窗口/压缩阈值）；输入框与设置共用。 */
+  const effectiveParams = ref<EffectiveParams | null>(null)
+  /** 跨会话检索命中结果。 */
+  const searchResults = ref<Session[]>([])
+  const searchQuery = ref('')
+
+  /** 当前进行中的流式句柄（用于停止按钮 cancel）。 */
+  let activeHandle: StreamHandle | null = null
+
+  async function loadSessions(): Promise<void> {
+    loadingSessions.value = true
+    try {
+      const page = await apiGet<Page<Session>>('/api/v1/chat/sessions?page=1&page_size=100')
+      sessions.value = page.items
+    } finally {
+      loadingSessions.value = false
+    }
+  }
+
+  async function loadMessages(id: string): Promise<void> {
+    // 后端返回分页结构 { items, total, next_seq }（MessageListRESP），
+    // 这里先取 items 再与本地乐观消息合并，避免把整包对象当数组喂给 v-for
+    const resp = await apiGet<{ items: ApiMessage[]; total: number; next_seq: number }>(`/api/v1/chat/sessions/${id}/messages?limit=200`)
+    const loaded = Array.isArray(resp?.items) ? resp.items : []
+    messages.value = mergeLoadedMessages(messages.value, loaded)
+  }
+
+  /** 本地乐观消息 id（randomUUID 防同毫秒碰撞；非安全上下文降级时间戳+随机段）。 */
+  function genLocalID(): string {
+    try {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) return `local-${crypto.randomUUID()}`
+    } catch {
+      // ignore：非安全上下文可能无 randomUUID
+    }
+    return `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  }
+
+  /** 乐观消息与权威消息的配对键（同角色 + 前 120 字相同视为同一条）。 */
+  function contentKey(m: ApiMessage): string {
+    return `${m.role}|${(m.content ?? '').slice(0, 120)}`
+  }
+
+  function mergeLoadedMessages(local: ApiMessage[], loaded: ApiMessage[]): ApiMessage[] {
+    if (local.length === 0) return loaded
+    const byContent = new Map<string, ApiMessage>()
+    const byID = new Map<string, ApiMessage>()
+    for (const m of loaded) {
+      const k = contentKey(m)
+      if (!byContent.has(k)) byContent.set(k, m)
+      byID.set(m.id, m)
+    }
+    const result: ApiMessage[] = []
+    const consumed = new Set<string>()
+    for (const m of local) {
+      if (m.id.startsWith('local-')) {
+        const hit = byContent.get(contentKey(m))
+        if (hit && !consumed.has(hit.id)) {
+          result.push(hit)
+          consumed.add(hit.id)
+          continue
+        }
+        result.push(m)
+        continue
+      }
+      const hit = byID.get(m.id)
+      if (hit) {
+        result.push(hit)
+        consumed.add(hit.id)
+      }
+      // 权威已无此 id → 消息已被删除/截断，丢弃
+    }
+    for (const m of loaded) {
+      if (!consumed.has(m.id)) result.push(m)
+    }
+    return result
+  }
+
+  /** 加载可切换的模型列表（provider + 模型两级聚合）。 */
+  async function loadModels(): Promise<void> {
+    // 并行拉模型列表 + 熔断状态；熔断接口偶发失败不阻塞主流程
+    let m: AvailableModel[] = []
+    let ok = false
+    try {
+      const r = await apiGet<AvailableModel[]>('/api/v1/ai-provider/available')
+      m = Array.isArray(r) ? r : []
+      ok = true
+    } catch (e) {
+      // 模型列表失败：记错误但不阻塞 UI（用户可手动重试）；
+      // 保留上一次成功的列表，避免「点新会话后模型下拉忽然空了」
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+    let c: CircuitState[] = []
+    try {
+      const r = await apiGet<CircuitState[]>('/api/v1/ai-provider/circuit-status')
+      c = Array.isArray(r) ? r : []
+    } catch {
+      c = []
+    }
+    // 只有成功响应才覆盖 models；请求失败时沿用已有列表（含已选模型的可用性判断）
+    if (ok) {
+      models.value = m
+    } else {
+      m = models.value // 回退到旧列表，供下方 selectedModelID 同步使用
+    }
+    const map = new Map<string, CircuitState>()
+    for (const s of c) map.set(s.id, s)
+    circuitStates.value = map
+    // 模型列表就绪后，把选择器同步到当前会话绑定的 provider（若仍指向已不存在的模型则回落）
+    const cur = sessions.value.find((x) => x.id === currentID.value)
+    const bound = cur?.provider_id
+    if (bound && m.some((mm) => mm.id === bound)) {
+      if (selectedModelID.value !== bound) selectedModelID.value = bound
+    } else if (selectedModelID.value && !m.some((mm) => mm.id === selectedModelID.value)) {
+      selectedModelID.value = bound && m.some((mm) => mm.id === bound) ? bound : null
+    }
+  }
+
+  /** 清空指定 provider 的熔断。返回 boolean 表示 provider 是否存在。 */
+  async function resetCircuit(id: string): Promise<boolean> {
+    try {
+      await apiPost(`/api/v1/ai-provider/${id}/reset-circuit`)
+      await loadModels()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 选择本次会话使用的模型（null = Auto，跟随会话绑定/默认）。
+   *
+   * <p>有会话时切换模型 → 持久化 session.provider_id/model（后端 /chat/sessions/:id/model），
+   * 并重新拉取 effective params —— 使输入框的思考强度/采样温度、顶栏模型徽标立即跟随所选模型配置
+   * （此前只改本地 selectedModelID，发送仍走会话旧模型，参数展示与运行模型不一致）。
+   * 无会话时仅记录，创建会话时携带。
+   */
+  async function selectModel(id: string | null): Promise<void> {
+    const prev = selectedModelID.value
+    selectedModelID.value = id
+    const sid = currentID.value
+    if (!id || !sid) return
+    const m = models.value.find((x) => x.id === id)
+    if (!m) return
+    try {
+      const updated = await apiPost<Session>(`/api/v1/chat/sessions/${sid}/model`, {
+        provider_id: m.id,
+        model: m.model
+      })
+      const i = sessions.value.findIndex((s) => s.id === sid)
+      if (i >= 0 && updated) sessions.value[i] = updated
+      await loadEffectiveParams(sid)
+    } catch (e) {
+      // 失败回滚到原选择，避免 UI 显示与实际运行模型不一致
+      selectedModelID.value = prev
+      useToast().error(t('chat.operationFailed'), e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function selectSession(id: string): Promise<void> {
+    currentID.value = id
+    await loadMessages(id)
+    // 模型选择器跟随会话绑定的 provider（问题2：切到历史会话，顶部徽标/参数展示与实际运行模型一致）
+    const s = sessions.value.find((x) => x.id === id)
+    if (s?.provider_id && models.value.some((m) => m.id === s.provider_id)) {
+      selectedModelID.value = s.provider_id
+    }
+    // 切会话时同步加载本会话的侧栏数据（todo / 变更 / 工件 / 上下文占用），前端无需额外手动触发
+    await Promise.allSettled([
+      loadEffectiveParams(id),
+      loadTodoState(id),
+      loadFileChanges(id),
+      loadArtifacts(id),
+      loadContextUsage(id)
+    ])
+  }
+
+  /** 加载内置斜杠命令元数据（命令面板的数据源，）。
+   * 启动期一次缓存；前端只在本会话内消费的 ClientOnly 命令走本地分支。 */
+  async function loadCommands(): Promise<void> {
+    try {
+      const resp = await apiGet<{ items: SlashCommand[] }>('/api/v1/chat/commands')
+      commands.value = resp.items ?? []
+    } catch {
+      // 后端暂无：留空数组（前端走本地 fallback）
+      commands.value = []
+    }
+  }
+
+  /** 拉取会话计划快照（页面刷新后由 EventLog 之外的权威数据兜底）。 */
+  async function loadTodoState(sessionID: string): Promise<void> {
+    try {
+      const s = await apiGet<TodoStateRESP>(`/api/v1/chat/sessions/${sessionID}/todos`)
+      todoState.value = s
+    } catch {
+      todoState.value = null
+    }
+  }
+
+  /** 拉取会话文件变更列表（侧栏变更面板数据源）。 */
+  async function loadFileChanges(sessionID: string, limit = 100): Promise<void> {
+    try {
+      const resp = await apiGet<{ items: FileChange[] }>(`/api/v1/chat/sessions/${sessionID}/changes?limit=${limit}`)
+      fileChanges.value = resp.items ?? []
+    } catch {
+      fileChanges.value = []
+    }
+  }
+
+  /** 拉取单条变更详情（diff + before/after）。 */
+  async function loadFileChangeDetail(id: string): Promise<import('@/types/api').FileChangeDetail | null> {
+    try {
+      return await apiGet<import('@/types/api').FileChangeDetail>(`/api/v1/chat/changes/${id}`)
+    } catch {
+      return null
+    }
+  }
+
+  /** 回滚单条变更；成功后由后端 chat:file-change 事件推送 rolled_back=true。 */
+  async function rollbackFileChange(id: string): Promise<boolean> {
+    try {
+      await apiPost(`/api/v1/chat/changes/${id}/rollback`)
+      // 乐观本地标记：事件回传可能延迟，先把列表里的 rolled_back 标 true
+      const it = fileChanges.value.find((c) => c.id === id)
+      if (it) it.rolled_back = true
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** 拉取会话工件列表。 */
+  async function loadArtifacts(sessionID: string, limit = 100): Promise<void> {
+    try {
+      const resp = await apiGet<{ items: Artifact[] }>(`/api/v1/chat/sessions/${sessionID}/artifacts?limit=${limit}`)
+      artifacts.value = resp.items ?? []
+    } catch {
+      artifacts.value = []
+    }
+  }
+
+  /** 删除工件登记（不删磁盘文件）。 */
+  async function deleteArtifact(id: string): Promise<boolean> {
+    try {
+      await apiPost(`/api/v1/chat/artifacts/${id}/delete`)
+      artifacts.value = artifacts.value.filter((a) => a.id !== id)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** 提交后台任务（不阻塞聊天）。 */
+  async function submitTask(sessionID: string, agent: string, prompt: string): Promise<BackgroundTask | null> {
+    try {
+      const t = await apiPost<BackgroundTask>('/api/v1/tasks', {
+        session_id: sessionID,
+        agent,
+        prompt
+      })
+      // 乐观本地 upsert
+      const i = tasks.value.findIndex((x) => x.id === t.id)
+      if (i >= 0) tasks.value[i] = t
+      else tasks.value.unshift(t)
+      return t
+    } catch {
+      return null
+    }
+  }
+
+  /** 取消后台任务（排队中或运行中）。 */
+  async function cancelTask(id: string): Promise<boolean> {
+    try {
+      await apiPost(`/api/v1/tasks/${id}/cancel`)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** 启动期一次性拉取未决审批（页面刷新后恢复，）。 */
+  async function loadPendingApprovals(): Promise<void> {
+    try {
+      const list = await apiGet<ApprovalPending[]>('/api/v1/chat/approvals/pending')
+      pendingApprovals.value = Array.isArray(list) ? list : []
+      // 单个 pending 同步到 pendingApproval（兼容单审批 UI）
+      if (pendingApprovals.value.length > 0 && !pendingApproval.value) {
+        const first = pendingApprovals.value[0]
+        pendingApproval.value = {
+          id: first.id,
+          command: first.command,
+          reason: first.reason,
+          risk: first.risk === 'irreversible' ? 'irreversible' : 'needs_approval'
+        }
+      }
+    } catch {
+      pendingApprovals.value = []
+    }
+  }
+
+  /** 触发 /compact（确定性压缩历史上下文；）。 */
+  async function compactSession(
+    sessionID: string,
+    req: CompactREQ = {}
+  ): Promise<CompactResultRESP | null> {
+    try {
+      return await apiPost<CompactResultRESP>(`/api/v1/chat/sessions/${sessionID}/compact`, req)
+    } catch {
+      return null
+    }
+  }
+
+  /** 跨会话快速检索：scope 为空 = title + content。 */
+  async function searchSessions(
+    query: string,
+    scope: 'all' | 'title' | 'content' = 'all',
+    limit = 20
+  ): Promise<Session[]> {
+    const q = query.trim()
+    if (!q) {
+      searchResults.value = []
+      searchQuery.value = ''
+      return []
+    }
+    const url = `/api/v1/chat/sessions/search?q=${encodeURIComponent(q)}&scope=${scope}&limit=${limit}`
+    try {
+      const resp = await apiGet<Page<Session>>(url)
+      const items = resp?.items ?? []
+      searchResults.value = items
+      searchQuery.value = q
+      return items
+    } catch {
+      return []
+    }
+  }
+
+  /** 拉取会话上下文占用快照。 */
+  async function loadContextUsage(sessionID: string): Promise<ContextUsageRESP | null> {
+    try {
+      const resp = await apiGet<ContextUsageRESP>(`/api/v1/chat/sessions/${sessionID}/usage/context`)
+      contextUsage.value = resp
+      return resp
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 新建会话并把用户选择的模型（id）一并写进 session。
+   * 前端 store 只知模型名（model 字段），不知道 provider_id；
+   * 后端 CreateSession 会按 model 字段精确匹配 ai_providers 表回查 provider，
+   * 缺省回退到第一个 enabled Provider——避免会话创建后立即 5003。
+   */
+  async function createSession(modelID?: string | null): Promise<Session> {
+    let modelName: string | undefined
+    if (modelID) {
+      const m = models.value.find((x) => x.id === modelID)
+      if (m) modelName = m.model
+    }
+    const session = await apiPost<Session>('/api/v1/chat/sessions', {
+      name: null,
+      model: modelName ?? null
+    })
+    sessions.value = [session, ...sessions.value]
+    currentID.value = session.id
+    messages.value = []
+    // 新会话创建即拉一次有效参数，让输入框思考强度/温度 chip 立即展示该模型配置
+    await loadEffectiveParams(session.id)
+    // 刷新模型列表并把 selectedModelID 同步到新会话绑定的 provider：
+    // 保证「点新会话后」模型下拉仍有可用模型、顶部徽标与实际运行模型一致。
+    await loadModels()
+    return session
+  }
+
+  async function deleteSession(id: string): Promise<void> {
+    await apiPost(`/api/v1/chat/sessions/${id}/delete`)
+    sessions.value = sessions.value.filter((s) => s.id !== id)
+    if (currentID.value === id) {
+      const next = sessions.value[0]
+      currentID.value = next?.id ?? null
+      messages.value = []
+      if (next) await loadMessages(next.id)
+    }
+  }
+
+  /** 批量删除会话。 */
+  async function deleteSessions(ids: string[]): Promise<{ ok: number; failed: string[] }> {
+    const failed: string[] = []
+    let ok = 0
+    for (const id of ids) {
+      try {
+        await apiPost(`/api/v1/chat/sessions/${id}/delete`)
+        sessions.value = sessions.value.filter((s) => s.id !== id)
+        if (currentID.value === id) {
+          currentID.value = sessions.value[0]?.id ?? null
+          messages.value = []
+        }
+        ok += 1
+      } catch {
+        failed.push(id)
+      }
+    }
+    if (currentID.value && !sessions.value.some((s) => s.id === currentID.value)) {
+      await loadSessions()
+      const next = sessions.value[0]
+      currentID.value = next?.id ?? null
+      if (next) await loadMessages(next.id)
+    }
+    return { ok, failed }
+  }
+
+  /** 清空当前会话所有消息。 */
+  async function clearMessages(): Promise<void> {
+    if (!currentID.value) return
+    await apiPost(`/api/v1/chat/sessions/${currentID.value}/clear`)
+    messages.value = []
+  }
+
+  /** 从指定消息截断（含该消息及其之后所有消息）。 */
+  async function truncateMessages(messageID: string): Promise<void> {
+    if (!currentID.value) return
+    await apiPost(`/api/v1/chat/messages/${currentID.value}/truncate`, { message_id: messageID })
+    await loadMessages(currentID.value)
+  }
+
+  /** 重命名会话（inline 双击编辑）。 */
+  async function renameSession(id: string, name: string): Promise<void> {
+    await apiPost(`/api/v1/chat/sessions/${id}/rename`, { name })
+    const s = sessions.value.find((x) => x.id === id)
+    if (s) s.name = name
+  }
+
+  /** 更新会话绑定的工作区。 */
+  async function updateSessionWorkspace(id: string, workspacePath: string | null): Promise<void> {
+    const updated = await apiPost<Session>(
+      `/api/v1/chat/sessions/${id}/workspace`,
+      { workspace_id: workspacePath ?? '' }
+    )
+    const i = sessions.value.findIndex((s) => s.id === id)
+    if (i >= 0) sessions.value[i] = updated
+  }
+
+  /** 本地先渲染一条用户气泡（服务端落库后再由 loadMessages 对齐）。 */
+  function pushLocalUserMessage(sessionID: string, text: string): void {
+    messages.value.push({
+      id: genLocalID(),
+      session_id: sessionID,
+      role: 'user',
+      content: text,
+      status: 'completed',
+      model: null,
+      created_at: Date.now(),
+      updated_at: Date.now()
+    } as unknown as ApiMessage)
+  }
+
+  /** 请求级采样参数。 */
+  interface SendParams {
+    temperature?: number | null
+    thinkingEffort?: string | null
+  }
+
+  async function sendMessage(text: string, fileIds: string[] = [], params: SendParams = {}): Promise<void> {
+    let sessionID = currentID.value
+    if (!sessionID) {
+      // 新会话时把当前选中的模型 ID 一并传入（避免创建后因缺 provider/model 立即 5003）
+      const session = await createSession(selectedModelID.value)
+      sessionID = session.id
+    }
+
+    // 本轮正在生成：走注入缝（steering / follow-up）——消息并入当前 run，下一轮带上，不打断执行
+    if (streaming.value) {
+      pushLocalUserMessage(sessionID, text)
+      try {
+        await apiPost(`/api/v1/chat/sessions/${sessionID}/steer`, { content: text })
+        useToast().info(t('chat.steerQueued'))
+      } catch (e) {
+        useToast().error(t('chat.steerFailed'), e instanceof Error ? e.message : String(e))
+      }
+      return
+    }
+
+    messages.value.push({
+      id: genLocalID(),
+      session_id: sessionID,
+      role: 'user',
+      content: text,
+      status: 'completed',
+      model: null,
+      created_at: Date.now(),
+      updated_at: Date.now()
+    } as unknown as ApiMessage)
+
+    streaming.value = true
+    streamingContent.value = ''
+    streamingThinking.value = ''
+    streamingTools.value = []
+    streamingStats.value = null
+    streamingArtifacts.value = null
+    streamingGenUi.value = null
+    streamingRetry.value = null
+    error.value = null
+    stopReason.value = null
+    userCancelled.value = false
+    pendingApproval.value = null
+    // 本轮文件变更/工件重置为会话已知状态（流式增量会重新累计）
+    fileChanges.value = []
+    artifacts.value = []
+
+    try {
+      const handle = streamChat(
+        { message: text, session_id: sessionID, model_id: selectedModelID.value ?? undefined, file_ids: fileIds, temperature: params.temperature, thinking_effort: params.thinkingEffort },
+        (event: ChatStreamEvent) => {
+          handleEvent(event)
+        },
+        // M2 可靠性：手动重连成功后立即重拉权威快照（弥补重放窗口覆盖不到的缺失）
+        { onReconnect: () => void safeLoadMessages(sessionID) }
+      )
+      activeHandle = handle
+      await handle.promise
+      await safeLoadMessages(sessionID)
+      finalizeStreamingMessage(sessionID)
+    } catch (e) {
+      if (!userCancelled.value) {
+        error.value = e instanceof Error ? e.message : String(e)
+      }
+      try {
+        await safeLoadMessages(sessionID)
+      } catch {
+        // swallow
+      }
+      finalizeStreamingMessage(sessionID)
+      if (!userCancelled.value) {
+        useToast().error(t('chat.streamFailed'), error.value ?? undefined)
+      }
+    } finally {
+      batcher.flush()
+      activeHandle = null
+      streaming.value = false
+      streamingContent.value = ''
+      streamingThinking.value = ''
+      streamingTools.value = []
+      streamingStats.value = null
+      streamingArtifacts.value = null
+      streamingGenUi.value = null
+      // 注：本轮新增的 file_changes / artifacts 已由 batcher 流式累积；不重置——保留本会话全部变更历史
+      await loadSessions()
+      // 刷新上下文占用快照
+      if (sessionID) await loadContextUsage(sessionID)
+    }
+  }
+
+  /** 从检查点续跑：中断/崩溃后的 failed+interrupted 消息可一键续跑。 */
+  async function resumeRun(runID: string): Promise<void> {
+    const sessionID = currentID.value
+    if (!sessionID) throw new Error(t('chat.noSession'))
+    streaming.value = true
+    streamingContent.value = ''
+    streamingThinking.value = ''
+    streamingTools.value = []
+    streamingStats.value = null
+    streamingArtifacts.value = null
+    streamingGenUi.value = null
+    streamingRetry.value = null
+    error.value = null
+    stopReason.value = null
+    userCancelled.value = false
+    pendingApproval.value = null
+    try {
+      const handle = streamChat(
+        { message: '', session_id: sessionID, resume_run_id: runID },
+        (event: ChatStreamEvent) => handleEvent(event),
+        { onReconnect: () => void safeLoadMessages(sessionID) }
+      )
+      activeHandle = handle
+      await handle.promise
+      await safeLoadMessages(sessionID)
+      finalizeStreamingMessage(sessionID)
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      await safeLoadMessages(sessionID)
+      finalizeStreamingMessage(sessionID)
+      useToast().error(t('chat.streamFailed'), error.value ?? undefined)
+    } finally {
+      batcher.flush()
+      activeHandle = null
+      streaming.value = false
+      streamingContent.value = ''
+      streamingThinking.value = ''
+      streamingTools.value = []
+      streamingStats.value = null
+      streamingArtifacts.value = null
+      streamingGenUi.value = null
+      await loadSessions()
+      if (sessionID) await loadContextUsage(sessionID)
+    }
+  }
+
+  /** 拉取当前会话生效参数（三层合并 + 来源标注）；失败静默（chip 显示兜底文案）。 */
+  async function loadEffectiveParams(id: string): Promise<void> {
+    try {
+      effectiveParams.value = await apiGet<EffectiveParams>(`/api/v1/chat/sessions/${id}/params`)
+    } catch {
+      effectiveParams.value = null
+    }
+  }
+
+  /** 切换会话工具权限模式：后端持久化到会话，run 时生效。 */
+  async function setPermissionLevel(id: string, level: PermissionLevel): Promise<void> {
+    const updated = await apiPost<Session>(`/api/v1/chat/sessions/${id}/permission`, {
+      mode: permissionModeToBackend(level)
+    })
+    const i = sessions.value.findIndex((s) => s.id === id)
+    if (i >= 0 && updated) sessions.value[i] = updated
+  }
+
+  async function safeLoadMessages(id: string): Promise<void> {
+    try {
+      await loadMessages(id)
+    } catch {
+      // swallow
+    }
+  }
+
+  /** 停止当前流式生成。 */
+  async function cancelStream(): Promise<void> {
+    userCancelled.value = true
+    const sessionID = currentID.value
+    if (sessionID) {
+      try {
+        await apiPost(`/api/v1/chat/stream/${sessionID}/cancel`)
+      } catch {
+        // swallow
+      }
+    }
+    activeHandle?.cancel()
+  }
+
+  /** 关闭终止原因横幅（用户手动关闭；下轮发送时还会自动复位）。 */
+  function dismissStopReason(): void {
+    stopReason.value = null
+  }
+
+  /** 批准待审批的危险命令。 */
+  async function approveApproval(): Promise<void> {
+    const a = pendingApproval.value
+    if (!a) return
+    pendingApproval.value = null
+    try {
+      await apiPost(`/api/v1/chat/approval/${a.id}/decide`, { approved: true })
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  /** 回复补充输入请求（request_input 工具，risk=input_required）。 */
+  async function answerApproval(text: string): Promise<void> {
+    const a = pendingApproval.value
+    if (!a) return
+    pendingApproval.value = null
+    try {
+      await apiPost(`/api/v1/chat/approval/${a.id}/answer`, { answer: text })
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  /** 拒绝待审批的危险命令。 */
+  async function denyApproval(): Promise<void> {
+    const a = pendingApproval.value
+    if (!a) return
+    pendingApproval.value = null
+    try {
+      await apiPost(`/api/v1/chat/approval/${a.id}/decide`, { approved: false })
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
+  const batcher = new StreamEventBatcher((updates: StreamEventUpdate[]) => {
+    for (const update of updates) {
+      // chat:gap → 重放窗口失效，立即拉权威快照
+      if (update.requestSnapshot && currentID.value) {
+        void safeLoadMessages(currentID.value)
+        continue
+      }
+      applyStreamUpdate(update, {
+        streamingContent,
+        streamingThinking,
+        streamingTools,
+        streamingStats,
+        stopReason,
+        streamingArtifacts,
+        streamingGenUi,
+        pendingApproval,
+        error,
+        streamingRetry,
+        todoState,
+        fileChanges,
+        artifacts,
+        tasks
+      })
+    }
+  })
+
+  function handleEvent(event: ChatStreamEvent): void {
+    batcher.push(event)
+  }
+
+  function finalizeStreamingMessage(sessionID: string): void {
+    const content = streamingContent.value.trim()
+    const hasPayload =
+      content.length > 0 ||
+      streamingTools.value.length > 0 ||
+      streamingArtifacts.value !== null ||
+      streamingGenUi.value !== null
+    const last = messages.value[messages.value.length - 1]
+    if (last && last.role === 'assistant') {
+      if (!last.content || last.content.trim().length === 0) {
+        last.content = content || error.value || t('chat.streamFailedPlaceholder')
+        last.status = 'completed'
+        last.updated_at = Date.now()
+      }
+      // 兜底：权威快照若尚未带上过程块，用本地流式累积还原（chat:done 先于落库完成的窗口期）
+      if ((!last.blocks || last.blocks.length === 0) && streamingTools.value.length > 0) {
+        last.blocks = toolsToBlocks(streamingTools.value, last.id)
+      }
+      return
+    }
+    if (messages.value.length === 0 && hasPayload) {
+      const fallback = content || error.value || t('chat.streamFailedPlaceholder')
+      messages.value.push({
+        id: genLocalID(),
+        session_id: sessionID,
+        role: 'assistant',
+        content: fallback,
+        status: 'completed',
+        model: null,
+        created_at: Date.now(),
+        updated_at: Date.now()
+      } as unknown as ApiMessage)
+      return
+    }
+    if (!hasPayload && !error.value) return
+    const msg = {
+      id: genLocalID(),
+      session_id: sessionID,
+      role: 'assistant',
+      content: content || error.value || t('chat.streamFailedPlaceholder'),
+      status: 'completed',
+      model: null,
+      created_at: Date.now(),
+      updated_at: Date.now()
+    } as unknown as ApiMessage
+    const s = streamingStats.value
+    if (s) {
+      msg.input_tokens = s.input_tokens ?? null
+      msg.output_tokens = s.output_tokens ?? null
+      msg.cache_read_tokens = s.cache_read_tokens ?? null
+      msg.total_tokens = s.total_tokens ?? null
+      msg.latency_ms = s.latency_ms ?? null
+      msg.cost = s.cost ?? null
+    }
+    messages.value.push(msg)
+    if (!content && !error.value) {
+      // eslint-disable-next-line no-console
+      console.warn('[chat] finalizeStreamingMessage inserted empty placeholder; session=', sessionID)
+    }
+  }
+
+  /** 删除单条消息。 */
+  async function deleteMessage(messageID: string): Promise<void> {
+    if (!currentID.value) return
+    await apiPost(`/api/v1/chat/messages/${currentID.value}/delete/${messageID}`)
+    messages.value = messages.value.filter((m) => m.id !== messageID)
+  }
+
+  /** 从指定消息截断后重新发送。 */
+  async function resendFrom(messageID: string, content: string): Promise<void> {
+    await truncateMessages(messageID)
+    await sendMessage(content)
+  }
+
+  /** 会话分叉。 */
+  async function forkFrom(messageID: string): Promise<string> {
+    if (!currentID.value) throw new Error(t('chat.noSession'))
+    const fork = await apiPost<Session>(`/api/v1/chat/messages/${currentID.value}/fork`, {
+      message_id: messageID
+    })
+    sessions.value = [fork, ...sessions.value]
+    await selectSession(fork.id)
+    return fork.id
+  }
+
+  return {
+    sessions,
+    currentID,
+    messages,
+    models,
+    selectedModelID,
+    circuitStates,
+    loadingSessions,
+    streaming,
+    streamingContent,
+    streamingThinking,
+    streamingTools,
+    streamingStats,
+    streamingArtifacts,
+    streamingGenUi,
+    streamingRetry,
+    error,
+    stopReason,
+    pendingApproval,
+    // ===== P2 扩展 =====
+    todoState,
+    fileChanges,
+    artifacts,
+    tasks,
+    commands,
+    pendingApprovals,
+    effectiveParams,
+    loadSessions,
+    loadMessages,
+    loadModels,
+    loadCommands,
+    loadTodoState,
+    loadFileChanges,
+    loadFileChangeDetail,
+    rollbackFileChange,
+    loadArtifacts,
+    deleteArtifact,
+    loadTasks: () => apiGet<{ items: BackgroundTask[] }>('/api/v1/tasks?limit=50').then((r) => { tasks.value = r.items ?? [] }).catch(() => undefined),
+    submitTask,
+    cancelTask,
+    loadPendingApprovals,
+    compactSession,
+    searchSessions,
+    loadContextUsage,
+    contextUsage,
+    searchResults,
+    searchQuery,
+    selectModel,
+    resetCircuit,
+    selectSession,
+    createSession,
+    deleteSession,
+    deleteSessions,
+    clearMessages,
+    truncateMessages,
+    renameSession,
+    sendMessage,
+    resumeRun,
+    cancelStream,
+    dismissStopReason,
+    deleteMessage,
+    resendFrom,
+    forkFrom,
+    approveApproval,
+    answerApproval,
+    denyApproval,
+    updateSessionWorkspace,
+    loadEffectiveParams,
+    setPermissionLevel
+  }
+})

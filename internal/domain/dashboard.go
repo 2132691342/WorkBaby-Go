@@ -1,0 +1,71 @@
+package domain
+
+// DashboardStatsRESP 仪表盘统计聚合（GET /api/v1/dashboard/stats）。
+// 只读快照：累计计数 + 今日活动 + 最近活动列表 + Go 运行时信息。
+type DashboardStatsRESP struct {
+	MemoryEpisodes   int64                 `json:"memory_episodes"`
+	MemoryFacts      int64                 `json:"memory_facts"`
+	MemoryProcedures int64                 `json:"memory_procedures"`
+	MediaArtifacts   int64                 `json:"media_artifacts"`
+	CronJobs         int64                 `json:"cron_jobs"`
+	AiToolsTotal     int64                 `json:"ai_tools_total"`
+	TodaySessions    int64                 `json:"today_sessions"`
+	TodayMessages    int64                 `json:"today_messages"`
+	TodayTokens      int64                 `json:"today_tokens"`
+	RecentMessages   []RecentMessageRESP   `json:"recent_messages"`
+	RecentMedia      []RecentMediaRESP     `json:"recent_media"`
+	RecentExecutions []RecentExecutionRESP `json:"recent_executions"`
+	System           *SystemInfoRESP       `json:"system"`
+}
+
+// RecentMessageRESP 最近消息（活动流；content 由 service 截断）。
+type RecentMessageRESP struct {
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// RecentMediaRESP 最近媒体产物（缩略图区）。
+type RecentMediaRESP struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Prompt    string `json:"prompt"`
+	MimeType  string `json:"mime_type"`
+	Width     *int   `json:"width"`
+	Height    *int   `json:"height"`
+	FileSize  int64  `json:"file_size"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// RecentExecutionRESP 最近工作流执行。
+type RecentExecutionRESP struct {
+	ID         string `json:"id"`
+	WorkflowID string `json:"workflow_id"`
+	Status     string `json:"status"`
+	StartedAt  int64  `json:"started_at"`
+	FinishedAt *int64 `json:"finished_at"`
+	ErrorMsg   string `json:"error_msg"`
+}
+
+// SystemInfoRESP Go 运行时信息（替代旧 Java/JVM 字段）。
+type SystemInfoRESP struct {
+	OSName      string `json:"os_name"`
+	OSArch      string `json:"os_arch"`
+	GoVersion   string `json:"go_version"`
+	UserHome    string `json:"user_home"`
+	NumCPU      int    `json:"num_cpu"`
+	Goroutines  int    `json:"goroutines"`
+	HeapAllocMB int64  `json:"heap_alloc_mb"`
+	HeapSysMB   int64  `json:"heap_sys_mb"`
+}
+
+// DashboardTrendRESP 最近 N 天趋势（GET /api/v1/dashboard/trend?range=N）。
+// Days 与三个计数切片等长对齐，日期格式 "MM-DD"。
+type DashboardTrendRESP struct {
+	Days     []string `json:"days"`
+	Sessions []int64  `json:"sessions"`
+	Messages []int64  `json:"messages"`
+	Tokens   []int64  `json:"tokens"`
+}

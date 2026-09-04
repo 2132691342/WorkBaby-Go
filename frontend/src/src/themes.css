@@ -1,0 +1,191 @@
+/* ===== 主题系统（Studio 工作台 · 2026 重构） =====
+ *
+ * <p>设计基调（doc/19）：拒绝模板化「AI 味」紫色渐变。
+ * <ul>
+ *   <li>暖中性底色分层：bg → surface → surface-2 → overlay，靠明度而非描边建立层级</li>
+ *   <li>单主色：靛蓝（#4f46e5）只用于交互态与关键强调，大面积中性灰阶承载内容</li>
+ *   <li>琥珀（#d97706）作点缀色：空状态图标 / 高亮数字 / 装饰光斑，克制使用</li>
+ *   <li>精细表面：1px 内描边 + 8px 圆角 + 阴影仅浮层，Linear/Arc 式桌面精致感</li>
+ *   <li>排版即结构：字号/字重/行距承担信息层级，颜色留给状态</li>
+ * </ul>
+ */
+
+/* ---- light：暖纸白底 + 靛蓝（Studio 日间） ---- */
+[data-theme='light'] {
+  --wb-bg: #f7f7f5;
+  --wb-surface: #ffffff;
+  --wb-surface-2: #fafaf8;
+  --wb-surface-hover: #f0f0ed;
+  --wb-surface-solid: #ffffff;
+  --wb-primary: #4f46e5;
+  --wb-primary-strong: #4338ca;
+  --wb-primary-soft: rgba(79, 70, 229, 0.10);
+  --wb-mint: #0f9d6e;
+  --wb-lavender: #7c5cf0;
+  --wb-sky: #0e7cc4;
+  --wb-lemon: #d97706;
+  --wb-success: #0f9d6e;
+  --wb-warning: #d97706;
+  --wb-danger: #dc2626;
+  --wb-info: #0e7cc4;
+  --wb-ink: #1a1c20;
+  --wb-muted: #6e7178;
+  --wb-border: rgba(26, 28, 32, 0.09);
+  --wb-border-strong: rgba(26, 28, 32, 0.16);
+  --wb-radius-sm: 6px;
+  --wb-radius: 8px;
+  --wb-radius-lg: 12px;
+  --wb-shadow: 0 1px 2px rgb(15 17 22 / 0.05);
+  --wb-shadow-lg: 0 8px 24px rgb(15 17 22 / 0.08);
+  --wb-shadow-pop: 0 16px 48px rgb(15 17 22 / 0.14);
+  --wb-glass-blur: 0px;
+  --wb-glass-opacity: 1;
+
+  --color-wb-bg: var(--wb-bg);
+  --color-wb-surface: var(--wb-surface);
+  --color-wb-surface-2: var(--wb-surface-2);
+  --color-wb-surface-hover: var(--wb-surface-hover);
+  --color-wb-primary: var(--wb-primary);
+  --color-wb-primary-strong: var(--wb-primary-strong);
+  --color-wb-primary-soft: var(--wb-primary-soft);
+  --color-wb-mint: var(--wb-mint);
+  --color-wb-lavender: var(--wb-lavender);
+  --color-wb-sky: var(--wb-sky);
+  --color-wb-lemon: var(--wb-lemon);
+  --color-wb-ink: var(--wb-ink);
+  --color-wb-muted: var(--wb-muted);
+  --color-wb-border: var(--wb-border);
+  --color-wb-success: var(--wb-success);
+  --color-wb-warning: var(--wb-warning);
+  --color-wb-danger: var(--wb-danger);
+  --color-wb-info: var(--wb-info);
+}
+
+/* ---- dark：深炭底 + 靛蓝（Studio 夜间） ---- */
+[data-theme='dark'] {
+  --wb-bg: #101114;
+  --wb-surface: #1a1b1f;
+  --wb-surface-2: #202126;
+  --wb-surface-hover: #26272d;
+  --wb-surface-solid: #1a1b1f;
+  --wb-primary: #6366f1;
+  --wb-primary-strong: #818cf8;
+  --wb-primary-soft: rgba(99, 102, 241, 0.14);
+  --wb-mint: #2ec4a0;
+  --wb-lavender: #a78bfa;
+  --wb-sky: #38bdf8;
+  --wb-lemon: #f59e0b;
+  --wb-success: #2ec4a0;
+  --wb-warning: #f59e0b;
+  --wb-danger: #f87171;
+  --wb-info: #38bdf8;
+  --wb-ink: #e7e8ea;
+  --wb-muted: #9ca0a8;
+  --wb-border: rgba(231, 232, 234, 0.10);
+  --wb-border-strong: rgba(231, 232, 234, 0.20);
+  --wb-radius-sm: 6px;
+  --wb-radius: 8px;
+  --wb-radius-lg: 12px;
+  --wb-shadow: 0 1px 2px rgb(0 0 0 / 0.3);
+  --wb-shadow-lg: 0 8px 24px rgb(0 0 0 / 0.4);
+  --wb-shadow-pop: 0 16px 48px rgb(0 0 0 / 0.55);
+  --wb-glass-blur: 0px;
+  --wb-glass-opacity: 1;
+
+  --color-wb-bg: var(--wb-bg);
+  --color-wb-surface: var(--wb-surface);
+  --color-wb-surface-2: var(--wb-surface-2);
+  --color-wb-surface-hover: var(--wb-surface-hover);
+  --color-wb-primary: var(--wb-primary);
+  --color-wb-primary-strong: var(--wb-primary-strong);
+  --color-wb-primary-soft: var(--wb-primary-soft);
+  --color-wb-mint: var(--wb-mint);
+  --color-wb-lavender: var(--wb-lavender);
+  --color-wb-sky: var(--wb-sky);
+  --color-wb-lemon: var(--wb-lemon);
+  --color-wb-ink: var(--wb-ink);
+  --color-wb-muted: var(--wb-muted);
+  --color-wb-border: var(--wb-border);
+  --color-wb-success: var(--wb-success);
+  --color-wb-warning: var(--wb-warning);
+  --color-wb-danger: var(--wb-danger);
+  --color-wb-info: var(--wb-info);
+}
+
+/* ===== ElementPlus 主题桥接 ===== */
+:root[data-theme='light'],
+:root[data-theme='dark'] {
+  --el-color-primary: var(--wb-primary);
+  --el-color-primary-light-3: color-mix(in srgb, var(--wb-primary) 70%, transparent);
+  --el-color-primary-light-5: color-mix(in srgb, var(--wb-primary) 50%, transparent);
+  --el-color-primary-light-7: color-mix(in srgb, var(--wb-primary) 30%, transparent);
+  --el-color-primary-light-8: color-mix(in srgb, var(--wb-primary) 20%, transparent);
+  --el-color-primary-light-9: color-mix(in srgb, var(--wb-primary) 10%, transparent);
+  --el-color-primary-dark-2: color-mix(in srgb, var(--wb-primary) 70%, black);
+
+  --el-color-success: var(--wb-success);
+  --el-color-warning: var(--wb-warning);
+  --el-color-danger: var(--wb-danger);
+  --el-color-info: var(--wb-info);
+
+  --el-text-color-primary: var(--wb-ink);
+  --el-text-color-regular: var(--wb-ink);
+  --el-text-color-secondary: var(--wb-muted);
+  --el-text-color-placeholder: var(--wb-muted);
+  --el-text-color-disabled: color-mix(in srgb, var(--wb-muted) 55%, transparent);
+  --el-disabled-text-color: color-mix(in srgb, var(--wb-muted) 55%, transparent);
+  --el-disabled-bg-color: var(--wb-surface);
+  --el-disabled-border-color: var(--wb-border);
+
+  --el-bg-color: var(--wb-surface);
+  --el-bg-color-page: var(--wb-bg);
+  --el-bg-color-overlay: var(--wb-surface);
+
+  --el-border-color: var(--wb-border-strong);
+  --el-border-color-light: var(--wb-border);
+  --el-border-color-lighter: var(--wb-border);
+  --el-border-color-extra-light: var(--wb-border);
+  --el-border-color-dark: var(--wb-border-strong);
+  --el-border-color-darker: var(--wb-border-strong);
+  --el-border-color-hover: var(--wb-primary);
+
+  --el-fill-color: color-mix(in srgb, var(--wb-ink) 8%, transparent);
+  --el-fill-color-light: color-mix(in srgb, var(--wb-ink) 6%, transparent);
+  --el-fill-color-lighter: color-mix(in srgb, var(--wb-ink) 4%, transparent);
+  --el-fill-color-extra-light: color-mix(in srgb, var(--wb-ink) 2%, transparent);
+  --el-fill-color-dark: color-mix(in srgb, var(--wb-ink) 12%, transparent);
+  --el-fill-color-darker: color-mix(in srgb, var(--wb-ink) 16%, transparent);
+  --el-fill-color-blank: var(--wb-surface);
+
+  --el-mask-color: rgba(15, 17, 22, 0.55);
+  --el-mask-color-extra-light: rgba(15, 17, 22, 0.12);
+  --el-box-shadow: var(--wb-shadow);
+  --el-box-shadow-light: var(--wb-shadow);
+  --el-box-shadow-lighter: var(--wb-shadow);
+  --el-box-shadow-dark: var(--wb-shadow-lg);
+
+  --el-border-radius-base: var(--wb-radius);
+  --el-border-radius-small: var(--wb-radius-sm);
+  --el-border-radius-round: 9999px;
+
+  --el-font-family: var(--font-sans);
+}
+
+/* 用户自定义背景图片 */
+body.has-custom-bg {
+  background-image: var(--wb-user-bg-url);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+body.has-custom-bg::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: var(--wb-bg);
+  opacity: var(--wb-user-bg-opacity);
+  backdrop-filter: blur(var(--wb-user-bg-blur));
+  pointer-events: none;
+  z-index: -1;
+}
