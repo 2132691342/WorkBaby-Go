@@ -3,15 +3,16 @@
 /WorkBaby.exe
 /workbaby.exe
 *.exe
-/build/bin/
+!/build/bin/*-installer.exe
+/build/bin/*
+!/build/bin/*-installer.exe
 
 # Wails
 /build/darwin/
 /build/windows/
 
-# Runtimes (do not commit bundled runtime archives)
-/runtimes/*.zip
-/runtimes/*.tar.gz
+# Runtimes（归档经 Git LFS 跟踪，见 .gitattributes）
+/runtimes/*.7z
 
 # Frontend
 /frontend/node_modules/
