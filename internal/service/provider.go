@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"WorkBaby/internal/domain"
+	"WorkBaby/internal/llm"
 	"WorkBaby/internal/pkg"
 	"WorkBaby/internal/repo"
 )
@@ -69,13 +70,24 @@ func (s *ProviderService) toRESP(p *domain.AiProviderDO) domain.AiProviderRESP {
 		Tier:             p.Tier,
 		Enabled:          p.Enabled,
 		ContextWindow:    p.ContextWindow,
+		MaxOutputTokens:  p.MaxOutputTokens,
 		CompressRatio:    p.CompressRatio,
 		Temperature:      p.Temperature,
+		TopP:             p.TopP,
 		ThinkingEffort:   p.ThinkingEffort,
-		CapabilitiesJSON: p.CapabilitiesJSON,
-		PricingJSON:      p.PricingJSON,
-		CreatedAt:        p.CreatedAt,
-		UpdatedAt:        p.UpdatedAt,
+		ThinkingStyle:    p.ThinkingStyle,
+		// 解析后的方言：自动探测的结果要让用户看得见，否则「为什么没开思考」无从排查。
+		ThinkingStyleResolved: string(llm.ResolveThinkingStyle(p.ThinkingStyle, p.BaseURL, p.Model)),
+		SupportsToolCall:      p.SupportsToolCall,
+		SupportsVision:        p.SupportsVision,
+		SupportsReasoning:     p.SupportsReasoning,
+		ToolCallEffective:     p.SupportsToolCallEffective(),
+		VisionEffective:       p.SupportsVisionEffective(),
+		ReasoningEffective:    p.SupportsReasoningEffective(),
+		CapabilitiesJSON:      p.CapabilitiesJSON,
+		PricingJSON:           p.PricingJSON,
+		CreatedAt:             p.CreatedAt,
+		UpdatedAt:             p.UpdatedAt,
 	}
 }
 
@@ -119,21 +131,27 @@ func (s *ProviderService) Create(ctx context.Context, req *domain.AiProviderREQ)
 		return nil, pkg.Wrap(2028, "encrypt api key failed", err)
 	}
 	p := &domain.AiProviderDO{
-		ID:               pkg.NewID(domain.IDProvider),
-		Name:             req.Name,
-		Kind:             req.Kind,
-		APIKey:           ct,
-		BaseURL:          req.BaseURL,
-		Model:            req.Model,
-		Alias:            req.Alias,
-		Tier:             req.Tier,
-		Enabled:          req.Enabled == nil || *req.Enabled,
-		ContextWindow:    req.ContextWindow,
-		CompressRatio:    orDefault(req.CompressRatio, 0.9),
-		Temperature:      req.Temperature,
-		ThinkingEffort:   req.ThinkingEffort,
-		CapabilitiesJSON: req.CapabilitiesJSON,
-		PricingJSON:      req.PricingJSON,
+		ID:                pkg.NewID(domain.IDProvider),
+		Name:              req.Name,
+		Kind:              req.Kind,
+		APIKey:            ct,
+		BaseURL:           req.BaseURL,
+		Model:             req.Model,
+		Alias:             req.Alias,
+		Tier:              req.Tier,
+		Enabled:           req.Enabled == nil || *req.Enabled,
+		ContextWindow:     req.ContextWindow,
+		MaxOutputTokens:   req.MaxOutputTokens,
+		CompressRatio:     orDefault(req.CompressRatio, 0.9),
+		Temperature:       req.Temperature,
+		TopP:              req.TopP,
+		ThinkingEffort:    req.ThinkingEffort,
+		ThinkingStyle:     string(llm.ParseThinkingStyle(req.ThinkingStyle)),
+		SupportsToolCall:  req.SupportsToolCall,
+		SupportsVision:    req.SupportsVision,
+		SupportsReasoning: req.SupportsReasoning,
+		CapabilitiesJSON:  req.CapabilitiesJSON,
+		PricingJSON:       req.PricingJSON,
 	}
 	if err := s.r.Create(ctx, p); err != nil {
 		return nil, err
@@ -179,7 +197,13 @@ func (s *ProviderService) Update(ctx context.Context, id string, req *domain.AiP
 		p.CompressRatio = req.CompressRatio
 	}
 	p.Temperature = req.Temperature
+	p.TopP = req.TopP
 	p.ThinkingEffort = req.ThinkingEffort
+	// 思维方言与能力三态允许显式清空回落到自动判定，故不做非零判断
+	p.ThinkingStyle = string(llm.ParseThinkingStyle(req.ThinkingStyle))
+	p.SupportsToolCall = req.SupportsToolCall
+	p.SupportsVision = req.SupportsVision
+	p.SupportsReasoning = req.SupportsReasoning
 	if req.CapabilitiesJSON != "" {
 		p.CapabilitiesJSON = req.CapabilitiesJSON
 	}
@@ -227,17 +251,22 @@ func (s *ProviderService) ListAvailable(ctx context.Context) ([]domain.Available
 	out := make([]domain.AvailableModelRESP, 0, len(ps))
 	for _, p := range ps {
 		out = append(out, domain.AvailableModelRESP{
-			ID:             p.ID,
-			Name:           p.Name,
-			Kind:           p.Kind,
-			Model:          p.Model,
-			Alias:          p.Alias,
-			Tier:           p.Tier,
-			Enabled:        p.Enabled,
-			ContextWindow:  p.ContextWindow,
-			CompressRatio:  p.CompressRatio,
-			Temperature:    p.Temperature,
-			ThinkingEffort: p.ThinkingEffort,
+			ID:              p.ID,
+			Name:            p.Name,
+			Kind:            p.Kind,
+			Model:           p.Model,
+			Alias:           p.Alias,
+			Tier:            p.Tier,
+			Enabled:         p.Enabled,
+			ContextWindow:   p.ContextWindow,
+			MaxOutputTokens: p.MaxOutputTokens,
+			CompressRatio:   p.CompressRatio,
+			Temperature:     p.Temperature,
+			ThinkingEffort:  p.ThinkingEffort,
+			ThinkingStyle:   p.ThinkingStyle,
+			ToolCall:        p.SupportsToolCallEffective(),
+			Vision:          p.SupportsVisionEffective(),
+			Reasoning:       p.SupportsReasoningEffective(),
 		})
 	}
 	return out, nil

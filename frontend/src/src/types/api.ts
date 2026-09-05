@@ -62,25 +62,28 @@ export function isOk<T>(resp: ApiResponse<T>): boolean {
 
 /** 会话（GET /api/v1/chat/sessions 返回 SessionRESP）。 */
 export interface Session {
-  id: string
-  name: string
-  user_id: string
-  provider_id: string
-  model: string
-  workspace_id: string | null
-  active: boolean
-  message_count: number
-  last_message_at: number | null
-  metadata_json: string | null
-  status: string
-  /** 会话级工具权限模式（restricted/default/auto_edit/yolo）；空 = 跟随全局设置 */
-  permission_mode: string | null
-  /** 分叉来源会话 ID；根会话为空 */
-  parent_id: string | null
-  /** 分叉点消息 seq；根会话为 0 */
-  branch_point: number
-  created_at: number
-  updated_at: number
+id: string
+name: string
+user_id: string
+provider_id: string
+model: string
+/** 逻辑文件夹树关联 id（历史字段，UI 不再直接使用） */
+workspace_id: string | null
+/** 会话绑定的外部工作目录（绝对路径；空 = 默认工作区）。 */
+workspace_path: string | null
+active: boolean
+message_count: number
+last_message_at: number | null
+metadata_json: string | null
+status: string
+/** 会话级工具权限模式（restricted/default/auto_edit/yolo）；空 = 跟随全局设置 */
+permission_mode: string | null
+/** 分叉来源会话 ID；根会话为空 */
+parent_id: string | null
+/** 分叉点消息 seq；根会话为 0 */
+branch_point: number
+created_at: number
+updated_at: number
 }
 
 /** 分页响应（PageRESP<T>）。 */
@@ -230,12 +233,26 @@ export interface AiProvider {
   tier: string
   enabled: boolean
   context_window: number | null
+  /** 单次最大输出 token；0/空 = 不限制。 */
+  max_output_tokens: number | null
   /** 压缩比例（0.1~1.0，上下文已使用占比超过该值即触发压缩；缺省 0.9）。 */
   compress_ratio: number | null
   /** 默认采样温度（0.0~2.0，可选；null=走全局默认 0.2）。 */
   temperature: number | null
+  /** 默认核采样（0~1；0 = 走全局默认）。 */
+  top_p: number | null
   /** 默认思考强度（off/low/medium/high，可选；null=走全局默认 medium）。 */
   thinking_effort: string | null
+  /** 思维参数协议方言（空 = 自动探测）。 */
+  thinking_style: string | null
+  /** 实际生效方言（auto 探测结果，展示用）。 */
+  thinking_style_resolved: string | null
+  supports_tool_call: boolean | null
+  supports_vision: boolean | null
+  supports_reasoning: boolean | null
+  tool_call_effective: boolean
+  vision_effective: boolean
+  reasoning_effective: boolean
   capabilities_json: string | null
   pricing_json: string | null
   created_at: number
@@ -252,9 +269,14 @@ export interface AvailableModel {
   tier: string
   enabled: boolean
   context_window?: number | null
+  max_output_tokens?: number | null
   compress_ratio?: number | null
   temperature?: number | null
   thinking_effort?: string | null
+  thinking_style?: string | null
+  tool_call?: boolean
+  vision?: boolean
+  reasoning?: boolean
 }
 
 /** Provider Kind 元数据（GET /api/v1/ai-provider/kinds 返回 ProviderKindsRESP）。
@@ -290,11 +312,17 @@ export interface AiProviderReq {
   tier?: string
   enabled?: boolean
   context_window?: number | null
+  max_output_tokens?: number | null
   compress_ratio?: number | null
   capabilities_json?: string | null
   pricing_json?: string | null
   temperature?: number | null
+  top_p?: number | null
   thinking_effort?: string | null
+  thinking_style?: string | null
+  supports_tool_call?: boolean | null
+  supports_vision?: boolean | null
+  supports_reasoning?: boolean | null
 }
 
 /** SMTP配置。 */

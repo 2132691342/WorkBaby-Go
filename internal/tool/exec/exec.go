@@ -18,9 +18,10 @@ import (
 // ExecTool 执行白名单内命令；参数数组形式，绝不拼 shell。
 type ExecTool struct {
 	policy    tool.ExecPolicy
-	approver  tool.Approver   // 可选；nil = 无审批门（白名单外/危险命令直接拒绝）
-	pathDirs  func() []string // 内置运行时 bin 目录提供者；nil = 不增强 PATH
-	whitelist func() []string // 可选；非 nil 时每次执行动态覆盖 policy.AllowedBinaries（运行时设置页白名单）
+	approver  tool.Approver              // 可选；nil = 无审批门（白名单外/危险命令直接拒绝）
+	pathDirs  func() []string            // 内置运行时 bin 目录提供者；nil = 不增强 PATH
+	whitelist func() []string            // 可选；非 nil 时每次执行动态覆盖 policy.AllowedBinaries（运行时设置页白名单）
+	root      func(ctx context.Context) string // 会话工作区根；nil = cwd 缺省用进程当前目录
 }
 
 // New 构造 ExecTool；policy 由装配方（service）注入。
@@ -28,6 +29,10 @@ func New(policy tool.ExecPolicy) *ExecTool { return &ExecTool{policy: policy} }
 
 // WithApprover 注入审批门（service 层 ApprovalService 实现 tool.Approver）。
 func (t *ExecTool) WithApprover(a tool.Approver) *ExecTool { t.approver = a; return t }
+
+// WithRootResolver 注入会话工作区根解析器（tool.ResolveRoot 包装 RootResolver）；
+// 入参 cwd 缺省且解析出有效根时，命令在该目录执行——与 file 系工具的沙箱根一致。
+func (t *ExecTool) WithRootResolver(f func(context.Context) string) *ExecTool { t.root = f; return t }
 
 // WithPathDirs 注入内置运行时 bin 目录提供者；执行时实时读取并前置到子进程 PATH，
 // 实现 node/python/pwsh 内置环境隔离（不污染用户环境）。
@@ -63,7 +68,7 @@ func (t *ExecTool) Schema() tool.ToolSchema {
 				"command": {"type": "string", "description": "可执行文件路径或名称，必须命中白名单"},
 				"args": {"type": "array", "items": {"type": "string"}, "description": "参数列表（数组形式，禁止 shell 拼接）"},
 				"timeout": {"type": "integer", "description": "超时毫秒，缺省用策略默认值"},
-				"cwd": {"type": "string", "description": "工作目录，缺省为进程当前目录"}
+				"cwd": {"type": "string", "description": "工作目录，缺省为会话工作区（绑定了外部目录时）"}
 			}
 		}`),
 	}
@@ -117,8 +122,17 @@ func (t *ExecTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 	}
 
 	cmd := exec.CommandContext(execCtx, req.Command, req.Args...)
-	if req.Cwd != "" {
+	switch {
+	case req.Cwd != "":
 		cmd.Dir = req.Cwd
+	case t.root != nil:
+		// 工作区联动：解析出的根必须真实存在才生效，否则维持进程当前目录
+		//（默认会话隔离目录可能尚未创建，缺目录不应让命令直接失败）。
+		if root := strings.TrimSpace(t.root(ctx)); root != "" {
+			if info, serr := os.Stat(root); serr == nil && info.IsDir() {
+				cmd.Dir = root
+			}
+		}
 	}
 	if t.pathDirs != nil {
 		if dirs := t.pathDirs(); len(dirs) > 0 {

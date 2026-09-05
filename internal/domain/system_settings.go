@@ -31,6 +31,8 @@ const (
 	SettingKeyChatDefaultThinking    = "chat.defaultThinking"
 	SettingKeyChatCompressionRatio   = "chat.compressionRatio"
 	SettingKeyChatMaxInputChars      = "chat.maxInputChars"
+	// SettingKeyMemoryEnabled 全局记忆开关（true/false；缺省开启）。
+	SettingKeyMemoryEnabled = "memory.enabled"
 )
 
 // SMTP 配置键（channel 邮件通道；password 密文落库）。

@@ -43,7 +43,7 @@
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/api/v1/chat/sessions?page=1&page_size=20` | 会话分页（`{items, total}`） |
-| POST | `/api/v1/chat/sessions` | 新建会话 `{name}` |
+| POST | `/api/v1/chat/sessions` | 新建会话 `{name, model?, workspace_path?}`（workspace_path 非空时创建即绑定并自动信任） |
 | GET | `/api/v1/chat/sessions/:id` | 会话详情 |
 | POST | `/api/v1/chat/sessions/:id/rename` | 重命名 `{name}` |
 | POST | `/api/v1/chat/sessions/:id/delete` | 删除会话 |

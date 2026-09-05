@@ -45,15 +45,27 @@ func interpreter(lang string) (string, string, bool) {
 
 // SkillRunTool run_skill_script 工具。
 type SkillRunTool struct {
-	resolve   ScriptResolver
-	workspace string        // 脚本工作目录（会话工作区）
-	approver  tool.Approver // 必需；nil 时拒绝执行（fail-closed）
-	pathDirs  func() []string
+	resolve  ScriptResolver
+	defRoot  string            // 默认工作区（未绑定会话目录时脚本 cwd）
+	rootRes  tool.RootResolver // 会话工作区解析器；nil = 恒用 defRoot
+	approver tool.Approver     // 必需；nil 时拒绝执行（fail-closed）
+	pathDirs func() []string
 }
 
 // New 构造；workspace 为脚本执行 cwd。
 func New(resolve ScriptResolver, workspace string) *SkillRunTool {
-	return &SkillRunTool{resolve: resolve, workspace: workspace}
+	return &SkillRunTool{resolve: resolve, defRoot: workspace}
+}
+
+// WithRootResolver 注入会话工作区解析器：脚本 cwd 跟随会话绑定的目录。
+func (t *SkillRunTool) WithRootResolver(r tool.RootResolver) *SkillRunTool {
+	t.rootRes = r
+	return t
+}
+
+// rootOf 解析本次执行的脚本 cwd（会话绑定目录优先，回落默认根）。
+func (t *SkillRunTool) rootOf(ctx context.Context) string {
+	return tool.ResolveRoot(t.rootRes, t.defRoot)(ctx)
 }
 
 // WithApprover 注入审批门（ApprovalService；同一审批流）。
@@ -145,7 +157,7 @@ func (t *SkillRunTool) Execute(ctx context.Context, raw json.RawMessage) tool.To
 	runCtx, cancel := context.WithTimeout(ctx, runTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, inter, append([]string{path}, req.Args...)...)
-	cmd.Dir = t.workspace
+	cmd.Dir = t.rootOf(ctx)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if t.pathDirs != nil {
 		if dirs := t.pathDirs(); len(dirs) > 0 {

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue'
 import {
-  Code,
   FileText,
   FolderOpen,
   Image,
@@ -17,21 +16,23 @@ import Skeleton from '@/components/common/Skeleton.vue'
 import FolderTree from '@/components/chat/FolderTree.vue'
 
 /**
- * 工作区侧栏：五个 tab 展示当前会话的工作区内容。
+ * 工作区侧栏：三个 tab 展示当前会话的工作区内容。
  *
  * <ul>
- *   <li><b>files</b>：物理产出文件（`/api/v1/chat/workspace/files/{id}`）</li>
- *   <li><b>artifacts</b>：可预览产物（html / url / text / pdf / image）</li>
+ *   <li><b>files</b>：工作区全部文件（`/api/v1/chat/workspace/files/{id}`，含大小与下载）</li>
+ *   <li><b>artifacts</b>：可内嵌预览的产物（html / url / text / pdf / image）</li>
  *   <li><b>folders</b>：绑定到该会话工作区的逻辑文件夹树</li>
- *   <li><b>context</b>：上下文记忆（待后端接口）</li>
- *   <li><b>code</b>：其余可当作代码预览的文件</li>
  * </ul>
  */
 const props = defineProps<{
   session_id: string | null
+  /** 会话绑定的外部工作目录（空 = 默认工作区）；仅用于头部展示。 */
+  workspace_path?: string | null
+  /** 打开目录选择器（头部「更换」按钮）。 */
+  pick?: () => void
 }>()
 
-type TabID = 'files' | 'artifacts' | 'folders' | 'context' | 'code'
+type TabID = 'files' | 'artifacts' | 'folders'
 
 interface TabDef {
   id: TabID
@@ -42,9 +43,7 @@ interface TabDef {
 const tabs: TabDef[] = [
   { id: 'files', labelKey: 'chat.tabFiles', icon: FolderOpen },
   { id: 'artifacts', labelKey: 'chat.tabArtifacts', icon: Image },
-  { id: 'folders', labelKey: 'chat.tabFolders', icon: Layers },
-  { id: 'context', labelKey: 'chat.tabContext', icon: FileText },
-  { id: 'code', labelKey: 'chat.tabCode', icon: Code }
+  { id: 'folders', labelKey: 'chat.tabFolders', icon: Layers }
 ]
 
 const activeTab = ref<TabID>('files')
@@ -53,20 +52,19 @@ const folders = ref<FolderTreeNode[]>([])
 const loading = ref(false)
 const selected = ref<WorkspaceFile | null>(null)
 
-// 上下文记忆占位数据
-const contextItems = ref<{ id: string; summary: string; created_at: number }[]>([])
-const contextLoading = ref(false)
-
 const totalFolderCount = computed(() => countNodes(folders.value))
+
+/** 头部目录展示：外部目录取末两级，默认工作区给固定文案。 */
+const rootDisplay = computed(() => {
+  const wp = props.workspace_path
+  if (!wp) return t('chat.workspace.default')
+  const parts = wp.replace(/\\/g, '/').split('/').filter(Boolean)
+  return parts.length <= 2 ? wp : `…/${parts.slice(-2).join('/')}`
+})
 
 /** 可预览产物：html / url / text / pdf / image。 */
 const previewableFiles = computed(() =>
   files.value.filter((f) => ['html', 'url', 'text', 'pdf', 'image'].includes(f.kind))
-)
-
-/** 其余文件按代码预览。 */
-const codeFiles = computed(
-  () => files.value.filter((f) => !['html', 'url', 'text', 'pdf', 'image'].includes(f.kind))
 )
 
 function countNodes(nodes: FolderTreeNode[]): number {
@@ -78,11 +76,12 @@ function countNodes(nodes: FolderTreeNode[]): number {
 }
 
 watch(
-  () => props.session_id,
-  (id) => {
+  () => [props.session_id, props.workspace_path] as [string | null, string | null | undefined],
+  ([id, wp], old) => {
+    const [prevId, prevWp] = old ?? [null, undefined]
     selected.value = null
-    contextItems.value = []
-    folders.value = []
+    // 绑定路径变化（含切换会话）：文件夹树与文件列表都失效，全部重置重拉
+    if (id !== prevId || wp !== prevWp) folders.value = []
     if (id) {
       void load(id)
     } else {
@@ -119,12 +118,6 @@ async function loadFolders(id: string): Promise<void> {
 
 function selectFile(f: WorkspaceFile): void {
   selected.value = f
-  // 根据文件类型自动切换 tab
-  if (['html', 'url', 'text', 'pdf', 'image'].includes(f.kind)) {
-    activeTab.value = 'artifacts'
-  } else {
-    activeTab.value = 'code'
-  }
 }
 
 function fmtSize(size?: number): string {
@@ -136,9 +129,6 @@ function fmtSize(size?: number): string {
 
 function switchTab(id: TabID): void {
   activeTab.value = id
-  if (id === 'context' && contextItems.value.length === 0) {
-    loadContext()
-  }
   if (id === 'folders' && props.session_id && folders.value.length === 0) {
     void loadFolders(props.session_id)
   }
@@ -153,168 +143,133 @@ function refresh(): void {
   if (activeTab.value === 'folders') void loadFolders(props.session_id)
   else void load(props.session_id)
 }
-
-async function loadContext(): Promise<void> {
-  if (!props.session_id) return
-  contextLoading.value = true
-  try {
-  // 上下文记忆面板：后端暂无独立端点，保持空列表（会话记忆经 MEMORY.md 在 agent 侧生效）
-  contextItems.value = []
-  } catch {
-    contextItems.value = []
-  } finally {
-    contextLoading.value = false
-  }
-}
 </script>
 
 <template>
-  <aside class="flex h-full w-full flex-col border-l border-wb-border bg-wb-surface/50">
-    <div class="relative min-h-0 flex-1">
-      <el-tabs v-model="activeTab" class="wb-panel-tabs h-full" @tab-change="onTabChange">
-        <el-tab-pane v-for="tab in tabs" :key="tab.id" :name="tab.id">
-          <template #label>
-            <span class="flex items-center gap-1.5 text-xs">
-              <el-icon :size="14"><component :is="tab.icon" /></el-icon>
-              {{ t(tab.labelKey) }}
-            </span>
-          </template>
-        </el-tab-pane>
-      </el-tabs>
-
-      <el-button
-        class="absolute right-2 top-1.5 z-10"
-        text
-        circle
-        size="small"
-        :disabled="!props.session_id || loading"
+  <aside class="flex h-full w-full flex-col bg-wb-surface/50">
+    <!-- 根目录条：让「当前工作区是哪个目录」一眼可见 -->
+    <div class="flex shrink-0 items-center gap-1.5 border-b border-wb-border px-3 py-2">
+      <FolderOpen class="h-3.5 w-3.5 shrink-0 text-wb-primary" />
+      <span
+        class="min-w-0 flex-1 truncate text-xs font-medium text-wb-ink"
+        :title="workspace_path || t('chat.workspace.defaultFull')"
+      >{{ rootDisplay }}</span>
+      <button
+        v-if="pick"
+        type="button"
+        class="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-primary-strong"
+        :title="t('chat.workspacePicker.title')"
+        @click="pick"
+      >
+        {{ t('chat.workspace.change') }}
+      </button>
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-ink"
+        :disabled="!session_id || loading"
         :title="t('chat.refresh')"
         @click="refresh"
       >
-        <el-icon :size="14" :class="loading ? 'is-loading' : ''"><RefreshCw /></el-icon>
-      </el-button>
+        <RefreshCw class="h-3.5 w-3.5" :class="loading ? 'animate-spin' : ''" />
+      </button>
+    </div>
 
-      <!-- 内容区按当前 tab 渲染 -->
-      <div class="absolute inset-x-0 bottom-0 top-[40px] overflow-y-auto p-2">
-        <Skeleton v-if="loading || (activeTab === 'context' && contextLoading)" :lines="4" />
+    <!-- tab 栏（独立一行，不再与刷新按钮绝对定位互相覆盖） -->
+    <el-tabs v-model="activeTab" class="wb-panel-tabs shrink-0" @tab-change="onTabChange">
+      <el-tab-pane v-for="tab in tabs" :key="tab.id" :name="tab.id">
+        <template #label>
+          <span class="flex items-center gap-1.5 text-xs">
+            <el-icon :size="14"><component :is="tab.icon" /></el-icon>
+            {{ t(tab.labelKey) }}
+          </span>
+        </template>
+      </el-tab-pane>
+    </el-tabs>
 
-        <!-- files：物理产出文件 -->
-        <template v-else-if="activeTab === 'files'">
-          <el-empty
-            v-if="files.length === 0"
-            :description="t('chat.workspaceEmpty')"
-            :image-size="48"
-          />
-          <ul v-else class="space-y-0.5">
-            <li
-              v-for="f in files"
-              :key="f.path"
-              class="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition-colors"
-              :class="selected?.path === f.path ? 'bg-wb-primary/10 text-wb-primary-strong' : 'text-wb-ink hover:bg-wb-primary/5'"
-              @click="selectFile(f)"
+    <!-- 内容区按当前 tab 渲染 -->
+    <div class="min-h-0 flex-1 overflow-y-auto p-2">
+      <Skeleton v-if="loading" :lines="4" />
+
+      <!-- files：工作区全部文件（含下载） -->
+      <template v-else-if="activeTab === 'files'">
+        <el-empty
+          v-if="files.length === 0"
+          :description="t('chat.workspaceEmpty')"
+          :image-size="48"
+        />
+        <ul v-else class="space-y-0.5">
+          <li
+            v-for="f in files"
+            :key="f.path"
+            class="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition-colors"
+            :class="selected?.path === f.path ? 'bg-wb-primary/10 text-wb-primary-strong' : 'text-wb-ink hover:bg-wb-primary/5'"
+            @click="selectFile(f)"
+          >
+            <component
+              :is="['image'].includes(f.kind) ? Image : FileText"
+              class="h-3.5 w-3.5 shrink-0"
+            />
+            <span class="min-w-0 flex-1 truncate" :title="f.path">{{ f.path }}</span>
+            <span class="shrink-0 text-[10px] text-wb-muted">{{ fmtSize(f.size) }}</span>
+            <a
+              :href="f.url"
+              :download="f.name"
+              :title="t('chat.download')"
+              class="hidden shrink-0 text-wb-muted hover:text-wb-primary-strong group-hover:block"
+              @click.stop
             >
-              <component
-                :is="['image'].includes(f.kind) ? Image : FileText"
-                class="h-3.5 w-3.5 shrink-0"
-              />
-              <span class="min-w-0 flex-1 truncate" :title="f.path">{{ f.path }}</span>
-              <span class="shrink-0 text-[10px] text-wb-muted">{{ fmtSize(f.size) }}</span>
-              <a
-                :href="f.url"
-                :download="f.name"
-                :title="t('chat.download')"
-                class="hidden shrink-0 text-wb-muted hover:text-wb-primary-strong group-hover:block"
-                @click.stop
-              >
-                <Download class="h-3 w-3" />
-              </a>
-            </li>
-          </ul>
-        </template>
+              <Download class="h-3 w-3" />
+            </a>
+          </li>
+        </ul>
+      </template>
 
-        <!-- artifacts：可预览产物 -->
-        <template v-else-if="activeTab === 'artifacts'">
-          <el-empty
-            v-if="previewableFiles.length === 0"
-            :description="t('chat.noArtifacts')"
-            :image-size="48"
-          />
-          <ul v-else class="space-y-0.5">
-            <li
-              v-for="f in previewableFiles"
-              :key="f.path"
-              class="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition-colors"
-              :class="selected?.path === f.path ? 'bg-wb-primary/10 text-wb-primary-strong' : 'text-wb-ink hover:bg-wb-primary/5'"
-              @click="selectFile(f)"
-            >
-              <component :is="f.kind === 'image' ? Image : FileText" class="h-3.5 w-3.5 shrink-0" />
-              <span class="min-w-0 flex-1 truncate">{{ f.name || f.path }}</span>
-            </li>
-          </ul>
-        </template>
+      <!-- artifacts：可内嵌预览的产物 -->
+      <template v-else-if="activeTab === 'artifacts'">
+        <el-empty
+          v-if="previewableFiles.length === 0"
+          :description="t('chat.noArtifacts')"
+          :image-size="48"
+        />
+        <ul v-else class="space-y-0.5">
+          <li
+            v-for="f in previewableFiles"
+            :key="f.path"
+            class="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition-colors"
+            :class="selected?.path === f.path ? 'bg-wb-primary/10 text-wb-primary-strong' : 'text-wb-ink hover:bg-wb-primary/5'"
+            @click="selectFile(f)"
+          >
+            <component :is="f.kind === 'image' ? Image : FileText" class="h-3.5 w-3.5 shrink-0" />
+            <span class="min-w-0 flex-1 truncate">{{ f.name || f.path }}</span>
+          </li>
+        </ul>
+      </template>
 
-        <!-- folders：绑定到本会话工作区的逻辑文件夹树 -->
-        <template v-else-if="activeTab === 'folders'">
-          <div class="mb-2 flex items-center justify-between px-1 text-[10px] text-wb-muted">
-            <span>共 {{ totalFolderCount }} 个文件夹</span>
-          </div>
-          <el-empty
-            v-if="folders.length === 0"
-            :description="t('chat.noFolders')"
-            :image-size="48"
-          />
-          <FolderTree v-else :nodes="folders" />
-        </template>
-
-        <!-- context：上下文记忆 -->
-        <template v-else-if="activeTab === 'context'">
-          <el-empty
-            v-if="contextItems.length === 0"
-            :description="t('chat.noContext')"
-            :image-size="48"
-          />
-          <ul v-else class="space-y-2">
-            <li
-              v-for="item in contextItems"
-              :key="item.id"
-              class="rounded-lg border border-wb-border p-2 text-xs"
-            >
-              <p class="text-wb-ink">{{ item.summary }}</p>
-              <p class="mt-1 text-[10px] text-wb-muted">{{ item.created_at }}</p>
-            </li>
-          </ul>
-        </template>
-
-        <!-- code：其余文件按代码预览 -->
-        <template v-else-if="activeTab === 'code'">
-          <el-empty
-            v-if="codeFiles.length === 0"
-            :description="t('chat.workspaceEmpty')"
-            :image-size="48"
-          />
-          <ul v-else class="space-y-0.5">
-            <li
-              v-for="f in codeFiles"
-              :key="f.path"
-              class="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition-colors"
-              :class="selected?.path === f.path ? 'bg-wb-primary/10 text-wb-primary-strong' : 'text-wb-ink hover:bg-wb-primary/5'"
-              @click="selectFile(f)"
-            >
-              <Code class="h-3.5 w-3.5 shrink-0" />
-              <span class="min-w-0 flex-1 truncate" :title="f.path">{{ f.path }}</span>
-            </li>
-          </ul>
-        </template>
-      </div>
+      <!-- folders：绑定到本会话工作区的逻辑文件夹树 -->
+      <template v-else-if="activeTab === 'folders'">
+        <div class="mb-2 flex items-center justify-between px-1 text-[10px] text-wb-muted">
+          <span>共 {{ totalFolderCount }} 个文件夹</span>
+        </div>
+        <el-empty
+          v-if="folders.length === 0"
+          :description="t('chat.noFolders')"
+          :image-size="48"
+        />
+        <FolderTree v-else :nodes="folders" />
+      </template>
     </div>
 
     <!-- 选中文件预览 -->
     <div v-if="selected" class="shrink-0 border-t border-wb-border p-2">
       <div class="mb-1 flex items-center justify-between">
         <span class="truncate text-xs text-wb-ink">{{ selected.name || selected.path }}</span>
-        <el-button text circle size="small" @click="selected = null">
-          <el-icon :size="14"><Close /></el-icon>
-        </el-button>
+        <button
+          type="button"
+          class="flex h-5 w-5 items-center justify-center rounded text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-ink"
+          @click="selected = null"
+        >
+          <Close class="h-3 w-3" />
+        </button>
       </div>
       <iframe
         v-if="['html', 'url', 'text', 'pdf'].includes(selected.kind)"
@@ -338,7 +293,7 @@ async function loadContext(): Promise<void> {
 </template>
 
 <style scoped>
-/* 只取 el-tabs 的 header 作为 tab 栏，内容区由下方自定义区域承载 */
+/* 只取 el-tabs 的 header 作为 tab 栏，内容区由上方自定义区域承载 */
 .wb-panel-tabs :deep(.el-tabs__header) {
   margin: 0;
   padding: 0 4px;
@@ -348,8 +303,8 @@ async function loadContext(): Promise<void> {
   display: none;
 }
 .wb-panel-tabs :deep(.el-tabs__item) {
-  height: 40px;
-  line-height: 40px;
+  height: 36px;
+  line-height: 36px;
   font-size: 13px;
   padding: 0 10px;
 }

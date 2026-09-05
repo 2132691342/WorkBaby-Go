@@ -64,33 +64,46 @@ type RunState struct {
 	Stagnant             bool   // 已触发停滞熔断
 }
 
+// LoopHooks 循环缝集合：按在循环中的位置从外到里排开，nil 字段 = 关闭（走默认行为）。
+//
+//	Steering / FollowUp   注入缝——跑过工具的轮之间 / 本轮收尾后续接
+//	PrepareNextTurn       轮间调整——下一轮换模型 / 换工具集（流式失败降级也经此）
+//	ShouldStopAfterTurn   优雅停止点——任务已完成等主动终止，区别于停滞/预算类被动熔断
+//	BeforeToolCall        工具执行前拦截（目录信任三态）
+//	AfterToolCall         工具执行后逐字段覆盖结果（脱敏 / 富化 / 前端提示增强）
+type LoopHooks struct {
+	Steering            Injector
+	FollowUp            Injector
+	PrepareNextTurn     TurnAdjuster
+	ShouldStopAfterTurn func(ctx context.Context, sig *TurnSignal) bool
+	BeforeToolCall      PathTrust
+	AfterToolCall       func(ctx context.Context, name string, args json.RawMessage, res *tool.ToolResult)
+	ToolGate            *tool.Gate
+	Approver            func(ctx context.Context, description, risk string) bool
+}
+
 // Runner 控制循环主控（多轮 ReAct）；模型可调用工具，每轮执行并回填结果，直到无调用或达终止条件。
 type Runner struct {
-	provider       llm.Provider
-	sink           Sink
-	usage          *TokenUsageAccumulator
-	tools          *tool.Registry
-	toolDefs       []llm.ToolDefinition
-	middlewares    []Middleware
-	cfg            Config
-	checkpoints    CheckpointStore                                          // 可选；nil = 不落检查点（JSONL 或 SQL 实现）
-	toolGate       *tool.Gate                                               // P1-D 工具策略门；nil = 不启用（维持既有行为）
-	approver       func(ctx context.Context, description, risk string) bool // 策略 ask 的人工审批
-	compressor     Compressor                                               // 上下文压缩器；默认 Micro；nil 时 ByContextBudget 关闭
-	reqParams      RequestParams                                            // 请求级采样参数（chat 透传；nil = 不覆盖）
-	providerParams *llm.ProviderParams                                      // Provider 级（ai_providers.temperature/thinking）；nil = 走全局
-	defaults       llm.Defaults                                             // 全局默认（system_settings.chat.defaultTemperature/Thinking）
-	model          string                                                   // 当前 run 的模型（子 Agent 委派继承同一模型）
-	execs          *ExecutionRegistry                                       // 执行平面；委派时登记子 run 拓扑（nil = 不登记）
-	steering       Injector                                                 // 转向注入缝：每轮工具执行后、下一轮前（nil = 关闭）
-	followUp       Injector                                                 // 续接注入缝：本轮无工具调用、run 即将收尾时（nil = 关闭）
-	turnAdjuster   TurnAdjuster                                             // turn 间热切换钩子：流式失败降级 / 下一轮换模型（nil = 关闭）
-	modelSwitches  int                                                      // 本 run 已发生的模型切换次数（有界防横跳）
-	pathTrust      PathTrust                                                // 目录信任闸门：工具执行前解析目标目录信任态（nil = 关闭）
-	steps          map[string]StepRecord                                    // 幂等恢复：已完成成功工具调用（name+args → 结果）
-	stepsMu        sync.Mutex                                               // 工具并发路径保护 steps
-	delegateMu     sync.Mutex                                               // 委派去重保护
-	delegateFlights map[string]*delegateFlight                              // 同参委派在飞表（agent|task → flight）
+	provider        llm.Provider
+	sink            Sink
+	usage           *TokenUsageAccumulator
+	tools           *tool.Registry
+	toolDefs        []llm.ToolDefinition
+	middlewares     []Middleware
+	cfg             Config
+	checkpoints     CheckpointStore        // 可选；nil = 不落检查点（JSONL 或 SQL 实现）
+	hooks           LoopHooks              // 循环缝集合（nil 字段 = 关闭）
+	compressor      Compressor             // 上下文压缩器；默认 Micro；nil 时 ByContextBudget 关闭
+	reqParams       RequestParams          // 请求级采样参数（chat 透传；nil = 不覆盖）
+	providerParams  *llm.ProviderParams    // Provider 级（ai_providers.temperature/thinking）；nil = 走全局
+	defaults        llm.Defaults           // 全局默认（system_settings.chat.defaultTemperature/Thinking）
+	model           string                 // 当前 run 的模型（子 Agent 委派继承同一模型）
+	execs           *ExecutionRegistry     // 执行平面；委派时登记子 run 拓扑（nil = 不登记）
+	modelSwitches   int                    // 本 run 已发生的模型切换次数（有界防横跳）
+	steps           map[string]StepRecord  // 幂等恢复：已完成成功工具调用（name+args → 结果）
+	stepsMu         sync.Mutex             // 工具并发路径保护 steps
+	delegateMu      sync.Mutex             // 委派去重保护
+	delegateFlights map[string]*delegateFlight // 同参委派在飞表（agent|task → flight）
 }
 
 // PathTrust 目录信任闸门。
@@ -106,6 +119,8 @@ type PathTrust func(ctx context.Context, toolName string, args json.RawMessage) 
 // TurnUpdate turn 间的热切换载荷；非 nil 字段在下一轮或本轮重试时生效。
 type TurnUpdate struct {
 	Model *string
+	// Tools 替换下一轮暴露给模型的工具定义（执行侧 toolExposed 校验同步生效）。
+	Tools *[]llm.ToolDefinition
 }
 
 // TurnSignal 传给调整器的本轮信号，降级策略据此决策。
@@ -146,18 +161,32 @@ func (r *Runner) WithProviderParams(p *llm.ProviderParams) *Runner { r.providerP
 func (r *Runner) WithDefaults(d llm.Defaults) *Runner { r.defaults = d; return r }
 
 // WithSteering 启用转向注入缝（每轮工具执行后、下一轮前）。nil = 关闭。
-func (r *Runner) WithSteering(inj Injector) *Runner { r.steering = inj; return r }
+func (r *Runner) WithSteering(inj Injector) *Runner { r.hooks.Steering = inj; return r }
 
 // WithFollowUp 启用续接注入缝（本轮无工具调用、run 即将收尾时）。nil = 关闭。
-func (r *Runner) WithFollowUp(inj Injector) *Runner { r.followUp = inj; return r }
+func (r *Runner) WithFollowUp(inj Injector) *Runner { r.hooks.FollowUp = inj; return r }
 
-// WithTurnAdjuster 启用 turn 间热切换钩子：LLM 流式失败时换模型重试本轮、
-// turn 收尾时可为下一轮换模型。nil = 关闭。
-func (r *Runner) WithTurnAdjuster(adj TurnAdjuster) *Runner { r.turnAdjuster = adj; return r }
+// WithTurnAdjuster 启用轮间调整钩子：LLM 流式失败时换模型重试本轮、
+// turn 收尾时可为下一轮换模型 / 换工具集。nil = 关闭。
+func (r *Runner) WithTurnAdjuster(adj TurnAdjuster) *Runner { r.hooks.PrepareNextTurn = adj; return r }
+
+// WithShouldStopAfterTurn 启用优雅停止点：每轮收尾后询问「该停了吗」。
+// 区别于停滞/预算类被动熔断，这是外部感知任务完成后的主动终止（end_turn 语义）。nil = 关闭。
+func (r *Runner) WithShouldStopAfterTurn(fn func(ctx context.Context, sig *TurnSignal) bool) *Runner {
+	r.hooks.ShouldStopAfterTurn = fn
+	return r
+}
+
+// WithAfterToolCall 启用工具后处理钩子：拿到 ToolResult 后、事件发出前逐字段覆盖
+// （脱敏、富化、前端展示增强）。nil = 关闭。
+func (r *Runner) WithAfterToolCall(fn func(ctx context.Context, name string, args json.RawMessage, res *tool.ToolResult)) *Runner {
+	r.hooks.AfterToolCall = fn
+	return r
+}
 
 // WithPathTrust 启用目录信任闸门：工具执行前先过信任三态，挂在工具策略门之前。
 // nil = 关闭（维持既有行为）。
-func (r *Runner) WithPathTrust(p PathTrust) *Runner { r.pathTrust = p; return r }
+func (r *Runner) WithPathTrust(p PathTrust) *Runner { r.hooks.BeforeToolCall = p; return r }
 
 // streamWithRetry 建流分类有界重试：仅重试瞬时错误（限流/5xx/超时），
 // 指数退避+抖动，Retry-After 优先，取消优先；流中途错误不重试（避免重复输出）。
@@ -178,12 +207,16 @@ func (r *Runner) streamWithRetry(ctx context.Context, req *llm.ChatRequest, runI
 	return stream, err
 }
 
-// adjustModel 询问调整钩子是否换模型；同一 run 最多切换 StagnationLimit 次（防主备横跳）。
-func (r *Runner) adjustModel(ctx context.Context, sig *TurnSignal, current string) (string, bool) {
-	if r.turnAdjuster == nil || r.modelSwitches >= r.cfg.StagnationLimit {
+// applyTurnUpdate 询问轮间调整钩子；工具集替换不受切换次数限制，
+// 模型切换同一 run 最多 StagnationLimit 次（防主备横跳）。返回是否换了模型。
+func (r *Runner) applyTurnUpdate(ctx context.Context, sig *TurnSignal, current string) (string, bool) {
+	if r.hooks.PrepareNextTurn == nil || r.modelSwitches >= r.cfg.StagnationLimit {
 		return "", false
 	}
-	up := r.turnAdjuster(ctx, sig)
+	up := r.hooks.PrepareNextTurn(ctx, sig)
+	if up.Tools != nil {
+		r.toolDefs = *up.Tools
+	}
 	if up.Model == nil || *up.Model == "" || *up.Model == current {
 		return "", false
 	}
@@ -255,8 +288,8 @@ func (r *Runner) WithCheckpointStore(store CheckpointStore) *Runner {
 // WithToolGate 启用 P1-D 工具策略门（allow/ask/deny × SessionMode）。
 // approve 委托人工审批（通常包 ApprovalService.Approve）；approve 为 nil 时 ask 按放行处理。
 func (r *Runner) WithToolGate(gate *tool.Gate, approve func(ctx context.Context, description, risk string) bool) *Runner {
-	r.toolGate = gate
-	r.approver = approve
+	r.hooks.ToolGate = gate
+	r.hooks.Approver = approve
 	return r
 }
 
@@ -343,6 +376,8 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 	thinkingAll.WriteString(initThinking)
 
 	turnsRun := 0
+	var runErr error
+	normalStop := false // 主动收尾 break（说完 / 优雅停止）；用于区分「跑满还想继续」的 max_turns
 	for turn := startTurn; turn < r.cfg.MaxTurns; turn++ {
 		turnsRun++
 		if ctx.Err() != nil {
@@ -393,7 +428,7 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		if err != nil {
 			// 自动降级：重试耗尽仍失败时询问调整钩子，换模型再试本轮（有界；仅连接期错误，
 			// 流中途错误不动——部分增量已推送，原地重试会重复输出）
-			if up, ok := r.adjustModel(ctx, &TurnSignal{Turn: turn, ConsecutiveToolFails: state.ConsecutiveToolFails, StreamErr: err}, model); ok {
+			if up, ok := r.applyTurnUpdate(ctx, &TurnSignal{Turn: turn, ConsecutiveToolFails: state.ConsecutiveToolFails, StreamErr: err}, model); ok {
 				model = up
 				r.model = model
 				req.Model = model
@@ -401,7 +436,9 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			}
 		}
 		if err != nil {
-			return r.fail(ctx, runID, sessionID, assistantMessageID, err)
+			runErr = err
+			finalReason = ReasonError
+			break
 		}
 
 		var content, thinking strings.Builder
@@ -409,7 +446,9 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		var usage llm.TokenUsage
 		for chunk := range stream {
 			if chunk.Err != nil {
-				return r.fail(ctx, runID, sessionID, assistantMessageID, chunk.Err)
+				runErr = chunk.Err
+				finalReason = ReasonError
+				break
 			}
 			if chunk.Delta.Content != "" {
 				content.WriteString(chunk.Delta.Content)
@@ -430,6 +469,10 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			if chunk.FinishReason != nil {
 				stopReason = *chunk.FinishReason
 			}
+		}
+		// 流中途错误：跳过本轮收尾（无完整轮次语义），交统一出口收束
+		if runErr != nil {
+			break
 		}
 		r.usage.AfterTurn(usage)
 		if usage.TotalTokens > 0 || usage.InputTokens > 0 || usage.OutputTokens > 0 {
@@ -480,12 +523,13 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 
 		// 无工具调用 → 先问 follow-up 缝「还有没有后续输入」，有则把 run 续接下去
 		if len(toolCalls) == 0 {
-			if follow := r.collect(r.followUp, ctx); len(follow) > 0 {
+			if follow := r.collect(r.hooks.FollowUp, ctx); len(follow) > 0 {
 				msgs = append(msgs, follow...)
 				resetStagnation(state)
 				continue
 			}
 			finalReason = ReasonEndTurn
+			normalStop = true
 			break
 		}
 
@@ -503,25 +547,45 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			msgs = append(msgs, tr)
 		}
 		// steering 缝：本轮跑过工具后、下一轮前注入转向消息（用户中途插话）
-		if steer := r.collect(r.steering, ctx); len(steer) > 0 {
+		if steer := r.collect(r.hooks.Steering, ctx); len(steer) > 0 {
 			msgs = append(msgs, steer...)
 			resetStagnation(state)
 		}
 		r.saveCheckpoint(runID, sessionID, assistantMessageID, turn, msgs, state, contentAll.String(), thinkingAll.String())
 
-		// turn 收尾：调整钩子可为下一轮热切换模型（TurnUpdate）
-		if up, ok := r.adjustModel(ctx, &TurnSignal{Turn: turn, ConsecutiveToolFails: state.ConsecutiveToolFails}, model); ok {
+		// turn 收尾：调整钩子可为下一轮热切换模型 / 工具集（TurnUpdate）
+		if up, ok := r.applyTurnUpdate(ctx, &TurnSignal{Turn: turn, ConsecutiveToolFails: state.ConsecutiveToolFails}, model); ok {
 			model = up
 			r.model = model
 		}
+		// 优雅停止点：外部感知任务完成后的主动终止（区别于停滞/预算类被动熔断）
+		if r.hooks.ShouldStopAfterTurn != nil && r.hooks.ShouldStopAfterTurn(ctx, &TurnSignal{Turn: turn, ConsecutiveToolFails: state.ConsecutiveToolFails}) {
+			finalReason = ReasonEndTurn
+			normalStop = true
+			break
+		}
 	}
-	// 循环跑满 MaxTurns 仍无终态 break → 真实原因是 max_turns（此前误报 end_turn）
-	if turnsRun == r.cfg.MaxTurns-startTurn && finalReason == ReasonEndTurn {
+	// 循环跑满 MaxTurns 仍想继续（最后一轮还在发起工具调用）→ 真实原因是 max_turns
+	if !normalStop && turnsRun == r.cfg.MaxTurns-startTurn && finalReason == ReasonEndTurn {
 		finalReason = ReasonMaxTurns
 	}
 	// 已消耗 token 即出账：用户取消 / 预算超限 / 停滞 等非 end_turn 终态同样回填用量
 	if r.usage.Total > 0 || r.usage.Input > 0 || r.usage.Output > 0 {
 		finalUsage = r.usage.Snapshot()
+	}
+
+	// 统一出口：先错误事件后终态 RunDone——所有退出路径都从这里收束，事件流有始有终
+	if runErr != nil {
+		ae, _ := pkg.As(runErr)
+		code, msg := 5000, runErr.Error()
+		if ae != nil {
+			code = ae.Code
+			msg = ae.Message
+			if ae.Details != "" {
+				msg = msg + ": " + ae.Details
+			}
+		}
+		r.sink.Emit(Event{Kind: EventError, RunID: runID, SessionID: sessionID, Payload: ErrorPayload{Code: code, Message: msg}})
 	}
 
 	r.sink.Emit(Event{Kind: EventRunDone, RunID: runID, SessionID: sessionID, Payload: RunDonePayload{
@@ -543,6 +607,7 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		Usage:      finalUsage,
 		Turns:      turnUsages,
 		Reason:     finalReason,
+		Err:        runErr,
 	}
 }
 
@@ -749,6 +814,11 @@ func (r *Runner) execOne(ctx context.Context, runID, sessionID string, turn int,
 	cancel()
 	durationMs := time.Since(start).Milliseconds()
 
+	// 工具后处理缝：逐字段覆盖结果（脱敏 / 富化），先于事件与幂等记忆
+	if r.hooks.AfterToolCall != nil {
+		r.hooks.AfterToolCall(ctx, call.Name, call.Arguments, &result)
+	}
+
 	content := truncate(result.Content, resultLimit)
 	errMsg := ""
 	if result.Err != nil {
@@ -816,10 +886,10 @@ func (r *Runner) execWithRecover(ctx context.Context, t tool.Tool, args json.Raw
 // trustTool 目录信任闸门；未启用（pathTrust nil）返回 nil。
 // 拒绝一律走 refused（结构化回执、不计失败熔断），与策略门拒绝同构。
 func (r *Runner) trustTool(ctx context.Context, runID, sessionID string, turn int, call llm.NormalizedToolCall) *llm.Message {
-	if r.pathTrust == nil {
+	if r.hooks.BeforeToolCall == nil {
 		return nil
 	}
-	if ok, reason := r.pathTrust(ctx, call.Name, call.Arguments); !ok {
+	if ok, reason := r.hooks.BeforeToolCall(ctx, call.Name, call.Arguments); !ok {
 		return r.refused(runID, sessionID, turn, call, reason)
 	}
 	return nil
@@ -829,16 +899,16 @@ func (r *Runner) trustTool(ctx context.Context, runID, sessionID string, turn in
 // deny / ask 被拒 → 结构化拒绝回执（Refused 语义）：不计失败熔断、发 tool result 事件，
 // 模型收到「用户拒绝 + 建议动作」信号后可换方案自愈，而非把拒绝当故障硬终止。
 func (r *Runner) gateTool(ctx context.Context, runID, sessionID string, turn int, call llm.NormalizedToolCall, t tool.Tool) *llm.Message {
-	if r.toolGate == nil {
+	if r.hooks.ToolGate == nil {
 		return nil
 	}
-	switch r.toolGate.Decide(call.Name, t.RiskLevel()) {
+	switch r.hooks.ToolGate.Decide(call.Name, t.RiskLevel()) {
 	case tool.DecisionDeny:
 		return r.refused(runID, sessionID, turn, call, "denied by policy")
 	case tool.DecisionAsk:
-		if r.approver != nil {
+		if r.hooks.Approver != nil {
 			desc := t.Name() + "(" + string(call.Arguments) + ")"
-			if !r.approver(ctx, desc, gateApprovalRisk(t.RiskLevel())) {
+			if !r.hooks.Approver(ctx, desc, gateApprovalRisk(t.RiskLevel())) {
 				return r.refused(runID, sessionID, turn, call, "denied by user")
 			}
 		}
@@ -918,26 +988,6 @@ func (r *Runner) applyMiddlewares(msgs []*llm.Message) []*llm.Message {
 		msgs = m.BeforeTurn(msgs)
 	}
 	return msgs
-}
-
-// fail 错误路径：发 EventError + EventRunDone(reason=error)。
-func (r *Runner) fail(_ context.Context, runID, sessionID, assistantMessageID string, err error) RunResult {
-	ae, _ := pkg.As(err)
-	code := 5000
-	msg := err.Error()
-	if ae != nil {
-		code = ae.Code
-		msg = ae.Message
-		if ae.Details != "" {
-			msg = msg + ": " + ae.Details
-		}
-	}
-	r.sink.Emit(Event{Kind: EventError, RunID: runID, SessionID: sessionID, Payload: ErrorPayload{Code: code, Message: msg}})
-	r.sink.Emit(Event{Kind: EventRunDone, RunID: runID, SessionID: sessionID, Payload: RunDonePayload{
-		Reason:    string(ReasonError),
-		MessageID: assistantMessageID,
-	}})
-	return RunResult{Reason: ReasonError, Err: err}
 }
 
 func truncate(s string, n int) string {

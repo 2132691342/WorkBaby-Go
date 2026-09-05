@@ -46,6 +46,7 @@ import {
 } from '@element-plus/icons-vue'
 import {
   Activity,
+  Archive,
   AtSign,
   Bot,
   Braces,
@@ -83,6 +84,7 @@ import {
   Table,
   Type,
   ZapOff,
+  MoreHorizontal,
 } from './custom'
 
 /**
@@ -148,6 +150,7 @@ export {
   RefreshLeft as RotateCcw,
   // —— 自绘图标（EP 缺失，行为与 lucide 兼容）——
   Activity,
+  Archive,
   AtSign,
   Bot,
   Braces,
@@ -169,6 +172,7 @@ export {
   LayoutTemplate,
   Lightbulb,
   ListTree,
+  MoreHorizontal,
   PackageCheck,
   Palette,
   PawPrint,

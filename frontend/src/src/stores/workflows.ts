@@ -87,22 +87,32 @@ export const useWorkflowsStore = defineStore('workflows', () => {
     }
   }
 
-  /** 新建工作流（以当前编辑 YAML 为模板，替换 name 行）。 */
-  async function doCreate(): Promise<void> {
+  /** 新建工作流（可选传入模板 Graph 预填节点；否则以当前编辑器 JSON 为底）。 */
+  async function doCreate(templateGraph?: string): Promise<void> {
     error.value = null
     if (!newName.value.trim()) {
       error.value = t('common.nameRequired')
       return
     }
-    const yaml = editing.value.replace(/^name:.*$/m, `name: ${newName.value.trim()}`)
     try {
-      // editing.value 是 JSON 字符串；如果模板被改坏（非合法 JSON）用最小空图兜底，
+      // 模板优先：解析模板 JSON 并写入名称；否则沿用编辑器 JSON（改坏则空图兜底），
       // 避免后端 `graph json parse failed` 阻断创建流程。
-      let graph = yaml
-      try {
-        JSON.parse(graph)
-      } catch {
-        graph = JSON.stringify({ name: newName.value.trim(), nodes: [], edges: [] })
+      let graph: string
+      if (templateGraph) {
+        try {
+          const obj = JSON.parse(templateGraph) as Record<string, unknown>
+          obj.name = newName.value.trim()
+          graph = JSON.stringify(obj)
+        } catch {
+          graph = JSON.stringify({ name: newName.value.trim(), inputs: {}, nodes: [], outputs: {} })
+        }
+      } else {
+        graph = editing.value.replace(/^name:.*$/m, `name: ${newName.value.trim()}`)
+        try {
+          JSON.parse(graph)
+        } catch {
+          graph = JSON.stringify({ name: newName.value.trim(), nodes: [], edges: [] })
+        }
       }
       const req: WorkflowReq = {
         name: newName.value.trim(),

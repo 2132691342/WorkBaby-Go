@@ -134,13 +134,18 @@ func (s *Server) registerRoutes() {
 	})
 	v1.POST("/chat/sessions/:id/workspace", func(c *gin.Context) {
 		var req struct {
-			WorkspaceID string `json:"workspace_id"`
+			WorkspacePath string `json:"workspace_path"`
+			WorkspaceID   string `json:"workspace_id"` // 旧前端字段，仅作兜底
 		}
 		if err := BindJSON(c, &req); err != nil {
 			Fail(c, err)
 			return
 		}
-		v, err := h.UpdateSessionWorkspace(c.Param("id"), req.WorkspaceID)
+		p := req.WorkspacePath
+		if p == "" {
+			p = req.WorkspaceID
+		}
+		v, err := h.UpdateSessionWorkspace(c.Param("id"), p)
 		unwrap(c, v, err)
 	})
 	v1.GET("/chat/sessions/:id/messages", func(c *gin.Context) {

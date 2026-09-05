@@ -71,9 +71,9 @@ func (h *Handler) DeleteSessions(ids []string) (domain.BatchDeleteResult, error)
 	return domain.BatchDeleteResult{Ok: ok, Failed: failed}, nil
 }
 
-// UpdateSessionWorkspace 绑定/解绑工作区。
-func (h *Handler) UpdateSessionWorkspace(id string, workspaceID string) (domain.ChatSessionRESP, error) {
-	s, err := h.chatSvc.UpdateWorkspace(h.ctx, id, workspaceID)
+// UpdateSessionWorkspace 绑定/解绑会话外部工作目录（绝对路径；空 = 回默认工作区）。
+func (h *Handler) UpdateSessionWorkspace(id string, workspacePath string) (domain.ChatSessionRESP, error) {
+	s, err := h.chatSvc.UpdateWorkspace(h.ctx, id, workspacePath)
 	if err != nil {
 		return domain.ChatSessionRESP{}, err
 	}

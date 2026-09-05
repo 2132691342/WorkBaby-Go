@@ -11,7 +11,8 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
  */
 
 const routes: RouteRecordRaw[] = [
-  { path: '/', redirect: '/home' },
+  // 启动即进工作区：AI 助手的主场景是聊天，概览/仪表盘经命令面板进入
+  { path: '/', redirect: '/chat' },
 
   // 顶层
   { path: '/home', name: 'home', component: () => import('@/components/home/HomeView.vue') },
@@ -41,8 +42,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/docs', name: 'docs', component: () => import('@/components/docs/DocsView.vue') },
   { path: '/settings', name: 'settings', component: () => import('@/components/settings/SettingsView.vue') },
 
-  // 404 → 回 home
-  { path: '/:pathMatch(.*)*', redirect: '/home' }
+  // 404 → 回聊天工作区
+  { path: '/:pathMatch(.*)*', redirect: '/chat' }
 ]
 
 const router = createRouter({

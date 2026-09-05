@@ -36,19 +36,25 @@ func ProvidersFromFile(path string) ([]domain.AiProviderDO, error) {
 			ratio = 0.9
 		}
 		out = append(out, domain.AiProviderDO{
-			ID:             id,
-			Name:           p.Name,
-			Kind:           p.Kind,
-			APIKey:         p.APIKey,
-			BaseURL:        p.BaseURL,
-			Model:          p.Model,
-			Alias:          p.Alias,
-			Tier:           p.Tier,
-			Enabled:        enabled,
-			ContextWindow:  p.ContextWindow,
-			CompressRatio:  ratio,
-			Temperature:    p.Temperature,
-			ThinkingEffort: p.ThinkingEffort,
+			ID:                id,
+			Name:              p.Name,
+			Kind:              p.Kind,
+			APIKey:            p.APIKey,
+			BaseURL:           p.BaseURL,
+			Model:             p.Model,
+			Alias:             p.Alias,
+			Tier:              p.Tier,
+			Enabled:           enabled,
+			ContextWindow:     p.ContextWindow,
+			MaxOutputTokens:   p.MaxOutputTokens,
+			CompressRatio:     ratio,
+			Temperature:       p.Temperature,
+			TopP:              p.TopP,
+			ThinkingEffort:    p.ThinkingEffort,
+			ThinkingStyle:     p.ThinkingStyle,
+			SupportsToolCall:  p.SupportsToolCall,
+			SupportsVision:    p.SupportsVision,
+			SupportsReasoning: p.SupportsReasoning,
 		})
 	}
 	return out, nil
@@ -81,9 +87,15 @@ func (s *ProviderService) SyncFromList(ctx context.Context, rows []domain.AiProv
 			old.Tier = p.Tier
 			old.Enabled = p.Enabled
 			old.ContextWindow = p.ContextWindow
+			old.MaxOutputTokens = p.MaxOutputTokens
 			old.CompressRatio = p.CompressRatio
 			old.Temperature = p.Temperature
+			old.TopP = p.TopP
 			old.ThinkingEffort = p.ThinkingEffort
+			old.ThinkingStyle = p.ThinkingStyle
+			old.SupportsToolCall = p.SupportsToolCall
+			old.SupportsVision = p.SupportsVision
+			old.SupportsReasoning = p.SupportsReasoning
 			if p.APIKey != "" {
 				ct, cerr := s.encryptAPIKey(p.APIKey)
 				if cerr != nil {
@@ -205,18 +217,24 @@ func (s *ProviderService) SaveModelFile(ctx context.Context, path string) error 
 		p := ps[i]
 		enabled := p.Enabled
 		mp := domain.ModelProvider{
-			ID:             p.ID,
-			Name:           p.Name,
-			Kind:           p.Kind,
-			BaseURL:        p.BaseURL,
-			Model:          p.Model,
-			Alias:          p.Alias,
-			Tier:           p.Tier,
-			Enabled:        &enabled,
-			ContextWindow:  p.ContextWindow,
-			CompressRatio:  p.CompressRatio,
-			Temperature:    p.Temperature,
-			ThinkingEffort: p.ThinkingEffort,
+			ID:                p.ID,
+			Name:              p.Name,
+			Kind:              p.Kind,
+			BaseURL:           p.BaseURL,
+			Model:             p.Model,
+			Alias:             p.Alias,
+			Tier:              p.Tier,
+			Enabled:           &enabled,
+			ContextWindow:     p.ContextWindow,
+			MaxOutputTokens:   p.MaxOutputTokens,
+			CompressRatio:     p.CompressRatio,
+			Temperature:       p.Temperature,
+			TopP:              p.TopP,
+			ThinkingEffort:    p.ThinkingEffort,
+			ThinkingStyle:     p.ThinkingStyle,
+			SupportsToolCall:  p.SupportsToolCall,
+			SupportsVision:    p.SupportsVision,
+			SupportsReasoning: p.SupportsReasoning,
 		}
 		if p.APIKey != "" {
 			if pt, derr := s.decryptAPIKey(p.APIKey); derr == nil {

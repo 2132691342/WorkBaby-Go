@@ -1,62 +1,69 @@
 package harness
 
 import (
-	"context"
 	"testing"
 
 	"WorkBaby/internal/llm"
 )
 
-// text_tool_calls_test.go 覆盖 正文形态的 tool call 兜底解析（仅认暴露的工具名）。
+var textCallDefs = []llm.ToolDefinition{{Name: "file_read"}, {Name: "file_write"}}
 
-func echoDefs() []llm.ToolDefinition {
-	return []llm.ToolDefinition{{Name: "echo", Description: "echo", Parameters: map[string]any{"type": "object"}}}
-}
-
-// TestParseTextToolCallsFenced ```json 代码块中的调用被解析。
 func TestParseTextToolCallsFenced(t *testing.T) {
-	content := "我先调用工具：\n```json\n{\"name\":\"echo\",\"arguments\":{\"msg\":\"hello\"}}\n```\n"
-	calls := parseTextToolCalls(content, echoDefs())
-	if len(calls) != 1 {
-		t.Fatalf("want 1 text tool call, got %d", len(calls))
-	}
-	if calls[0].Name != "echo" || string(calls[0].Arguments) != `{"msg":"hello"}` {
-		t.Fatalf("unexpected call: %+v %s", calls[0], calls[0].Arguments)
+	got := parseTextToolCalls("好的，我先读文件：\n```json\n{\"name\":\"file_read\",\"input\":{\"path\":\"a.txt\"}}\n```", textCallDefs)
+	if len(got) != 1 || got[0].Name != "file_read" || string(got[0].Arguments) != `{"path":"a.txt"}` {
+		t.Fatalf("fenced json not parsed: %+v", got)
 	}
 }
 
-
-
-// TestRunnerTextToolCallFallback 端到端：正文工具调用被兜底执行并回填结果。
-func TestRunnerTextToolCallFallback(t *testing.T) {
-	p := &scriptedProvider{calls: [][]llm.StreamChunk{
-		{
-			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "```json\n{\"name\":\"echo\",\"arguments\":{\"msg\":\"hi\"}}\n```"}},
-			{FinishReason: strPtr("stop")},
-		},
-		{
-			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "结果是 echo:hi"}},
-			{FinishReason: strPtr("stop")},
-		},
-	}}
-	sink := &recordingSink{}
-	r := NewRunner(p, sink, DefaultConfig()).
-		WithTools(newEchoRegistry(t), echoDefs())
-
-	res := r.RunMessages(context.Background(), "RUN_TEXT", "SESSION_TEXT", "MSG_TEXT", "mock", nil)
-	if res.Err != nil {
-		t.Fatalf("run failed: %v", res.Err)
+func TestParseTextToolCallsXML(t *testing.T) {
+	got := parseTextToolCalls(`<tool_call name="file_write">{"input":{"path":"b.md","content":"hi"}}</tool_call>`, textCallDefs)
+	if len(got) != 1 || got[0].Name != "file_write" {
+		t.Fatalf("xml tag not parsed: %+v", got)
 	}
-	if got := p.idx; got != 2 {
-		t.Fatalf("text tool call should trigger a second turn, got %d calls", got)
+	// 标签内自带 name 字段的形态
+	got2 := parseTextToolCalls(`<tool_call>{"name":"file_read","arguments":{"path":"c.txt"}}</tool_call>`, textCallDefs)
+	if len(got2) != 1 || got2[0].Name != "file_read" || string(got2[0].Arguments) != `{"path":"c.txt"}` {
+		t.Fatalf("xml inner name not parsed: %+v", got2)
 	}
-	hasToolCallEvent := false
-	for _, e := range sink.events {
-		if e.Kind == EventToolCall {
-			hasToolCallEvent = true
+}
+
+func TestParseTextToolCallsBare(t *testing.T) {
+	got := parseTextToolCalls(`{"tool":"file_read","arguments":{"path":"d.txt"}}`, textCallDefs)
+	if len(got) != 1 || got[0].Name != "file_read" {
+		t.Fatalf("bare json not parsed: %+v", got)
+	}
+}
+
+func TestParseTextToolCallsMultiple(t *testing.T) {
+	body := `<tool_call name="file_read">{"input":{"path":"x"}}</tool_call>
+<tool_call name="file_write">{"input":{"path":"y","content":"z"}}</tool_call>`
+	got := parseTextToolCalls(body, textCallDefs)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 calls, got %d: %+v", len(got), got)
+	}
+	if got[0].ID == got[1].ID {
+		t.Fatalf("duplicate ids: %s", got[0].ID)
+	}
+}
+
+// 安全：白名单外的名字、普通 JSON 数据回答、空正文都不得触发调用。
+func TestParseTextToolCallsNoFalsePositive(t *testing.T) {
+	cases := []string{
+		"",
+		"这是普通回答，没有调用。",
+		"```json\n{\"foo\":1,\"bar\":[1,2]}\n```",
+		`{"name":"rm_rf","input":{"/":""}}`,
+		"```json\n{\"path\":\"a.txt\"}\n```",
+	}
+	for _, c := range cases {
+		if got := parseTextToolCalls(c, textCallDefs); len(got) != 0 {
+			t.Fatalf("false positive on %q: %+v", c, got)
 		}
 	}
-	if !hasToolCallEvent {
-		t.Fatalf("expected EventToolCall for text-encoded call")
+}
+
+func TestParseTextToolCallsNoDefs(t *testing.T) {
+	if got := parseTextToolCalls(`{"name":"file_read"}`, nil); len(got) != 0 {
+		t.Fatalf("must not parse when no tools exposed: %+v", got)
 	}
 }

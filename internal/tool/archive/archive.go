@@ -26,11 +26,13 @@ const (
 
 // ArchiveTool zip 压缩 / 解压（workspace 相对路径）。
 type ArchiveTool struct {
-	root string
+	resolve func(context.Context) string
 }
 
-// New 构造；root 为 workspace 根。
-func New(root string) *ArchiveTool { return &ArchiveTool{root: root} }
+// New 构造；resolver 按会话解析 workspace 根，defRoot 为回落根。
+func New(resolver tool.RootResolver, defRoot string) *ArchiveTool {
+	return &ArchiveTool{resolve: tool.ResolveRoot(resolver, defRoot)}
+}
 
 func (t *ArchiveTool) Name() string              { return "archive_manager" }
 func (t *ArchiveTool) RiskLevel() tool.RiskLevel { return tool.RiskWriteLocal }
@@ -61,16 +63,17 @@ type archiveReq struct {
 }
 
 // Execute 执行 zip / unzip。
-func (t *ArchiveTool) Execute(_ context.Context, args json.RawMessage) tool.ToolResult {
+func (t *ArchiveTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolResult {
 	var req archiveReq
 	if err := json.Unmarshal(args, &req); err != nil {
 		return tool.ToolResult{Err: pkg.Wrap(4004, "archive_manager args parse failed", err)}
 	}
-	src, err := t.safePath(req.Source)
+	root := t.resolve(ctx)
+	src, err := t.safePath(root, req.Source)
 	if err != nil {
 		return tool.ToolResult{Err: err}
 	}
-	dst, err := t.safePath(req.Target)
+	dst, err := t.safePath(root, req.Target)
 	if err != nil {
 		return tool.ToolResult{Err: err}
 	}
@@ -91,11 +94,11 @@ func (t *ArchiveTool) Execute(_ context.Context, args json.RawMessage) tool.Tool
 }
 
 // safePath 校验在 workspace 根内并绝对化。
-func (t *ArchiveTool) safePath(path string) (string, error) {
+func (t *ArchiveTool) safePath(workspaceRoot, path string) (string, error) {
 	if path == "" {
 		return "", tool.ErrPathEscape
 	}
-	root, err := filepath.Abs(t.root)
+	root, err := filepath.Abs(workspaceRoot)
 	if err != nil {
 		return "", pkg.Wrap(4007, "abs root failed", err)
 	}

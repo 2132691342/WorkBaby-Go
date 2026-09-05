@@ -6,34 +6,19 @@ import (
 	"WorkBaby/internal/tool"
 )
 
-// runCtxKey 私有键类型，避免与调用方 ctx 值冲突。
-type runCtxKey int
-
-const (
-	runCtxKeyRunID runCtxKey = iota
-	runCtxKeySessionID
-)
-
 // WithRunContext 把 runID/sessionID 注入 ctx。
 //
-// 用途：深层工具（如 exec 的审批门 tool.Approver）无需把身份参数一路穿透
-// Tool 接口签名，即可在事件载荷里带上 runId/sessionId（前端按 runId 过滤）。
+// 身份存取的唯一实现在 tool 包（工具要据此解析会话工作区根），这里只做薄转发，
+// 避免 harness 与 tool 各存一套 key 导致写入与读取对不上。
 func WithRunContext(ctx context.Context, runID, sessionID string) context.Context {
-	ctx = context.WithValue(ctx, runCtxKeyRunID, runID)
-	return context.WithValue(ctx, runCtxKeySessionID, sessionID)
+	return tool.WithRunIdentity(ctx, runID, sessionID)
 }
 
 // RunIDFromCtx 取 run 上下文中的 runID（缺省空串）。
-func RunIDFromCtx(ctx context.Context) string {
-	id, _ := ctx.Value(runCtxKeyRunID).(string)
-	return id
-}
+func RunIDFromCtx(ctx context.Context) string { return tool.RunIDFromCtx(ctx) }
 
 // SessionIDFromCtx 取 run 上下文中的 sessionID（缺省空串）。
-func SessionIDFromCtx(ctx context.Context) string {
-	id, _ := ctx.Value(runCtxKeySessionID).(string)
-	return id
-}
+func SessionIDFromCtx(ctx context.Context) string { return tool.SessionIDFromCtx(ctx) }
 
 // WithDelegator 把委派能力注入 ctx（Runner 在 run 开始时注入自身）。
 //

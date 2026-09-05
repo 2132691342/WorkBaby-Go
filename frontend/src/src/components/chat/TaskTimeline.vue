@@ -23,6 +23,9 @@ import {
   Regex,
   PackageCheck,
   Sparkles,
+  Brain,
+  GitBranch,
+  BookOpen,
   Check,
   X,
   Copy,
@@ -124,6 +127,9 @@ function toolIcon(name: string): Component {
   if (n.startsWith('math_')) return Calculator
   if (n.startsWith('regex_')) return Regex
   if (n.startsWith('present_')) return PackageCheck
+  if (n === 'memory_write' || n.startsWith('memory_')) return Brain
+  if (n === 'run_workflow' || n.startsWith('workflow_')) return GitBranch
+  if (n.startsWith('knowledge_')) return BookOpen
   return Sparkles
 }
 

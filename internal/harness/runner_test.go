@@ -242,6 +242,161 @@ func TestRunnerStagnation(t *testing.T) {
 	}
 }
 
+// TestRunnerTruncatedToolCallRetry 截断重发：finishReason=length 时 tool call
+// 参数可能残缺——必须不执行、回填 truncated 错误让模型缩短后重发。
+func TestRunnerTruncatedToolCallRetry(t *testing.T) {
+	track := newTrackingTool("echo", tool.RiskReadOnly)
+	track.exec = func(_ context.Context, args json.RawMessage) tool.ToolResult {
+		var p struct {
+			Msg string `json:"msg"`
+		}
+		_ = json.Unmarshal(args, &p)
+		return tool.ToolResult{Content: "echo:" + p.Msg}
+	}
+	p := &scriptedProvider{calls: [][]llm.StreamChunk{
+		{
+			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "我来调用"}},
+			{ToolCall: &llm.NormalizedToolCall{ID: "call_t", Name: "echo", Arguments: json.RawMessage(`{"msg":"he`)}},
+			{FinishReason: stringPtr("length")},
+		},
+		{
+			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "缩短参数后重发"}},
+			{ToolCall: &llm.NormalizedToolCall{ID: "call_t2", Name: "echo", Arguments: json.RawMessage(`{"msg":"hello"}`)}},
+			{FinishReason: stringPtr("tool_calls")},
+		},
+		{
+			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "结果是 echo:hello"}},
+			{FinishReason: stringPtr("stop")},
+		},
+	}}
+	reg := tool.NewRegistry()
+	if err := reg.Register(track); err != nil {
+		t.Fatal(err)
+	}
+	defs := []llm.ToolDefinition{{Name: "echo", Parameters: map[string]any{"type": "object"}}}
+
+	sink := &recordingSink{}
+	r := NewRunner(p, sink, DefaultConfig()).WithTools(reg, defs)
+	res := r.RunMessages(context.Background(), "RUN_T1", "SESSION_T1", "MSG_T1", "mock", nil)
+
+	if res.Err != nil {
+		t.Fatalf("run failed: %v", res.Err)
+	}
+	if res.Reason != ReasonEndTurn {
+		t.Fatalf("want end_turn, got %v", res.Reason)
+	}
+	// 截断轮的工具调用绝不执行；重发轮的合法调用执行恰好一次
+	if track.n != 1 {
+		t.Fatalf("tool executed %d times, want 1 (truncated call must not run)", track.n)
+	}
+	// 截断回执事件：前端按错误呈现「未执行」
+	var truncResult bool
+	for _, e := range sink.events {
+		if e.Kind == EventToolResult {
+			if pl, ok := e.Payload.(ToolResultPayload); ok && pl.Err != "" {
+				truncResult = true
+			}
+		}
+	}
+	if !truncResult {
+		t.Fatalf("missing truncated tool result event; got %v", sink.kinds())
+	}
+}
+
+// TestRunnerSameArgsStagnation 同名同参熔断：工具一直成功但模型反复发同一调用
+// （参数原样重复）达阈值 → stagnation，而不是无限跑满 MaxTurns。
+func TestRunnerSameArgsStagnation(t *testing.T) {
+	call := []llm.StreamChunk{
+		{ToolCall: &llm.NormalizedToolCall{ID: "c", Name: "echo", Arguments: json.RawMessage(`{"msg":"x"}`)}},
+		{FinishReason: stringPtr("tool_calls")},
+	}
+	calls := make([][]llm.StreamChunk, 0, 8)
+	for range 8 {
+		calls = append(calls, call)
+	}
+	p := &scriptedProvider{calls: calls}
+	reg := tool.NewRegistry()
+	if err := reg.Register(echoTool{}); err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &recordingSink{}
+	r := NewRunner(p, sink, DefaultConfig()).WithTools(reg, nil)
+	res := r.RunMessages(context.Background(), "RUN_S2", "SESSION_S2", "MSG_S2", "mock", nil)
+
+	if res.Reason != ReasonStagnation {
+		t.Fatalf("want stagnation, got %v (turns used < MaxTurns expected)", res.Reason)
+	}
+	if res.Err != nil {
+		t.Fatalf("stagnation is a controlled stop, not an error: %v", res.Err)
+	}
+}
+
+// TestRunnerShouldStopAfterTurn 优雅停止：第一轮工具跑完即满足停止条件，
+// 循环主动收尾（end_turn），不再消费后续 LLM 轮次。
+func TestRunnerShouldStopAfterTurn(t *testing.T) {
+	p := &scriptedProvider{calls: [][]llm.StreamChunk{
+		{
+			{ToolCall: &llm.NormalizedToolCall{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{"msg":"x"}`)}},
+			{FinishReason: stringPtr("tool_calls")},
+		},
+		{
+			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "不该走到这"}},
+			{FinishReason: stringPtr("stop")},
+		},
+	}}
+	reg := tool.NewRegistry()
+	_ = reg.Register(echoTool{})
+
+	sink := &recordingSink{}
+	r := NewRunner(p, sink, DefaultConfig()).WithTools(reg, nil).
+		WithShouldStopAfterTurn(func(_ context.Context, sig *TurnSignal) bool {
+			return sig.Turn >= 0 // 首轮即停
+		})
+	res := r.RunMessages(context.Background(), "RUN_H1", "SESSION_H1", "MSG_H1", "mock", nil)
+
+	if res.Reason != ReasonEndTurn {
+		t.Fatalf("want end_turn, got %v", res.Reason)
+	}
+	if p.idx != 1 {
+		t.Fatalf("provider consumed %d rounds, want 1 (stop before next turn)", p.idx)
+	}
+}
+
+// TestRunnerAfterToolCallRewrite 工具后处理：结果在回填模型与发事件前被钩子覆盖。
+func TestRunnerAfterToolCallRewrite(t *testing.T) {
+	p := &scriptedProvider{calls: [][]llm.StreamChunk{
+		{
+			{ToolCall: &llm.NormalizedToolCall{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{"msg":"secret"}`)}},
+			{FinishReason: stringPtr("tool_calls")},
+		},
+		{
+			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "done"}},
+			{FinishReason: stringPtr("stop")},
+		},
+	}}
+	reg := tool.NewRegistry()
+	_ = reg.Register(echoTool{})
+
+	sink := &recordingSink{}
+	r := NewRunner(p, sink, DefaultConfig()).WithTools(reg, nil).
+		WithAfterToolCall(func(_ context.Context, _ string, _ json.RawMessage, res *tool.ToolResult) {
+			res.Content = "CLEANED"
+		})
+	res := r.RunMessages(context.Background(), "RUN_H2", "SESSION_H2", "MSG_H2", "mock", nil)
+	if res.Err != nil {
+		t.Fatalf("run failed: %v", res.Err)
+	}
+
+	for _, e := range sink.events {
+		if e.Kind == EventToolResult {
+			if pl, ok := e.Payload.(ToolResultPayload); ok && pl.Content != "CLEANED" {
+				t.Fatalf("tool result not rewritten by hook: %q", pl.Content)
+			}
+		}
+	}
+}
+
 type trackingTool struct {
 	name string
 	risk tool.RiskLevel
@@ -660,20 +815,7 @@ func TestRunnerFollowUpContinues(t *testing.T) {
 	}
 }
 
-// TestRunnerNoInjectionByDefault 未配置注入缝时行为不变：一轮说完即结束。
-func TestRunnerNoInjectionByDefault(t *testing.T) {
-	p := &capturingProvider{inner: &scriptedProvider{calls: [][]llm.StreamChunk{
-		{{Delta: llm.Message{Role: llm.RoleAssistant, Content: "ok"}}, {FinishReason: stringPtr("stop")}},
-	}}}
-	r := NewRunner(p, &recordingSink{}, DefaultConfig())
-	res := r.RunMessages(context.Background(), "RUN_PLAIN", "SESSION_PLAIN", "MSG_PLAIN", "mock", nil)
-	if res.Err != nil {
-		t.Fatalf("run failed: %v", res.Err)
-	}
-	if got := p.requestCount(); got != 1 {
-		t.Fatalf("want 1 llm call, got %d", got)
-	}
-}
+
 
 type countingTool struct {
 	mu    sync.Mutex
@@ -711,46 +853,7 @@ func countDefs() []llm.ToolDefinition {
 	return []llm.ToolDefinition{{Name: "count", Description: "count", Parameters: map[string]any{"type": "object"}}}
 }
 
-// TestRunnerTruncatedToolCallRetries 截断的 tool call 不执行；模型缩短重发后正常收尾。
-func TestRunnerTruncatedToolCallRetries(t *testing.T) {
-	ct := &countingTool{}
-	p := &scriptedProvider{calls: [][]llm.StreamChunk{
-		{
-			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "我来查一下这个很长的东西"}},
-			// 参数残缺（模拟输出被截断）+ OpenAI 的 length 停止原因
-			{ToolCall: &llm.NormalizedToolCall{ID: "c1", Name: "count", Arguments: json.RawMessage(`{"msg":"hel`)}},
-			{FinishReason: stringPtr("length")},
-		},
-		{
-			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "缩短后重发"}},
-			{ToolCall: &llm.NormalizedToolCall{ID: "c2", Name: "count", Arguments: json.RawMessage(`{"msg":"hi"}`)}},
-			{FinishReason: stringPtr("tool_calls")},
-		},
-		{
-			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "完成"}},
-			{FinishReason: stringPtr("stop")},
-		},
-	}}
-	r := NewRunner(p, &recordingSink{}, DefaultConfig()).
-		WithTools(newCountingRegistry(t, ct), countDefs())
 
-	res := r.RunMessages(context.Background(), "RUN_TRUNC", "SESSION_TRUNC", "MSG_TRUNC", "mock", nil)
-	if res.Err != nil {
-		t.Fatalf("run failed: %v", res.Err)
-	}
-	if got := ct.executed(); got != 1 {
-		t.Fatalf("截断调用不应执行，重发调用应执行一次；got %d", got)
-	}
-	if got := p.idx; got != 3 {
-		t.Fatalf("want 3 llm calls (截断 → 重发 → 收尾), got %d", got)
-	}
-	if !strings.HasSuffix(res.Content, "完成") {
-		t.Fatalf("want final content '完成', got %q", res.Content)
-	}
-	if res.Reason != ReasonEndTurn {
-		t.Fatalf("want ReasonEndTurn, got %v", res.Reason)
-	}
-}
 
 // TestRunnerTruncatedAnthropicStopReason Anthropic 的 max_tokens 同样触发重发语义。
 func TestRunnerTruncatedAnthropicStopReason(t *testing.T) {

@@ -17,11 +17,13 @@ import (
 
 // Reader 文档读取工具：按扩展名抽取文本。
 type Reader struct {
-	root string
+	resolve func(context.Context) string
 }
 
-// New 构造文档读取工具；root 为 workspace 根（路径白名单）。
-func New(root string) *Reader { return &Reader{root: root} }
+// New 构造文档读取工具；resolver 按会话解析 workspace 根（路径白名单），defRoot 为回落根。
+func New(resolver tool.RootResolver, defRoot string) *Reader {
+	return &Reader{resolve: tool.ResolveRoot(resolver, defRoot)}
+}
 
 func (t *Reader) Name() string              { return "doc_reader" }
 func (t *Reader) RiskLevel() tool.RiskLevel { return tool.RiskReadOnly }
@@ -48,12 +50,12 @@ type docReq struct {
 }
 
 // Execute 解析文档并返回纯文本。
-func (t *Reader) Execute(_ context.Context, args json.RawMessage) tool.ToolResult {
+func (t *Reader) Execute(ctx context.Context, args json.RawMessage) tool.ToolResult {
 	var req docReq
 	if err := json.Unmarshal(args, &req); err != nil {
 		return tool.ToolResult{Err: pkg.Wrap(4004, "doc_reader args parse failed", err)}
 	}
-	abs, err := t.safePath(req.Path)
+	abs, err := t.safePath(t.resolve(ctx), req.Path)
 	if err != nil {
 		return tool.ToolResult{Err: err}
 	}
@@ -72,11 +74,11 @@ func (t *Reader) Execute(_ context.Context, args json.RawMessage) tool.ToolResul
 }
 
 // safePath 校验路径在 workspace 根内并绝对化。
-func (t *Reader) safePath(path string) (string, error) {
+func (t *Reader) safePath(workspaceRoot, path string) (string, error) {
 	if path == "" {
 		return "", tool.ErrPathEscape
 	}
-	root, err := filepath.Abs(t.root)
+	root, err := filepath.Abs(workspaceRoot)
 	if err != nil {
 		return "", pkg.Wrap(4007, "abs root failed", err)
 	}

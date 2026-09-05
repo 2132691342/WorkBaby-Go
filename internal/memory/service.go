@@ -39,6 +39,15 @@ func NewService(msgRepo *repo.MessageRepo, epRepo *repo.MemoryEpisodeRepo,
 	}
 }
 
+// WithMemoryPath 注入长期记忆文件落点解析器：返回某会话 MEMORY.md 的绝对路径。
+// 不注入时使用默认根 {home}/memory/{sessionID}/MEMORY.md。
+func (s *Service) WithMemoryPath(resolve func(sessionID string) string) *Service {
+	if s.long != nil {
+		s.long.resolve = resolve
+	}
+	return s
+}
+
 // ShortTerm 短期记忆窗口。
 func (s *Service) ShortTerm(ctx context.Context, sessionID string, opts ShortTermOpts) []llm.Message {
 	return s.short.Load(ctx, sessionID, opts)

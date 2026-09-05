@@ -47,6 +47,102 @@ export const useSettingsStore = defineStore('settings', () => {
   })
   /** exec agent 二进制白名单。 */
   const execWhitelist = ref<string[]>([])
+
+  /** 全局记忆开关（KV memory.enabled；缺省开启）。关闭后：不再自动召回长期记忆、不再沉淀情景记忆。 */
+  const memoryEnabled = ref(true)
+
+  /** 读取全局记忆开关（KV 未配置 = 开启）。 */
+  async function loadMemoryEnabled(): Promise<void> {
+    try {
+      const r = await apiGet<{ v?: string } | null>('/api/v1/kv/memory.enabled')
+      memoryEnabled.value = r?.v == null ? true : r.v !== 'false'
+    } catch {
+      memoryEnabled.value = true
+    }
+  }
+
+  /** 保存全局记忆开关。 */
+  async function setMemoryEnabled(v: boolean): Promise<boolean> {
+    error.value = null
+    try {
+      await apiPost('/api/v1/kv/memory.enabled', { value: String(v) })
+      memoryEnabled.value = v
+      return true
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      return false
+    }
+  }
+
+  /** 聊天默认参数（system_settings KV；未配置 = 后端内置兜底，显示为 null 即「默认」）。
+   *  default_temperature：全局默认采样温度（Provider 级 > 全局）；
+   *  default_thinking：全局默认思考强度 off/low/medium/high；
+   *  compression_ratio：上下文占用达窗口该比例触发摘要压缩（Provider 级 > 全局）；
+   *  max_input_chars：单条用户输入字符上限。 */
+  interface ChatDefaults {
+    default_temperature: number | null
+    default_thinking: string | null
+    compression_ratio: number | null
+    max_input_chars: number | null
+  }
+  const chatDefaults = ref<ChatDefaults>({
+    default_temperature: null,
+    default_thinking: null,
+    compression_ratio: null,
+    max_input_chars: null
+  })
+
+  /** 读取聊天默认参数（逐项容错：单 key 失败不影响其余）。 */
+  async function loadChatDefaults(): Promise<void> {
+    const read = async (key: string): Promise<string | null> => {
+      try {
+        const r = await apiGet<{ v?: string } | null>(`/api/v1/kv/${key}`)
+        return r?.v ?? null
+      } catch {
+        return null
+      }
+    }
+    const [temp, think, ratio, maxChars] = await Promise.all([
+      read('chat.defaultTemperature'),
+      read('chat.defaultThinking'),
+      read('chat.compressionRatio'),
+      read('chat.maxInputChars')
+    ])
+    const num = (v: string | null): number | null => {
+      if (v == null || v === '') return null
+      const n = Number(v)
+      return Number.isFinite(n) ? n : null
+    }
+    chatDefaults.value = {
+      default_temperature: num(temp),
+      default_thinking: think || null,
+      compression_ratio: num(ratio),
+      max_input_chars: num(maxChars)
+    }
+  }
+
+  /** 保存聊天默认参数（逐项 upsert；空串即「清除自定义值，回落内置默认」）。 */
+  async function saveChatDefaults(): Promise<boolean> {
+    error.value = null
+    const items: Array<[string, string]> = [
+      ['chat.defaultTemperature', chatDefaults.value.default_temperature?.toString() ?? ''],
+      ['chat.defaultThinking', chatDefaults.value.default_thinking ?? ''],
+      ['chat.compressionRatio', chatDefaults.value.compression_ratio?.toString() ?? ''],
+      ['chat.maxInputChars', chatDefaults.value.max_input_chars?.toString() ?? '']
+    ]
+    try {
+      for (const [key, value] of items) {
+        await apiPost(`/api/v1/kv/${key}`, { value })
+      }
+      toast.success(t('common.saveSuccess'))
+      return true
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      error.value = msg
+      toast.error(t('common.saveFailed'), msg)
+      return false
+    }
+  }
   /** 关闭主窗口是否隐藏到托盘（tray.close_to_tray）。 */
   const closeToTray = ref(false)
   /** 全局界面缩放（0.85~1.25；1 = 默认，经 CSS zoom 全局生效）。 */
@@ -67,12 +163,21 @@ export const useSettingsStore = defineStore('settings', () => {
     tier: 'primary',
     enabled: true,
     context_window: null,
+    max_output_tokens: null,
     compress_ratio: 0.9,
     capabilities_json: null,
     pricing_json: null,
     temperature: null,
-    thinking_effort: null
+    top_p: null,
+    thinking_effort: null,
+    thinking_style: null,
+    supports_tool_call: null,
+    supports_vision: null,
+    supports_reasoning: null
   })
+
+  /** form 的出厂值（addProvider 成功后重置用，避免两处维护字段清单）。 */
+  const emptyProviderForm = (): AiProviderReq => ({ ...form.value, name: '', api_key: '', base_url: '', model: '', alias: '' })
 
   /** 同时加载模型配置列表、通用设置和 SMTP 配置。 */
   async function load(): Promise<void> {
@@ -126,7 +231,7 @@ export const useSettingsStore = defineStore('settings', () => {
     }
     try {
       await apiPost<AiProvider>('/api/v1/ai-provider', form.value)
-      form.value = { name: '', kind: 'openai', api_key: '', base_url: '', model: '', alias: '', tier: 'primary', enabled: true, context_window: null, compress_ratio: 0.9, capabilities_json: null, pricing_json: null, temperature: null, thinking_effort: null }
+      form.value = emptyProviderForm()
       await load()
       toast.success(t('settings.providerAdded'))
       return true
@@ -379,6 +484,8 @@ export const useSettingsStore = defineStore('settings', () => {
     smtpConfig,
     webSearchConfig,
     execWhitelist,
+    chatDefaults,
+    memoryEnabled,
     backgroundUrl,
     codeFont,
     theme,
@@ -399,6 +506,10 @@ export const useSettingsStore = defineStore('settings', () => {
     saveWebSearchConfig,
     loadExecWhitelist,
     saveExecWhitelist,
+    loadChatDefaults,
+    saveChatDefaults,
+    loadMemoryEnabled,
+    setMemoryEnabled,
     loadBackground,
     setBackground,
     setCodeFont,

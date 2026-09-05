@@ -13,6 +13,7 @@ import (
 	"WorkBaby/internal/channel"
 	"WorkBaby/internal/channel/email"
 	"WorkBaby/internal/channel/webhook"
+	"WorkBaby/internal/capability"
 	"WorkBaby/internal/config"
 	cronjob "WorkBaby/internal/cron"
 	"WorkBaby/internal/db"
@@ -39,7 +40,6 @@ import (
 	filetool "WorkBaby/internal/tool/file"
 	functools "WorkBaby/internal/tool/functools"
 	httptool "WorkBaby/internal/tool/http"
-	knowledgetool "WorkBaby/internal/tool/knowledge"
 	requestinput  "WorkBaby/internal/tool/requestinput"
 	skillrun "WorkBaby/internal/tool/skillrun"
 	todotool "WorkBaby/internal/tool/todo"
@@ -233,10 +233,28 @@ func (h *Handler) Startup(ctx context.Context) error {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		return pkg.Wrap(2001, "mkdir workspace failed", err)
 	}
+	// 会话工作区解析：会话绑定了外部目录 → 工具沙箱/面板/exec cwd 全部跟随；
+	// 未绑定时回落到 {home}/workspaces/{sessionID}（会话隔离默认区，与文件面板同源，
+	// 保证「Agent 写的文件 = 面板里看到的文件」）。闭包晚绑定 chatSvc（其构造在工具注册之后）。
+	wsResolver := tool.RootResolver(func(sessionID string) string {
+		def := workspace
+		if sessionID != "" && !strings.Contains(sessionID, "/") && !strings.Contains(sessionID, "\\") {
+			def = filepath.Join(paths.Home, "workspaces", sessionID)
+		}
+		return h.chatSvc.WorkspaceRoot(h.ctx, sessionID, def)
+	})
 	// 文件变更追踪：file_write 写前落快照 + diff，前端可预览/回滚
+	// 快照目录跟随会话工作区：绑定本地目录 → {dir}/.workbaby/snapshots/；默认 → {home}/snapshots/
 	h.changeSvc = service.NewFileChangeService(
 		repo.NewFileChangeRepo(gdb), h.bus, filepath.Join(paths.Home, "snapshots"), workspace,
-	).WithEventLog(h.eventLog)
+	).WithSnapshotRoot(func(sessionID string) string {
+		if h.chatSvc != nil {
+			if _, sd := h.chatSvc.SessionDataDirs(h.ctx, sessionID); sd != "" {
+				return sd
+			}
+		}
+		return filepath.Join(paths.Home, "snapshots", sessionID)
+	}).WithEventLog(h.eventLog)
 	// 工件登记：产出文件只记引用，前端经 /files 预览
 	h.artifactSvc = service.NewArtifactService(
 		repo.NewArtifactRepo(gdb), h.bus, workspace,
@@ -244,9 +262,11 @@ func (h *Handler) Startup(ctx context.Context) error {
 	toolReg := tool.NewRegistry()
 	// 审批门：白名单外/危险命令 → 前端 chat:approval 事件确认后放行；暂停态持久化
 	h.approvalSvc = service.NewApprovalService(h.bus).WithEventLog(h.eventLog).WithRecords(repo.NewApprovalRecordRepo(gdb))
-	// exec 工具：白名单运行时动态读取（settings/exec/agent 设置页）
+	// exec 工具：白名单运行时动态读取（settings/exec/agent 设置页）；
+	// cwd 缺省跟随会话工作区（绑定了外部目录时），命令与文件工具同一落点
 	if err := toolReg.Register(exectool.New(tool.DefaultExecPolicy()).
 		WithApprover(h.approvalSvc).
+		WithRootResolver(tool.ResolveRoot(wsResolver, "")).
 		WithPathDirs(rt.BinDirs).
 		WithWhitelist(func() []string {
 			rows, err := h.setRepo.ListAll(h.ctx)
@@ -273,18 +293,19 @@ func (h *Handler) Startup(ctx context.Context) error {
 			return h.skillSvc.GetScript(h.ctx, skillName, scriptName)
 		},
 		workspace,
-	).WithApprover(h.approvalSvc).
+	).WithRootResolver(wsResolver).
+		WithApprover(h.approvalSvc).
 		WithPathDirs(rt.BinDirs)); err != nil {
 		return err
 	}
-	if err := toolReg.Register(filetool.NewRead(workspace)); err != nil {
+	if err := toolReg.Register(filetool.NewRead(wsResolver, workspace)); err != nil {
 		return err
 	}
-	if err := toolReg.Register(filetool.NewWrite(workspace).
+	if err := toolReg.Register(filetool.NewWrite(wsResolver, workspace).
 		WithRecorder(service.NewFileChangeRecorder(h.changeSvc, h.artifactSvc, "file_write"))); err != nil {
 		return err
 	}
-	if err := toolReg.Register(filetool.NewList(workspace)); err != nil {
+	if err := toolReg.Register(filetool.NewList(wsResolver, workspace)); err != nil {
 		return err
 	}
 	if err := toolReg.Register(webfetchtool.New()); err != nil {
@@ -303,10 +324,10 @@ func (h *Handler) Startup(ctx context.Context) error {
 		}
 	}
 	// 文档解析 + 归档工具（workspace 相对路径）
-	if err := toolReg.Register(doctool.New(workspace)); err != nil {
+	if err := toolReg.Register(doctool.New(wsResolver, workspace)); err != nil {
 		return err
 	}
-	if err := toolReg.Register(archivetool.New(workspace)); err != nil {
+	if err := toolReg.Register(archivetool.New(wsResolver, workspace)); err != nil {
 		return err
 	}
 
@@ -328,7 +349,8 @@ func (h *Handler) Startup(ctx context.Context) error {
 		return err
 	}
 
-	// 知识库 RAG：FTS5 检索 + knowledge_search 工具；本地导入文件复制到 {home}/knowledge 受管目录
+	// 知识库 RAG：FTS5 检索 + 索引；本地导入文件复制到 {home}/knowledge 受管目录。
+	// knowledge_search 工具由知识库能力统一暴露（见下方能力注册表）
 	knowledgeRepo := repo.NewKnowledgeDocRepo(gdb)
 	retriever := rag.NewFTS5Retriever(gdb)
 	h.knowledgeSvc = service.NewKnowledgeService(
@@ -337,9 +359,6 @@ func (h *Handler) Startup(ctx context.Context) error {
 		retriever,
 		filepath.Join(paths.Home, "knowledge"),
 	)
-	if err := toolReg.Register(knowledgetool.New(retriever)); err != nil {
-		return err
-	}
 
 	if err := toolReg.SelfCheckSchema(); err != nil {
 		return err
@@ -351,6 +370,15 @@ func (h *Handler) Startup(ctx context.Context) error {
 	// 记忆系统：短期(chat_messages 窗口) + 长期(MEMORY.md) + 情景(episodes + FTS5)
 	memRepo := repo.NewMemoryEpisodeRepo(gdb)
 	h.memSvc = memory.NewService(h.msgRepo, memRepo, repo.NewMemoryFactRepo(gdb), repo.NewMemoryProcedureRepo(gdb), paths.Home)
+	// 长期记忆落点跟随会话工作区：绑定本地目录 → {dir}/.workbaby/memory/；默认 → {home}/memory/
+	h.memSvc.WithMemoryPath(func(sessionID string) string {
+		if h.chatSvc != nil {
+			if mf, _ := h.chatSvc.SessionDataDirs(h.ctx, sessionID); mf != "" {
+				return mf
+			}
+		}
+		return filepath.Join(paths.Home, "memory", sessionID, "MEMORY.md")
+	})
 	h.memProxy = service.NewMemoryService(h.memSvc)
 
 	// Skill 系统：内置 Skill upsert + Registry 装载（skills 表唯一真相源）
@@ -376,17 +404,21 @@ func (h *Handler) Startup(ctx context.Context) error {
 		return err
 	}
 
-	h.chatSvc = service.NewChatService(h.sessRepo, h.msgRepo, h.provRepo, h.setRepo, h.usageRepo, h.bus, h.reg, h.toolSvc, h.memSvc, h.skillSvc).
+	h.chatSvc = service.NewChatService(h.sessRepo, h.msgRepo, h.provRepo, h.setRepo, h.usageRepo, h.bus, h.reg, h.toolSvc, h.memSvc).
+		WithDataHome(paths.Home).
 		WithCheckpointStore(service.NewSQLCheckpointStore(repo.NewAgentCheckpointRepo(gdb))).
 		WithEventLog(h.eventLog).
 		WithMessageBlocks(repo.NewMessageBlockRepo(gdb)).
 		WithExecutionRegistry(h.execs).
 		WithApprovalService(h.approvalSvc)
 
-	// 目录信任：恒信任根 = 会话工作区 + 数据目录本身；
+	// 目录信任：恒信任根 = 全局工作区 + 会话工作区根 + 数据目录本身；
 	// exec 的 cwd 不在根内时走 ask → 走审批门 → 批准后落盘 allow。
+	// workspaces 作为整棵会话工作区树纳入恒信任：默认工作区是 App 自己的受管区，
+	// 纳入询问只会让每次写文件都弹审批（噪声）。
 	trustRoots := []string{
 		filepath.Join(paths.Home, "workspace"),
+		filepath.Join(paths.Home, "workspaces"),
 		filepath.Join(paths.Home, "runtimes"),
 		filepath.Join(paths.Home, "knowledge"),
 		filepath.Join(paths.Home, "media"),
@@ -444,7 +476,8 @@ func (h *Handler) Startup(ctx context.Context) error {
 		Resolver: wiResolver,
 		Sender:   h.channelSvc,
 		Nodes: []wnodes.Node{
-			wnodes.NewLLMNode(h.reg),
+			// LLM 节点注入 ReAct 执行器：配了 tools 即走多轮工具循环（与聊天同一主循环）
+			wnodes.NewLLMNode(h.reg).WithReactor(service.NewWorkflowReactor(h.reg, h.toolSvc).React),
 			wnodes.NewToolNode(toolReg),
 			wnodes.NewCodeNode(),
 			wnodes.NewConditionNode(),
@@ -454,6 +487,40 @@ func (h *Handler) Startup(ctx context.Context) error {
 		},
 	})
 	h.workflowSvc = service.NewWorkflowService(wfRepo, wfExecRepo, wfNodeRepo, wfExecutor, wiResolver)
+
+	// 能力注册表：上下文装配（人格/工作区/记忆/知识库/Skill/工作流）、工具暴露与
+	// run 后沉淀统一接入；新增能力实现 Capability 并在此注册一行，chat 侧不再改动
+	caps := capability.NewRegistry()
+	registerCap := func(c capability.Capability, order int) {
+		if err := caps.Register(c, order); err != nil {
+			pkg.L.Warn("register capability failed", "cap", c.ID(), "err", err.Error())
+		}
+	}
+	registerCap(capability.NewPersona(), capability.OrderPersona)
+	registerCap(capability.NewWorkspace(), capability.OrderWorkspace)
+	registerCap(capability.NewMemory(h.memSvc, h.chatSvc.MemoryEnabled), capability.OrderMemory)
+	registerCap(capability.NewKnowledge(retriever), capability.OrderKnowledge)
+	registerCap(capability.NewSkill(capability.NewSkillSource(
+		func(input string) string { return h.skillSvc.Match(input) },
+		func(name string) (string, []string, bool) {
+			sk, ok := h.skillSvc.Get(name)
+			if !ok {
+				return "", nil, false
+			}
+			return sk.Body, sk.Tools, true
+		},
+	)), capability.OrderSkill)
+	registerCap(capability.NewWorkflow(h.workflowSvc), capability.OrderWorkflow)
+	// 能力暴露的工具统一注册（knowledge_search / memory_write / run_workflow）
+	for _, t := range caps.Tools() {
+		if err := toolReg.Register(t); err != nil {
+			return err
+		}
+	}
+	if err := toolReg.SelfCheckSchema(); err != nil {
+		return err
+	}
+	h.chatSvc.WithCapabilities(caps)
 
 	// 定时任务：run_workflow 动作 → workflow service；启动失败不阻断
 	cronSvc := cronjob.NewScheduler(repo.NewCronJobRepo(gdb))
@@ -476,10 +543,12 @@ func (h *Handler) Startup(ctx context.Context) error {
 	// 媒体生成：离线占位生成 + 产物落 {home}/media/{YYYY-MM}/，元数据落库
 	h.mediaSvc = media.NewService(repo.NewMediaPresetRepo(gdb), repo.NewMediaArtifactRepo(gdb), mediaoffline.New(), filepath.Join(paths.Home, "media"))
 
-	// 文件系统：文件夹树 + 文件托管 + 会话工作区面板
+	// 文件系统：文件夹树 + 文件托管 + 会话工作区面板（面板与工具链共用会话目录解析）
 	h.folderSvc = service.NewFolderService(repo.NewFolderRepo(gdb))
 	h.fileSvc = service.NewFileService(repo.NewFileRepo(gdb), filepath.Join(paths.Home, "files"))
-	h.workspaceSvc = service.NewWorkspaceService(filepath.Join(paths.Home, "workspaces"))
+	h.workspaceSvc = service.NewWorkspaceService(filepath.Join(paths.Home, "workspaces"), func(sessionID string) string {
+		return h.chatSvc.WorkspaceRoot(h.ctx, sessionID, filepath.Join(paths.Home, "workspaces", sessionID))
+	})
 
 	// 桌宠：配置单行 + sprite 资产 + 状态机（chat run 事件驱动）
 	h.petSvc = pet.NewService(repo.NewPetConfigRepo(gdb), repo.NewPetSpriteRepo(gdb), filepath.Join(paths.Home, "sprites"))

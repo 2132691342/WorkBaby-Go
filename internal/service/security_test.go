@@ -108,7 +108,7 @@ func setupWorkspace(t *testing.T, files map[string]string) (*WorkspaceService, s
 		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
 		require.NoError(t, os.WriteFile(full, []byte(content), 0o644))
 	}
-	return NewWorkspaceService(root), sid
+	return NewWorkspaceService(root, nil), sid
 }
 
 // TestWorkspaceReadFileBlocksPathTraversal ReadFile 必须拦截 ../ 越界；

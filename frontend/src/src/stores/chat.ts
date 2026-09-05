@@ -138,12 +138,14 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  async function loadMessages(id: string): Promise<void> {
+  async function loadMessages(id: string, opts?: { replace?: boolean }): Promise<void> {
     // 后端返回分页结构 { items, total, next_seq }（MessageListRESP），
     // 这里先取 items 再与本地乐观消息合并，避免把整包对象当数组喂给 v-for
     const resp = await apiGet<{ items: ApiMessage[]; total: number; next_seq: number }>(`/api/v1/chat/sessions/${id}/messages?limit=200`)
     const loaded = Array.isArray(resp?.items) ? resp.items : []
-    messages.value = mergeLoadedMessages(messages.value, loaded)
+    // replace：流式收尾以权威快照为准——乐观占位与权威内容的前缀匹配在多轮 ReAct /
+    // <think> 场景下不可靠，merge 残留会让同一回复出现两条
+    messages.value = opts?.replace ? loaded : mergeLoadedMessages(messages.value, loaded)
   }
 
   /** 本地乐观消息 id（randomUUID 防同毫秒碰撞；非安全上下文降级时间戳+随机段）。 */
@@ -252,7 +254,7 @@ export const useChatStore = defineStore('chat', () => {
    *
    * <p>有会话时切换模型 → 持久化 session.provider_id/model（后端 /chat/sessions/:id/model），
    * 并重新拉取 effective params —— 使输入框的思考强度/采样温度、顶栏模型徽标立即跟随所选模型配置
-   * （此前只改本地 selectedModelID，发送仍走会话旧模型，参数展示与运行模型不一致）。
+   * 同步更新会话的 model，避免参数 chip 展示与运行模型不一致。
    * 无会话时仅记录，创建会话时携带。
    */
   async function selectModel(id: string | null): Promise<void> {
@@ -470,8 +472,9 @@ export const useChatStore = defineStore('chat', () => {
    * 前端 store 只知模型名（model 字段），不知道 provider_id；
    * 后端 CreateSession 会按 model 字段精确匹配 ai_providers 表回查 provider，
    * 缺省回退到第一个 enabled Provider——避免会话创建后立即 5003。
+   * workspacePath 非空时创建即绑定工作区（一次动作完成，不会因「先建会话再选目录」丢失选择）。
    */
-  async function createSession(modelID?: string | null): Promise<Session> {
+  async function createSession(modelID?: string | null, workspacePath?: string | null): Promise<Session> {
     let modelName: string | undefined
     if (modelID) {
       const m = models.value.find((x) => x.id === modelID)
@@ -479,7 +482,8 @@ export const useChatStore = defineStore('chat', () => {
     }
     const session = await apiPost<Session>('/api/v1/chat/sessions', {
       name: null,
-      model: modelName ?? null
+      model: modelName ?? null,
+      workspace_path: workspacePath ?? null
     })
     sessions.value = [session, ...sessions.value]
     currentID.value = session.id
@@ -550,11 +554,11 @@ export const useChatStore = defineStore('chat', () => {
     if (s) s.name = name
   }
 
-  /** 更新会话绑定的工作区。 */
+  /** 更新会话绑定的工作区（外部目录绝对路径；null = 解绑回默认）。 */
   async function updateSessionWorkspace(id: string, workspacePath: string | null): Promise<void> {
     const updated = await apiPost<Session>(
       `/api/v1/chat/sessions/${id}/workspace`,
-      { workspace_id: workspacePath ?? '' }
+      { workspace_path: workspacePath ?? '' }
     )
     const i = sessions.value.findIndex((s) => s.id === id)
     if (i >= 0) sessions.value[i] = updated
@@ -581,6 +585,12 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function sendMessage(text: string, fileIds: string[] = [], params: SendParams = {}): Promise<void> {
+    // /new 命令的本地令牌：新建会话（切到空会话），绝不作为消息发给 LLM
+    if (text === '__wb_new_session__') {
+      const session = await createSession(selectedModelID.value ?? null)
+      if (session) useToast().success(t('chat.newSessionCreated'))
+      return
+    }
     let sessionID = currentID.value
     if (!sessionID) {
       // 新会话时把当前选中的模型 ID 一并传入（避免创建后因缺 provider/model 立即 5003）
@@ -638,14 +648,14 @@ export const useChatStore = defineStore('chat', () => {
       )
       activeHandle = handle
       await handle.promise
-      await safeLoadMessages(sessionID)
+      await safeLoadMessages(sessionID, { replace: true })
       finalizeStreamingMessage(sessionID)
     } catch (e) {
       if (!userCancelled.value) {
         error.value = e instanceof Error ? e.message : String(e)
       }
       try {
-        await safeLoadMessages(sessionID)
+        await safeLoadMessages(sessionID, { replace: true })
       } catch {
         // swallow
       }
@@ -694,11 +704,11 @@ export const useChatStore = defineStore('chat', () => {
       )
       activeHandle = handle
       await handle.promise
-      await safeLoadMessages(sessionID)
+      await safeLoadMessages(sessionID, { replace: true })
       finalizeStreamingMessage(sessionID)
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
-      await safeLoadMessages(sessionID)
+      await safeLoadMessages(sessionID, { replace: true })
       finalizeStreamingMessage(sessionID)
       useToast().error(t('chat.streamFailed'), error.value ?? undefined)
     } finally {
@@ -734,9 +744,9 @@ export const useChatStore = defineStore('chat', () => {
     if (i >= 0 && updated) sessions.value[i] = updated
   }
 
-  async function safeLoadMessages(id: string): Promise<void> {
+  async function safeLoadMessages(id: string, opts?: { replace?: boolean }): Promise<void> {
     try {
-      await loadMessages(id)
+      await loadMessages(id, opts)
     } catch {
       // swallow
     }
@@ -827,8 +837,17 @@ export const useChatStore = defineStore('chat', () => {
     batcher.push(event)
   }
 
+  /** 错误文案压成单行短句：正文区只承担「发生了什么」，长诊断交给横幅与日志。 */
+  function shortErrorText(): string {
+    const e = (error.value ?? '').trim()
+    if (!e) return ''
+    const oneLine = e.replace(/\s+/g, ' ')
+    return oneLine.length > 160 ? `${oneLine.slice(0, 160)}…` : oneLine
+  }
+
   function finalizeStreamingMessage(sessionID: string): void {
     const content = streamingContent.value.trim()
+    const errText = shortErrorText()
     const hasPayload =
       content.length > 0 ||
       streamingTools.value.length > 0 ||
@@ -837,7 +856,7 @@ export const useChatStore = defineStore('chat', () => {
     const last = messages.value[messages.value.length - 1]
     if (last && last.role === 'assistant') {
       if (!last.content || last.content.trim().length === 0) {
-        last.content = content || error.value || t('chat.streamFailedPlaceholder')
+        last.content = content || errText || t('chat.streamFailedPlaceholder')
         last.status = 'completed'
         last.updated_at = Date.now()
       }
@@ -848,7 +867,7 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
     if (messages.value.length === 0 && hasPayload) {
-      const fallback = content || error.value || t('chat.streamFailedPlaceholder')
+      const fallback = content || errText || t('chat.streamFailedPlaceholder')
       messages.value.push({
         id: genLocalID(),
         session_id: sessionID,
@@ -862,11 +881,14 @@ export const useChatStore = defineStore('chat', () => {
       return
     }
     if (!hasPayload && !error.value) return
+    // 去重守卫：权威快照已含同内容 assistant 消息时不再 push（防双写重复）
+    const tail = messages.value[messages.value.length - 1]
+    if (tail && tail.role === 'assistant' && (tail.content ?? '').trim() === content) return
     const msg = {
       id: genLocalID(),
       session_id: sessionID,
       role: 'assistant',
-      content: content || error.value || t('chat.streamFailedPlaceholder'),
+      content: content || shortErrorText() || t('chat.streamFailedPlaceholder'),
       status: 'completed',
       model: null,
       created_at: Date.now(),

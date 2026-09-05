@@ -13,6 +13,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
+
+	"WorkBaby/internal/singleinstance"
 )
 
 //go:embed all:frontend/dist
@@ -23,15 +25,15 @@ func main() {
 
 	// 单实例：Mutex 检测 + 本地 TCP IPC。
 	// 二次启动（含文件关联打开）把文件路径转交主实例后退出，避免多实例竞争托盘图标与 DB 锁。
-	inst, ierr := AcquireSingleInstance()
+	inst, ierr := singleinstance.Acquire()
 	if ierr != nil {
-		if !errors.Is(ierr, errInstanceAlreadyRunning) {
+		if !errors.Is(ierr, singleinstance.ErrInstanceAlreadyRunning) {
 			log.Printf("workbaby: single instance check failed: %v", ierr)
 			return
 		}
 		// 已有实例在跑：转交命令行文件路径（若有）后静默退出
 		if path := filePathFromArgs(); path != "" {
-			_ = SendPathToRunningInstance(path)
+			_ = singleinstance.SendPathToRunningInstance(path)
 		}
 		return
 	}

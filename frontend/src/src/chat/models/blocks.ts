@@ -159,6 +159,21 @@ export interface DiffLine {
 }
 
 /**
+ * 剥离 content 中的 <think> 块。
+ *
+ * <p>部分 OpenAI 兼容端点（DeepSeek 风格）把推理写进正文用 <think>…</think> 包裹，
+ * 而非独立 reasoning 字段——后端 thinking 分离只覆盖后者，这里在渲染层兜底：
+ * 闭合块全局移除（跨行），流式中未闭合的尾部 <think>… 前缀一并移除（避免闪现原始标签）。
+ * 思考内容另有原生 thinking 通道展示，此处剥离不损失可读信息。
+ */
+export function stripThinkBlocks(content: string): string {
+  if (!content.includes('<think>')) return content
+  let out = content.replace(/<think>[\s\S]*?<\/think>/g, '')
+  out = out.replace(/<think>[\s\S]*$/, '')
+  return out.trim()
+}
+
+/**
  * 结果内容是否为 unified diff。
  * 信号（满足其一）：`diff --git` 头、`@@ -x +y @@` hunk 头、`+++ /---` 文件头对。
  * 启发式按 rune 前缀判定，误判面（markdown `---` 分割线 + `+++` 极少共存）可接受。

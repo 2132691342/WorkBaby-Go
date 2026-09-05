@@ -26,13 +26,20 @@ type FileChangeService struct {
 	repo      *repo.FileChangeRepo
 	bus       *event.Bus
 	events    *event.RunEventLog
-	snapshots string // 快照根目录（{home}/snapshots）
-	root      string // 工作区根（用于算相对路径）
+	snapshots string                        // 快照根目录（默认 {home}/snapshots）
+	root      string                        // 工作区根（用于算相对路径）
+	snapRoot  func(sessionID string) string // 可选：会话级快照目录（绑定外部工作区时改放 {dir}/.workbaby/snapshots）
 }
 
 // NewFileChangeService 构造；snapshots 为快照目录，root 为工作区根。
 func NewFileChangeService(r *repo.FileChangeRepo, bus *event.Bus, snapshots, root string) *FileChangeService {
 	return &FileChangeService{repo: r, bus: bus, snapshots: snapshots, root: root}
+}
+
+// WithSnapshotRoot 注入会话级快照目录解析器；注入后优先于固定根 + sessionID 推导。
+func (s *FileChangeService) WithSnapshotRoot(f func(sessionID string) string) *FileChangeService {
+	s.snapRoot = f
+	return s
 }
 
 // WithEventLog 启用 run 事件日志：变更事件与 chat 事件共享序号空间，断线重放不缺帧。
@@ -204,8 +211,14 @@ func (r *fileChangeRecorder) RecordWrite(ctx context.Context, path string, exist
 }
 
 // writeSnapshot 写变更前内容到 {snapshots}/{session}/{id}.bak。
+// 注入了会话级解析器时优先用解析目录（绑定外部工作区 → {dir}/.workbaby/snapshots/{session}）。
 func (s *FileChangeService) writeSnapshot(sessionID, id string, before []byte) (string, error) {
 	dir := filepath.Join(s.snapshots, sessionID)
+	if s.snapRoot != nil {
+		if d := s.snapRoot(sessionID); d != "" {
+			dir = d
+		}
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", pkg.Wrap(4007, "mkdir snapshot dir failed", err)
 	}

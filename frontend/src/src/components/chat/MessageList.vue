@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { ChevronDown } from '@/components/common/icons'
+import { useRouter } from 'vue-router'
+import { ChevronDown, Settings } from '@/components/common/icons'
 import type { Message } from '@/types/api'
 import { t } from '@/i18n'
 import { Sparkles, FileText, Code2, Clock, BookOpen } from '@/components/common/icons'
@@ -13,26 +14,26 @@ import AssistantAvatar from '@/components/chat/AssistantAvatar.vue'
 import { useToast } from '@/composables/useToast'
 import { useChatStore } from '@/stores/chat'
 
-/** 空状态的一键示例 prompt，点击直接填入输入框。 */
+/** 空状态的一键示例 prompt，点击直接填入输入框（文案走 i18n）。 */
 const quickPrompts: { title: string; text: string; icon: unknown }[] = [
   {
-    title: '写一份周报',
-    text: '帮我把本周的工作整理成一份 Markdown 周报：包含「本周完成 / 进行中 / 下周计划 / 复思考」4 块',
+    title: t('chat.quick.weeklyTitle'),
+    text: t('chat.quick.weeklyText'),
     icon: FileText
   },
   {
-    title: '解释一段代码',
-    text: '帮我解释一下这段代码做了什么、有什么坑，以及怎么改进（贴代码）',
+    title: t('chat.quick.explainTitle'),
+    text: t('chat.quick.explainText'),
     icon: Code2
   },
   {
-    title: '安排定时任务',
-    text: '我想每天早上 9 点跑一次「昨日聊天日报」工作流，怎么配置？',
+    title: t('chat.quick.cronTitle'),
+    text: t('chat.quick.cronText'),
     icon: Clock
   },
   {
-    title: '整理知识库',
-    text: '把上传到知识库的 PDF 资料按主题分类，并告诉我怎么查',
+    title: t('chat.quick.kdocsTitle'),
+    text: t('chat.quick.kdocsText'),
     icon: BookOpen
   }
 ]
@@ -56,6 +57,13 @@ const props = defineProps<{
 
 const chat = useChatStore()
 const { pendingApproval, stopReason } = storeToRefs(chat)
+const router = useRouter()
+
+/** 尚未配置任何可用模型：空态卡给出直达设置页的引导，杜绝「发了消息没反应」的懵态。 */
+const noModels = computed(() => chat.models.length === 0)
+function goSettings(): void {
+  void router.push('/settings?tab=models')
+}
 
 const toast = useToast()
 
@@ -158,6 +166,16 @@ function isNearCurrent(i: number): boolean {
           <h3 class="text-base font-semibold text-wb-ink">{{ t('chat.emptyTitle') }}</h3>
           <p class="mt-2 text-sm text-wb-muted">{{ t('chat.emptyPrompt') }}</p>
           <p class="mt-1 text-xs text-wb-muted/70">{{ t('chat.emptyHint') }}</p>
+          <!-- 无可用模型：直达设置页引导 -->
+          <div
+            v-if="noModels"
+            class="mx-auto mt-4 flex max-w-sm items-center justify-center gap-2 rounded-lg border border-wb-warning/30 bg-wb-warning/10 px-3 py-2 text-xs text-wb-ink"
+          >
+            <span>{{ t('chat.noModelsGuide') }}</span>
+            <el-button link type="primary" size="small" @click="goSettings">
+              <el-icon class="mr-0.5"><Settings /></el-icon>{{ t('chat.goSettings') }}
+            </el-button>
+          </div>
         </div>
         <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
           <button

@@ -94,7 +94,8 @@ function clear(): void {
     append-to-body
     @update:model-value="emit('close')"
   >
-    <p class="mb-4 text-xs text-wb-muted">{{ t('chat.workspacePicker.hint') }}</p>
+    <p class="mb-2 text-xs text-wb-muted">{{ t('chat.workspacePicker.hint') }}</p>
+    <p class="mb-4 text-xs text-wb-muted">{{ t('chat.workspace.boundHint') }}</p>
 
     <div class="flex items-center gap-2">
       <el-input

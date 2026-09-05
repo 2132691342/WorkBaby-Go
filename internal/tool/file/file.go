@@ -58,10 +58,15 @@ func safePath(workspaceRoot, path string) (string, error) {
 // ===== file_read =====
 
 // ReadTool 读文件。
-type ReadTool struct{ root string }
+type ReadTool struct{ resolve func(context.Context) string }
 
 // NewRead 构造 file_read。
-func NewRead(root string) *ReadTool { return &ReadTool{root: root} }
+//
+// resolver 按会话解析工作区根：会话可绑定外部目录，故不能是注册期固定的单一根；
+// resolver 为 nil 或解析出空串时回落到 defRoot（默认工作区）。
+func NewRead(resolver tool.RootResolver, defRoot string) *ReadTool {
+	return &ReadTool{resolve: tool.ResolveRoot(resolver, defRoot)}
+}
 
 func (t *ReadTool) Name() string              { return "file_read" }
 func (t *ReadTool) RiskLevel() tool.RiskLevel { return tool.RiskReadOnly }
@@ -89,12 +94,12 @@ type readReq struct {
 	MaxLines int    `json:"maxLines"`
 }
 
-func (t *ReadTool) Execute(_ context.Context, args json.RawMessage) tool.ToolResult {
+func (t *ReadTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolResult {
 	var req readReq
 	if err := json.Unmarshal(args, &req); err != nil {
 		return tool.ToolResult{Err: pkg.Wrap(4004, "file_read args parse failed", err)}
 	}
-	p, err := safePath(t.root, req.Path)
+	p, err := safePath(t.resolve(ctx), req.Path)
 	if err != nil {
 		return tool.ToolResult{Err: err}
 	}
@@ -124,12 +129,14 @@ type Recorder interface {
 
 // WriteTool 写文件。
 type WriteTool struct {
-	root     string
+	resolve  func(context.Context) string
 	recorder Recorder
 }
 
-// NewWrite 构造 file_write。
-func NewWrite(root string) *WriteTool { return &WriteTool{root: root} }
+// NewWrite 构造 file_write；resolver / defRoot 语义同 NewRead。
+func NewWrite(resolver tool.RootResolver, defRoot string) *WriteTool {
+	return &WriteTool{resolve: tool.ResolveRoot(resolver, defRoot)}
+}
 
 // WithRecorder 注入变更记录器（写前备份 + diff 登记）。
 func (t *WriteTool) WithRecorder(r Recorder) *WriteTool {
@@ -173,7 +180,7 @@ func (t *WriteTool) Execute(ctx context.Context, args json.RawMessage) tool.Tool
 	if len([]byte(req.Content)) > maxWriteBytes {
 		return tool.ToolResult{Err: pkg.New(4008, "file_write content too large", "")}
 	}
-	p, err := safePath(t.root, req.Path)
+	p, err := safePath(t.resolve(ctx), req.Path)
 	if err != nil {
 		return tool.ToolResult{Err: err}
 	}
@@ -209,10 +216,12 @@ func (t *WriteTool) Execute(ctx context.Context, args json.RawMessage) tool.Tool
 // ===== file_list =====
 
 // ListTool 列目录。
-type ListTool struct{ root string }
+type ListTool struct{ resolve func(context.Context) string }
 
-// NewList 构造 file_list。
-func NewList(root string) *ListTool { return &ListTool{root: root} }
+// NewList 构造 file_list；resolver / defRoot 语义同 NewRead。
+func NewList(resolver tool.RootResolver, defRoot string) *ListTool {
+	return &ListTool{resolve: tool.ResolveRoot(resolver, defRoot)}
+}
 
 func (t *ListTool) Name() string              { return "file_list" }
 func (t *ListTool) RiskLevel() tool.RiskLevel { return tool.RiskReadOnly }
@@ -239,7 +248,7 @@ type listReq struct {
 	Pattern string `json:"pattern"`
 }
 
-func (t *ListTool) Execute(_ context.Context, args json.RawMessage) tool.ToolResult {
+func (t *ListTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolResult {
 	var req listReq
 	if err := json.Unmarshal(args, &req); err != nil {
 		return tool.ToolResult{Err: pkg.Wrap(4004, "file_list args parse failed", err)}
@@ -247,7 +256,7 @@ func (t *ListTool) Execute(_ context.Context, args json.RawMessage) tool.ToolRes
 	if req.Path == "" {
 		req.Path = "."
 	}
-	p, err := safePath(t.root, req.Path)
+	p, err := safePath(t.resolve(ctx), req.Path)
 	if err != nil {
 		return tool.ToolResult{Err: err}
 	}

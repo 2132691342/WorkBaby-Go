@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -18,10 +17,17 @@ import (
 
 // Client OpenAI 兼容 HTTP 客户端；自研、不用 SDK。
 type Client struct {
-	providerName string
-	BaseURL      string
-	APIKey       string
-	HTTPClient   *http.Client
+	providerName  string
+	BaseURL       string
+	APIKey        string
+	HTTPClient    *http.Client
+	thinkingStyle llm.ThinkingStyle
+}
+
+// WithThinkingStyle 指定思维参数方言（由 Provider 配置的 thinking_style 或自动探测得出）。
+func (c *Client) WithThinkingStyle(s llm.ThinkingStyle) *Client {
+	c.thinkingStyle = s
+	return c
 }
 
 // New 构造 OpenAI 兼容客户端。
@@ -56,8 +62,8 @@ func (c *Client) Chat(ctx context.Context, req *llm.ChatRequest) (*llm.ChatRespo
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		appErr := llm.MapHTTPStatus(resp.StatusCode)
-		return nil, pkg.Wrap(3100, "openai chat", appErr)
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, llm.NewUpstreamError("模型服务返回", resp.StatusCode, raw)
 	}
 	var oc OpenAIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&oc); err != nil {
@@ -86,8 +92,12 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		appErr := llm.MapHTTPStatus(resp.StatusCode)
-		return nil, pkg.Wrap(3100, fmt.Sprintf("openai stream %d: %s", resp.StatusCode, truncate(string(raw), 200))+llm.RetryAfterHint(resp.StatusCode, resp.Header.Get), appErr)
+		appErr := llm.NewUpstreamError("模型服务返回", resp.StatusCode, raw)
+		// Retry-After 供重试器提取退避时长；不进 UI 文案，故拼在 Details 末尾而非 Message。
+		if hint := llm.RetryAfterHint(resp.StatusCode, resp.Header.Get); hint != "" {
+			appErr.Details = strings.TrimSpace(appErr.Details + " " + hint)
+		}
+		return nil, appErr
 	}
 
 	out := make(chan llm.StreamChunk, 32)
@@ -197,7 +207,8 @@ func (c *Client) Ping(ctx context.Context) error {
 		if resp.StatusCode == 400 || resp.StatusCode == 404 || resp.StatusCode == 422 {
 			return nil
 		}
-		return pkg.Wrap(3100, "ping failed", llm.MapHTTPStatus(resp.StatusCode))
+		raw, _ := io.ReadAll(resp.Body)
+		return llm.NewUpstreamError("连通测试失败", resp.StatusCode, raw)
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
@@ -233,14 +244,9 @@ func (c *Client) buildBody(req *llm.ChatRequest, stream bool) map[string]any {
 	if len(req.Stop) > 0 {
 		body["stop"] = req.Stop
 	}
-	if req.Thinking != nil {
-		// GLM / DeepSeek-R1 风格的 ExtraBody 注入
-		switch req.Thinking.Type {
-		case "enabled":
-			body["thinking"] = map[string]any{"type": "enabled"}
-		case "disabled":
-			body["thinking"] = map[string]any{"type": "disabled"}
-		}
+	// 思维参数按方言渲染：未知上游默认不发（none），避免不被识别的字段直接 400。
+	for k, v := range llm.RenderThinking(c.thinkingStyle, req.Thinking) {
+		body[k] = v
 	}
 	for k, v := range req.ExtraBody {
 		body[k] = v

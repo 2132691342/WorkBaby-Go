@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { ArrowDown } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
@@ -14,8 +15,24 @@ import type { AiProvider } from '@/types/api'
 const settings = useSettingsStore()
 const toast = useToast()
 const dialog = useDialog()
-const { providers, providerKinds, form, loading, error, circuitStates } = storeToRefs(settings)
-const { load, addProvider, updateProvider, removeProvider, testProvider, resetCircuit } = settings
+const { providers, providerKinds, form, loading, error, circuitStates, chatDefaults } = storeToRefs(settings)
+const { load, addProvider, updateProvider, removeProvider, testProvider, resetCircuit, loadChatDefaults, saveChatDefaults } = settings
+
+/** 全局默认参数：进页面即拉取当前 KV 值（未配置显示为空 = 内置兜底）。 */
+onMounted(() => {
+  void loadChatDefaults()
+})
+
+/** el-input-number 清空可能回吐 undefined；统一归一为 null（= 未配置）再保存。 */
+async function handleSaveChatDefaults(): Promise<void> {
+  chatDefaults.value = {
+    default_temperature: chatDefaults.value.default_temperature ?? null,
+    default_thinking: chatDefaults.value.default_thinking || null,
+    compression_ratio: chatDefaults.value.compression_ratio ?? null,
+    max_input_chars: chatDefaults.value.max_input_chars ?? null
+  }
+  await saveChatDefaults()
+}
 
 /** 测试中的 provider id（按钮 pending 态；后端已加 15s 超时，最迟 15s 返回结果）。 */
 const testingID = ref<string | null>(null)
@@ -112,7 +129,19 @@ function effThinking(p: AiProvider): string {
 
 // ===== 编辑模型（el-dialog + el-form） =====
 const editingProviderID = ref<string | null>(null)
-const editingProviderDraft = ref<{ name: string; api_key: string; base_url: string; model: string; alias: string; context_window: number | null; compress_ratio: number | null; temperature: number | null; thinking_effort: string | null }>({ name: '', api_key: '', base_url: '', model: '', alias: '', context_window: null, compress_ratio: 0.9, temperature: null, thinking_effort: null })
+const editingProviderDraft = ref<{
+  name: string; api_key: string; base_url: string; model: string; alias: string
+  context_window: number | null; max_output_tokens: number | null
+  compress_ratio: number | null; temperature: number | null; top_p: number | null
+  thinking_effort: string | null; thinking_style: string | null
+  supports_tool_call: boolean | null; supports_vision: boolean | null; supports_reasoning: boolean | null
+}>({
+  name: '', api_key: '', base_url: '', model: '', alias: '',
+  context_window: null, max_output_tokens: null,
+  compress_ratio: 0.9, temperature: null, top_p: null,
+  thinking_effort: null, thinking_style: null,
+  supports_tool_call: null, supports_vision: null, supports_reasoning: null
+})
 const editingProviderFeedback = ref<string | null>(null)
 
 /** el-dialog 双向开关（editingProviderID 非空即打开）。 */
@@ -132,9 +161,15 @@ async function startEditProvider(p: AiProvider): Promise<void> {
     model: p.model,
     alias: p.alias ?? '',
     context_window: p.context_window ?? null,
+    max_output_tokens: p.max_output_tokens ?? null,
     compress_ratio: p.compress_ratio ?? 0.9,
     temperature: p.temperature ?? null,
-    thinking_effort: p.thinking_effort ?? null
+    top_p: p.top_p ?? null,
+    thinking_effort: p.thinking_effort ?? null,
+    thinking_style: p.thinking_style ?? '',
+    supports_tool_call: p.supports_tool_call ?? null,
+    supports_vision: p.supports_vision ?? null,
+    supports_reasoning: p.supports_reasoning ?? null
   }
   editingProviderFeedback.value = null
 }
@@ -164,12 +199,41 @@ async function saveEditProvider(): Promise<void> {
     tier: editing.tier,
     enabled: editing.enabled,
     context_window: editingProviderDraft.value.context_window,
+    max_output_tokens: editingProviderDraft.value.max_output_tokens,
     compress_ratio: editingProviderDraft.value.compress_ratio ?? 0.9,
     temperature: editingProviderDraft.value.temperature,
-    thinking_effort: editingProviderDraft.value.thinking_effort
+    top_p: editingProviderDraft.value.top_p,
+    thinking_effort: editingProviderDraft.value.thinking_effort,
+    thinking_style: editingProviderDraft.value.thinking_style || null,
+    supports_tool_call: editingProviderDraft.value.supports_tool_call,
+    supports_vision: editingProviderDraft.value.supports_vision,
+    supports_reasoning: editingProviderDraft.value.supports_reasoning
   })
   if (ok) cancelEditProvider()
 }
+
+/** 行内下拉命令分发（查看详情 / 重置熔断）。 */
+function onRowCommand(cmd: string, p: AiProvider): void {
+  if (cmd === 'view') openViewProvider(p)
+  else if (cmd === 'resetCircuit') void handleResetCircuit(p.id)
+}
+
+/** 思维方言选项（auto + 后端 llm.AllThinkingStyles；与后端枚举一一对应）。 */
+const thinkingStyles = [
+  { value: '', label: 'settings.thinkingStyleAuto' },
+  { value: 'none', label: 'settings.thinkingStyleNone' },
+  { value: 'enabled', label: 'settings.thinkingStyleEnabled' },
+  { value: 'adaptive', label: 'settings.thinkingStyleAdaptive' },
+  { value: 'reasoning_effort', label: 'settings.thinkingStyleEffort' },
+  { value: 'enable_thinking', label: 'settings.thinkingStyleEnableBool' }
+]
+
+/** 能力三态选项：null=按模型名与协议自动判定。 */
+const capabilityOptions = [
+  { value: null, label: 'settings.capAuto' },
+  { value: true, label: 'common.enabled' },
+  { value: false, label: 'common.disabled' }
+]
 
 /** 模型类型下拉（**从后端 /api/v1/ai-provider/kinds 拉** —— 不能前端写死）。
  *  后端 domain.AllProviderKindMetas 与 internal/llm/<kind>/ 实现一一对应；
@@ -205,6 +269,74 @@ defineExpose({ load })
 
 <template>
   <div>
+    <!-- 聊天默认参数：全局兜底层；Provider 级配置优先生效，这里留空 = 内置默认 -->
+    <section class="card mb-5 p-5">
+      <h2 class="mb-1 font-display text-sm font-semibold text-wb-ink">
+        {{ t('settings.chatDefaults.title') }}
+      </h2>
+      <p class="mb-4 text-xs text-wb-muted">{{ t('settings.chatDefaults.desc') }}</p>
+      <el-form class="wb-el-form" label-position="top" @submit.prevent="handleSaveChatDefaults">
+        <div class="wb-form-row wb-form-row--2">
+          <el-form-item :label="t('settings.chatDefaults.temperature')" class="wb-form-cell">
+            <el-input-number
+              v-model="chatDefaults.default_temperature"
+              :min="0"
+              :max="2"
+              :step="0.05"
+              :precision="2"
+              :placeholder="t('settings.chatDefaults.builtin')"
+              class="!w-full"
+              controls-position="right"
+            />
+            <div class="wb-form-hint">{{ t('settings.chatDefaults.temperatureTip') }}</div>
+          </el-form-item>
+          <el-form-item :label="t('settings.chatDefaults.thinking')" class="wb-form-cell">
+            <el-select
+              v-model="chatDefaults.default_thinking"
+              class="!w-full"
+              clearable
+              :placeholder="t('settings.chatDefaults.builtin')"
+            >
+              <el-option value="off" :label="t('chat.effort.off')" />
+              <el-option value="low" :label="t('chat.effort.low')" />
+              <el-option value="medium" :label="t('chat.effort.medium')" />
+              <el-option value="high" :label="t('chat.effort.high')" />
+            </el-select>
+            <div class="wb-form-hint">{{ t('settings.chatDefaults.thinkingTip') }}</div>
+          </el-form-item>
+          <el-form-item :label="t('settings.chatDefaults.compression')" class="wb-form-cell">
+            <el-input-number
+              v-model="chatDefaults.compression_ratio"
+              :min="0.1"
+              :max="1"
+              :step="0.01"
+              :precision="2"
+              :placeholder="t('settings.chatDefaults.builtin')"
+              class="!w-full"
+              controls-position="right"
+            />
+            <div class="wb-form-hint">{{ t('settings.chatDefaults.compressionTip') }}</div>
+          </el-form-item>
+          <el-form-item :label="t('settings.chatDefaults.maxInput')" class="wb-form-cell">
+            <el-input-number
+              v-model="chatDefaults.max_input_chars"
+              :min="100"
+              :step="1000"
+              :placeholder="t('settings.chatDefaults.builtin')"
+              class="!w-full"
+              controls-position="right"
+            />
+            <div class="wb-form-hint">{{ t('settings.chatDefaults.maxInputTip') }}</div>
+          </el-form-item>
+        </div>
+        <div class="wb-form-actions">
+          <el-button type="primary" @click="handleSaveChatDefaults">
+            {{ t('ui.btn.save') }}
+          </el-button>
+        </div>
+      </el-form>
+    </section>
+
     <section class="card mb-5 p-5">
       <h2 class="mb-4 font-display text-sm font-semibold text-wb-ink">
         {{ t('settings.addProvider') }}
@@ -373,24 +505,31 @@ defineExpose({ load })
             <span class="font-mono text-xs text-wb-muted">{{ row.api_key_masked || t('settings.noKey') }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('memory.center.col.actions')" width="290" fixed="right">
+        <el-table-column :label="t('memory.center.col.actions')" width="240" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openViewProvider(row as AiProvider)">{{ t('settings.viewProvider') }}</el-button>
-            <el-button link type="primary" size="small" :loading="testingID === row.id" @click="handleTestProvider(row as AiProvider)">
-              {{ testingID === row.id ? t('settings.testing') : t('settings.test') }}
-            </el-button>
-            <el-button
-              v-if="(row as AiProvider).enabled && (circuitStates.get(row.id)?.state === 'OPEN' || circuitStates.get(row.id)?.state === 'HALF_OPEN')"
-              link
-              type="warning"
-              size="small"
-              :title="t('settings.resetCircuitHint')"
-              @click="handleResetCircuit(row.id)"
-            >
-              {{ t('settings.resetCircuit') }}
-            </el-button>
-            <el-button link type="primary" size="small" @click="startEditProvider(row as AiProvider)">{{ t('ui.btn.edit') }}</el-button>
-            <el-button link type="danger" size="small" @click="handleRemoveProvider(row as AiProvider)">{{ t('ui.btn.delete') }}</el-button>
+            <div class="flex items-center gap-0.5">
+              <el-button link type="primary" size="small" :loading="testingID === row.id" @click="handleTestProvider(row as AiProvider)">
+                {{ testingID === row.id ? t('settings.testing') : t('settings.test') }}
+              </el-button>
+              <el-button link type="primary" size="small" @click="startEditProvider(row as AiProvider)">{{ t('ui.btn.edit') }}</el-button>
+              <el-button link type="danger" size="small" @click="handleRemoveProvider(row as AiProvider)">{{ t('ui.btn.delete') }}</el-button>
+              <el-dropdown trigger="click" @command="(cmd: string) => onRowCommand(cmd, row as AiProvider)">
+                <el-button link type="primary" size="small" class="!ml-1">
+                  {{ t('settings.moreActions') }}<el-icon class="ml-0.5"><ArrowDown /></el-icon>
+                </el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="view">{{ t('settings.viewProvider') }}</el-dropdown-item>
+                    <el-dropdown-item
+                      v-if="(row as AiProvider).enabled && (circuitStates.get(row.id)?.state === 'OPEN' || circuitStates.get(row.id)?.state === 'HALF_OPEN')"
+                      command="resetCircuit"
+                    >
+                      {{ t('settings.resetCircuit') }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -419,6 +558,10 @@ defineExpose({ load })
         <el-form-item :label="t('settings.context_window')">
           <el-input-number v-model="editingProviderDraft.context_window" :min="1" :step="1" controls-position="right" class="!w-56" />
         </el-form-item>
+        <el-form-item :label="t('settings.max_output_tokens')">
+          <el-input-number v-model="editingProviderDraft.max_output_tokens" :min="1" :step="1" controls-position="right" class="!w-56" />
+          <div class="w-full text-xs text-wb-muted">{{ t('settings.maxOutputTokensTip') }}</div>
+        </el-form-item>
         <el-form-item :label="t('settings.compress_ratio')">
           <el-input-number
             v-model="editingProviderDraft.compress_ratio"
@@ -444,6 +587,18 @@ defineExpose({ load })
           />
           <div class="w-full text-xs text-wb-muted">{{ t('settings.providerTemperatureTip') }}</div>
         </el-form-item>
+        <el-form-item :label="t('settings.top_p')">
+          <el-input-number
+            v-model="editingProviderDraft.top_p"
+            :min="0"
+            :max="1"
+            :step="0.05"
+            :precision="2"
+            controls-position="right"
+            class="!w-56"
+          />
+          <div class="w-full text-xs text-wb-muted">{{ t('settings.topPTip') }}</div>
+        </el-form-item>
         <el-form-item :label="t('settings.thinking_effort')">
           <el-select v-model="editingProviderDraft.thinking_effort" class="!w-56" clearable :placeholder="t('settings.thinkingEffortDefault')">
             <el-option value="off" :label="t('chat.effort.off')" />
@@ -453,6 +608,29 @@ defineExpose({ load })
           </el-select>
           <div class="w-full text-xs text-wb-muted">{{ t('settings.thinkingEffortTip') }}</div>
         </el-form-item>
+        <el-form-item :label="t('settings.thinking_style')">
+          <el-select v-model="editingProviderDraft.thinking_style" class="!w-56">
+            <el-option v-for="s in thinkingStyles" :key="s.value" :value="s.value" :label="t(s.label)" />
+          </el-select>
+          <div class="w-full text-xs text-wb-muted">{{ t('settings.thinkingStyleTip') }}</div>
+        </el-form-item>
+        <div class="grid grid-cols-3 gap-3">
+          <el-form-item :label="t('settings.capToolCall')">
+            <el-select v-model="editingProviderDraft.supports_tool_call" class="!w-full">
+              <el-option v-for="o in capabilityOptions" :key="String(o.value)" :value="o.value as boolean | null" :label="t(o.label)" />
+            </el-select>
+          </el-form-item>
+          <el-form-item :label="t('settings.capVision')">
+            <el-select v-model="editingProviderDraft.supports_vision" class="!w-full">
+              <el-option v-for="o in capabilityOptions" :key="String(o.value)" :value="o.value as boolean | null" :label="t(o.label)" />
+            </el-select>
+          </el-form-item>
+          <el-form-item :label="t('settings.capReasoning')">
+            <el-select v-model="editingProviderDraft.supports_reasoning" class="!w-full">
+              <el-option v-for="o in capabilityOptions" :key="String(o.value)" :value="o.value as boolean | null" :label="t(o.label)" />
+            </el-select>
+          </el-form-item>
+        </div>
         <p v-if="editingProviderFeedback" class="text-xs text-wb-danger">{{ editingProviderFeedback }}</p>
       </el-form>
       <template #footer>
@@ -492,6 +670,20 @@ defineExpose({ load })
         <div class="flex items-center justify-between border-b border-wb-border pb-2">
           <span class="text-xs text-wb-muted">{{ t('settings.context_window') }}</span>
           <span class="text-wb-ink">{{ viewingProvider.context_window?.toLocaleString() ?? '—' }}</span>
+        </div>
+        <div class="flex items-center justify-between border-b border-wb-border pb-2">
+          <span class="text-xs text-wb-muted">{{ t('settings.max_output_tokens') }}</span>
+          <span class="text-wb-ink">{{ viewingProvider.max_output_tokens?.toLocaleString() || '—' }}</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5 border-b border-wb-border pb-2">
+          <span class="mr-1 text-xs text-wb-muted">{{ t('settings.capToolCall') }} / {{ t('settings.capVision') }} / {{ t('settings.capReasoning') }}</span>
+          <span class="rounded px-1.5 py-0.5 text-[10px] font-medium" :class="viewingProvider.tool_call_effective ? 'bg-wb-success/15 text-wb-success' : 'bg-wb-surface-2 text-wb-muted'">{{ t('settings.capToolCall') }}</span>
+          <span class="rounded px-1.5 py-0.5 text-[10px] font-medium" :class="viewingProvider.vision_effective ? 'bg-wb-success/15 text-wb-success' : 'bg-wb-surface-2 text-wb-muted'">{{ t('settings.capVision') }}</span>
+          <span class="rounded px-1.5 py-0.5 text-[10px] font-medium" :class="viewingProvider.reasoning_effective ? 'bg-wb-success/15 text-wb-success' : 'bg-wb-surface-2 text-wb-muted'">{{ t('settings.capReasoning') }}</span>
+        </div>
+        <div class="flex items-center justify-between border-b border-wb-border pb-2">
+          <span class="text-xs text-wb-muted">{{ t('settings.thinking_style') }}</span>
+          <span class="font-mono text-xs text-wb-ink">{{ viewingProvider.thinking_style || `${t('settings.capAuto')} → ${viewingProvider.thinking_style_resolved || 'none'}` }}</span>
         </div>
         <div class="flex items-center justify-between border-b border-wb-border pb-2">
           <span class="text-xs text-wb-muted">{{ t('settings.compress_ratio') }}</span>

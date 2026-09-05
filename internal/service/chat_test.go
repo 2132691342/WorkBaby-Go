@@ -9,7 +9,6 @@ import (
 	"WorkBaby/internal/llm/registry"
 	"WorkBaby/internal/memory"
 	"WorkBaby/internal/repo"
-	"WorkBaby/internal/skill"
 	"WorkBaby/internal/tool"
 	"context"
 	"github.com/glebarez/sqlite"
@@ -48,8 +47,7 @@ func newChatOpsService(t *testing.T) (*ChatService, *repo.MessageRepo) {
 	mem := memory.NewService(msgRepo, repo.NewMemoryEpisodeRepo(gdb),
 		repo.NewMemoryFactRepo(gdb), repo.NewMemoryProcedureRepo(gdb), t.TempDir())
 	svc := NewChatService(sessRepo, msgRepo, repo.NewAiProviderRepo(gdb), setRepo, repo.NewTokenUsageRepo(gdb),
-		event.New(), registry.New(), NewToolService(tool.NewRegistry(), setRepo), mem,
-		NewSkillService(repo.NewSkillRepo(gdb), skill.NewRegistry()))
+		event.New(), registry.New(), NewToolService(tool.NewRegistry(), setRepo), mem)
 	return svc, msgRepo
 }
 
@@ -350,3 +348,63 @@ func TestTaskCancelRunning(t *testing.T) {
 var _ = harness.WithRunContext
 var _ = llm.RoleUser
 var _ = context.Background
+
+// ===== 工作区绑定 =====
+
+// TestWorkspaceBindLifecycle 工作区绑定闭环：
+// 创建即绑定（回归：CreateSession 曾丢弃 workspace_path）→ 解析优先绑定目录 →
+// 未绑定回落默认根 → 不存在的目录被拒绝。
+func TestWorkspaceBindLifecycle(t *testing.T) {
+	svc, _ := newChatOpsService(t)
+	ctx := context.Background()
+
+	// 创建即绑定：路径规范化（正斜杠→系统分隔符）并落库
+	dir := t.TempDir()
+	ses, err := svc.CreateSession(ctx, &domain.ChatSessionREQ{Name: "ws", WorkspacePath: filepath.ToSlash(dir)})
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Clean(dir), ses.WorkspacePath, "创建时应绑定并规范化工作目录")
+
+	// WorkspaceRoot：绑定会话返回绑定目录；未绑定会话回落默认根
+	assert.Equal(t, filepath.Clean(dir), svc.WorkspaceRoot(ctx, ses.ID, "default-root"))
+	other, err := svc.CreateSession(ctx, &domain.ChatSessionREQ{Name: "no-ws"})
+	require.NoError(t, err)
+	assert.Equal(t, "default-root", svc.WorkspaceRoot(ctx, other.ID, "default-root"))
+
+	// 不存在的目录：创建与更新都要拒绝
+	_, err = svc.CreateSession(ctx, &domain.ChatSessionREQ{Name: "bad", WorkspacePath: filepath.ToSlash(filepath.Join(dir, "missing"))})
+	require.Error(t, err)
+	_, err = svc.UpdateWorkspace(ctx, ses.ID, filepath.ToSlash(filepath.Join(dir, "missing")))
+	require.Error(t, err)
+
+	// 解绑：空路径清空绑定，回落默认根
+	updated, err := svc.UpdateWorkspace(ctx, ses.ID, "")
+	require.NoError(t, err)
+	assert.Empty(t, updated.WorkspacePath)
+	assert.Equal(t, "default-root", svc.WorkspaceRoot(ctx, ses.ID, "default-root"))
+}
+
+// TestSessionDataDirs 目录策略：默认工作区走 {dataHome}/memory+snapshots；
+// 绑定本地目录走 {dir}/.workbaby/memory+snapshots。
+func TestSessionDataDirs(t *testing.T) {
+	svc, _ := newChatOpsService(t)
+	home := t.TempDir()
+	svc.WithDataHome(home)
+	ctx := context.Background()
+
+	// 未绑定 → 默认根
+	def, err := svc.CreateSession(ctx, &domain.ChatSessionREQ{Name: "def"})
+	require.NoError(t, err)
+	mf, sd := svc.SessionDataDirs(ctx, def.ID)
+	assert.Equal(t, filepath.Join(home, "memory", def.ID, "MEMORY.md"), mf)
+	assert.Equal(t, filepath.Join(home, "snapshots", def.ID), sd)
+
+	// 绑定本地目录 → {dir}/.workbaby/ 下
+	proj := t.TempDir()
+	ws, err := svc.CreateSession(ctx, &domain.ChatSessionREQ{Name: "ws", WorkspacePath: proj})
+	require.NoError(t, err)
+	mf, sd = svc.SessionDataDirs(ctx, ws.ID)
+	assert.Equal(t, filepath.Join(proj, ".workbaby", "memory", ws.ID, "MEMORY.md"), mf)
+	assert.Equal(t, filepath.Join(proj, ".workbaby", "snapshots", ws.ID), sd)
+}
+
+

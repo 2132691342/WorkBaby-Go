@@ -35,4 +35,3 @@ wails dev        # 开发模式（gin 随机端口 + Wails 壳）
 - 设计与实现文档在 [`doc/`](doc/)（中文，共 18 篇，按模块从架构到运行时）；
 - 工程规范基座为根目录 [`CLAUDE.md`](CLAUDE.md)（编码前必读，冲突以它为准）；
 - 用户可见的内置文档在 [`assets/docs/`](assets/docs/)，运行时经 `GET /api/v1/docs` 暴露。
-# WorkBaby-Go

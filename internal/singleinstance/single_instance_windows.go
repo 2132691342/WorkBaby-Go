@@ -1,10 +1,10 @@
 //go:build windows
 
-// Package main 单实例保护：Windows 命名互斥 + 本地 TCP IPC。
+// Package singleinstance 单实例保护：Windows 命名互斥 + 本地 TCP IPC。
 //
 // 第二次启动时把命令行里的文件路径（文件关联打开）经 IPC 转交给主实例后退出，
 // 避免多实例竞争托盘图标 / DB 锁。互斥名按可执行文件名派生，避免不同 WorkBaby 构建互相冲突。
-package main
+package singleinstance
 
 import (
 	"bufio"
@@ -39,6 +39,9 @@ const (
 	ipcToken = "WorkBaby-IPC-v1"
 )
 
+// ErrInstanceAlreadyRunning 已有主实例在运行（main 据此转交路径后退出）。
+var ErrInstanceAlreadyRunning = errors.New("workbaby: another instance is already running")
+
 // SingleInstance 单实例守卫：成功时由调用方保留句柄，进程退出时 Release。
 type SingleInstance struct {
 	handle windows.Handle
@@ -51,8 +54,8 @@ type SingleInstance struct {
 	started  bool
 }
 
-// AcquireSingleInstance 尝试获取命名互斥；已被占用时返回 errInstanceAlreadyRunning。
-func AcquireSingleInstance() (*SingleInstance, error) {
+// Acquire 尝试获取命名互斥；已被占用时返回 ErrInstanceAlreadyRunning。
+func Acquire() (*SingleInstance, error) {
 	name, err := mutexName()
 	if err != nil {
 		return nil, fmt.Errorf("derive mutex name: %w", err)
@@ -83,7 +86,7 @@ func AcquireSingleInstance() (*SingleInstance, error) {
 	if uint32(le) == errorAlreadyExists {
 		// 立刻关闭本进程拿到的句柄（句柄由 CreateMutex 返回，不是真正的所有权）。
 		_, _, _ = syscall.SyscallN(procCloseHandle.Addr(), h)
-		return nil, errInstanceAlreadyRunning
+		return nil, ErrInstanceAlreadyRunning
 	}
 	return nil, fmt.Errorf("CreateMutexW: GetLastError=%v", le)
 }
@@ -100,11 +103,6 @@ func (s *SingleInstance) Release() {
 		s.handle = 0
 	}
 }
-
-var errInstanceAlreadyRunning = errors.New("workbaby: another instance is already running")
-
-// ErrInstanceAlreadyRunning 暴露给 main 用于「已有实例在跑」的退出。
-func ErrInstanceAlreadyRunning() error { return errInstanceAlreadyRunning }
 
 // FileChannel 返回从二次启动实例收到的文件路径流。
 func (s *SingleInstance) FileChannel() <-chan string {

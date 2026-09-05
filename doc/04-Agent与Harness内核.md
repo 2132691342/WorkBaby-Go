@@ -46,13 +46,20 @@ harness/
 4. 无 tool_call：问 follow-up 缝，无续接则 end_turn 终止；
 5. 终止原因：end_turn / cancelled / error / max_turns / stagnation / token_budget / max_tokens。
 
-横切能力（均 `WithXxx` 注入，nil = 关闭）：
+横切能力收敛为 `LoopHooks` 循环缝集合（均 `WithXxx` 注入，nil 字段 = 关闭），按循环中的位置从外到里：
 
-- **streamWithRetry**：仅瞬时错误（限流/5xx/超时）重试，指数退避+抖动、Retry-After 优先、取消优先；流中途错误不重试（防重复输出）；重试发 `agent.retry`。重试耗尽再问 TurnAdjuster 换模型（有界，防主备横跳）。
-- **steering / follow-up 注入缝**：跑工具中途插话 / 说完自动续接，注入后重置停滞计数。
+- **streamWithRetry**：仅瞬时错误（限流/5xx/超时）重试，指数退避+抖动、Retry-After 优先、取消优先；流中途错误不重试（防重复输出）；重试发 `agent.retry`。重试耗尽再问 PrepareNextTurn 换模型（有界，防主备横跳）。
+- **Steering / FollowUp 注入缝**：跑工具中途插话 / 说完自动续接，注入后重置停滞计数。
+- **PrepareNextTurn（TurnAdjuster）**：轮间热切换——TurnUpdate 非 nil 字段生效，可换模型 / 换工具集（模型切换有界防横跳，工具集替换同步收紧执行侧暴露校验）。
+- **ShouldStopAfterTurn**：优雅停止点——每轮收尾后询问「该停了吗」，任务完成类主动终止走 end_turn 语义，区别于停滞/预算类被动熔断。
+- **BeforeToolCall（PathTrust）**：目录信任三态闸门，先于策略门。
+- **AfterToolCall**：工具执行后逐字段覆盖 ToolResult（脱敏 / 富化），先于事件发出与幂等记忆。
+- **ToolGate + Approver**：策略门（deny/ask）与人工审批。
 - **中间件**：TokenUsageAccumulator（每轮用量）、HistoryTruncator（旧阈值兜底）。
 - **停滞熔断**：同名同参连续 / 连续工具失败达 StagnationLimit → stagnation。
 - **text_tool_calls**：部分端点把 tool call 写进正文时按白名单解析兜底。
+
+**失败数据化**：runLoop 内所有错误路径置 runErr 后 break，EventError 与 EventRunDone 统一由循环尾唯一出口发出（所有退出路径事件流有始有终）；RunResult.Err 为数据字段而非提前 return。`normalStop` 标志区分「主动收尾」与「跑满轮数还想继续」，修正最后一轮正常说完被误报 max_turns 的边界。
 
 ## 4. 检查点与幂等恢复
 

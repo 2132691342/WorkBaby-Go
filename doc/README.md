@@ -12,9 +12,10 @@ Agent 可调用工具干活（文件、命令、知识库、工作流、定时�
 | [01-总体架构.md](01-总体架构.md) | 双主机进程模型、分层与依赖方向、启动序列、存储语义、设计优势 |
 | [02-数据模型.md](02-数据模型.md) | 全部表与实体、ID/时间戳/字段命名约定、检查点与审批记录 |
 | [03-LLM适配层.md](03-LLM适配层.md) | Provider 接口、协议归一、错误分类与有界重试 |
-| [04-Agent与Harness内核.md](04-Agent与Harness内核.md) | ReAct 循环、事件体系、检查点幂等续跑、摘要压缩、子 Agent 委派 |
-| [05-工具系统.md](05-工具系统.md) | Tool 接口与风险分级、策略门与审批、内置工具清单 |
+| [04-Agent与Harness内核.md](04-Agent与Harness内核.md) | ReAct 循环、事件体系、检查点幂等续跑、摘要压缩、子 Agent 委派、六钩子 LoopHooks、失败数据化唯一出口 |
+| [05-工具系统.md](05-工具系统.md) | Tool 接口与风险分级、策略门与审批、内置工具清单、memory_write / run_workflow 等新增工具 |
 | [06-Skill与MCP.md](06-Skill与MCP.md) | Skill 约定与注入、MCP stdio 客户端与工具桥接 |
+| 能力接入契约（[01-总体架构 §3](../doc/01-总体架构.md)） | `internal/capability/`：Preload / Tools / Capture 三通道，Registry 串联装配 |
 | [07-聊天与会话.md](07-聊天与会话.md) | 流式主链路、SSE 事件契约与可靠性、审批/补充输入、续跑 |
 | [08-记忆系统.md](08-记忆系统.md) | 三层记忆、形成与召回、降级策略 |
 | [09-知识库与RAG.md](09-知识库与RAG.md) | Loader / Chunker / 索引 / 检索 |

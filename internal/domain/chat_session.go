@@ -18,6 +18,10 @@ type ChatSessionDO struct {
 	ProviderID    string        `gorm:"size:64;index"        json:"provider_id"`
 	Model         string        `gorm:"size:128"             json:"model"`
 	WorkspaceID   string        `gorm:"size:64;index"        json:"workspace_id"`
+	// WorkspacePath 会话绑定的外部工作目录（绝对路径；空 = 默认工作区）。
+	// 绑定后：file/doc/archive/skillrun 工具的沙箱根、工作区面板、exec 的默认 cwd 都指向该目录；
+	// 与 workspace_id（逻辑文件夹树关联 id，历史字段）语义无关。
+	WorkspacePath string `gorm:"size:512"             json:"workspace_path"`
 	Status        SessionStatus `gorm:"size:16"              json:"status"`
 	MessageCount  int           `gorm:"default:0"            json:"message_count"`
 	LastMessageAt int64         `gorm:"default:0"            json:"last_message_at"`
@@ -39,10 +43,11 @@ func (ChatSessionDO) TableName() string { return "chat_sessions" }
 
 // ChatSessionREQ 创建/更新请求。
 type ChatSessionREQ struct {
-	Name        string `json:"name"`
-	ProviderID  string `json:"provider_id"`
-	Model       string `json:"model"`
-	WorkspaceID string `json:"workspace_id"`
+	Name          string `json:"name"`
+	ProviderID    string `json:"provider_id"`
+	Model         string `json:"model"`
+	WorkspaceID   string `json:"workspace_id"`
+	WorkspacePath string `json:"workspace_path"`
 }
 
 // ChatSessionRenameREQ 仅重命名（PATCH 语义）。
@@ -70,6 +75,7 @@ type ChatSessionRESP struct {
 	ProviderID     string        `json:"provider_id"`
 	Model          string        `json:"model"`
 	WorkspaceID    string        `json:"workspace_id"`
+	WorkspacePath  string        `json:"workspace_path"`
 	Active         bool          `json:"active"`
 	MessageCount   int           `json:"message_count"`
 	LastMessageAt  int64         `json:"last_message_at"`

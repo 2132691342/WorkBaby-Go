@@ -4,8 +4,9 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Trash2, Eraser, FolderOpen, Pencil, Sparkles, ListTree, RefreshCw, Send, Crosshair, X } from '@/components/common/icons'
+import { Trash2, Eraser, FolderOpen, Pencil, Sparkles, ListTree, RefreshCw, Crosshair, X, Archive, MoreHorizontal, Square } from '@/components/common/icons'
 import { useChatStore, backendModeToPermission, type PermissionLevel } from '@/stores/chat'
+import { useTrustStore } from '@/stores/trust'
 import { useDialog } from '@/composables/useDialog'
 import { useToast } from '@/composables/useToast'
 import { useFocusMode } from '@/composables/useFocusMode'
@@ -21,6 +22,7 @@ import ContextRing from '@/components/chat/ContextRing.vue'
 import type { AvailableModel, ContextUsageRESP, Session } from '@/types/api'
 
 const chat = useChatStore()
+const trust = useTrustStore()
 const dialog = useDialog()
 const toast = useToast()
 const {
@@ -34,7 +36,8 @@ const {
   streamingStats,
   error,
   todoState,
-  contextUsage
+  contextUsage,
+  fileChanges
 } = storeToRefs(chat)
 
 const showWorkspace = ref(false)
@@ -140,7 +143,7 @@ watch(streaming, (now, prev) => {
 })
 
 // 当前会话的工作区路径（null = 默认工作区）
-const workspacePath = computed(() => currentSession.value?.workspace_id ?? null)
+const workspacePath = computed(() => currentSession.value?.workspace_path ?? null)
 const workspaceDisplay = computed(() => {
   const wp = workspacePath.value
   if (!wp) return t('chat.workspace.default')
@@ -266,10 +269,34 @@ function onQuickPrompt(text: string): void {
   chatInputRef.value?.setDraft(text)
 }
 
-/** 工作区选择器回调：绑定外部目录，传 null 表示解绑回默认工作区。 */
+/** 工作区选择器回调：绑定外部目录，传 null 表示解绑回默认工作区。
+ *  尚无会话时先创建会话再绑定（选择动作不丢失），避免「选了目录却不知绑到哪」的困惑。 */
 async function onPickWorkspace(path: string | null): Promise<void> {
+  showPicker.value = false
+  // 解绑且原目录是显式绑定的：提供撤销信任登记的选项（用户可能还要继续用，默认保留）
+  const prevPath = workspacePath.value
+  let revokeTrust = false
+  if (!path && prevPath) {
+    revokeTrust = await dialog.confirm({
+      title: t('chat.workspace.unbindTitle'),
+      content: t('chat.workspace.unbindRevokeHint', prevPath),
+      confirmText: t('chat.workspace.unbindRevokeYes')
+    })
+  }
   if (!currentID.value) {
-    showPicker.value = false
+    try {
+      await chat.createSession(selectedModelID.value ?? null, path)
+      toast.success(
+        path
+          ? t('chat.workspace.boundSuccess', path)
+          : t('chat.workspace.unboundSuccess')
+      )
+    } catch (e) {
+      toast.error(
+        t('chat.workspace.bindFailed'),
+        e instanceof Error ? e.message : String(e)
+      )
+    }
     return
   }
   try {
@@ -279,13 +306,15 @@ async function onPickWorkspace(path: string | null): Promise<void> {
         ? t('chat.workspace.boundSuccess', path)
         : t('chat.workspace.unboundSuccess')
     )
+    if (revokeTrust) {
+      const ok = await trust.revoke(prevPath as string)
+      if (ok) toast.success(t('chat.workspace.trustRevoked'))
+    }
   } catch (e) {
     toast.error(
       t('chat.workspace.bindFailed'),
       e instanceof Error ? e.message : String(e)
     )
-  } finally {
-    showPicker.value = false
   }
 }
 
@@ -326,6 +355,13 @@ function toggleTab(tab: 'workspace' | 'changes' | 'tasks'): void {
   showWorkspace.value = true
 }
 
+/** header「更多」菜单分发：压缩 / 清空 / 删除（低频危险操作统一入口）。 */
+function onHeaderCommand(cmd: string): void {
+  if (cmd === 'compact') onOpenCompact()
+  else if (cmd === 'clear') void onClearMessages()
+  else if (cmd === 'delete') void onDeleteSession()
+}
+
 /** 当前会话 Todo 是否有进展（用于控制卡片的入场动画/折叠态）。 */
 const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
 </script>
@@ -348,8 +384,12 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
             <Pencil class="ml-1 inline h-3 w-3 text-wb-muted opacity-0 transition-opacity hover-hover:opacity-100" />
           </h1>
           <div class="flex items-center gap-2 text-xs text-wb-muted">
-            <span class="inline-block h-1.5 w-1.5 rounded-full bg-wb-mint" />
-            <span>Agent · WorkBaby</span>
+            <!-- 运行态指示：执行中主色脉动，空闲静点 -->
+            <span class="relative inline-flex h-1.5 w-1.5">
+              <span v-if="streaming" class="absolute inline-flex h-full w-full animate-ping rounded-full bg-wb-primary opacity-60" />
+              <span class="relative inline-block h-1.5 w-1.5 rounded-full" :class="streaming ? 'bg-wb-primary' : 'bg-wb-mint'" />
+            </span>
+            <span>{{ streaming ? t('chat.running') : 'Agent · WorkBaby' }}</span>
             <span class="text-wb-border">·</span>
             <!-- 模型只读徽标 -->
             <span class="inline-flex items-center gap-1 rounded border border-wb-border bg-wb-surface px-1.5 py-0.5 text-[11px] text-wb-muted">
@@ -359,16 +399,29 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
         </div>
       </div>
 
-      <!-- 中间：workspace chip（点 → picker） -->
+      <!-- 中间：workspace chip（点 → picker）；绑定态主色高亮，与「默认工作区」一眼区分 -->
       <button
         type="button"
-        class="composer-chip inline-flex items-center gap-1.5 rounded-full border border-wb-border bg-wb-surface px-3 py-1 text-xs text-wb-muted transition-all hover:border-wb-primary hover:text-wb-primary-strong active:scale-95"
+        class="composer-chip inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-all active:scale-95"
+        :class="workspacePath
+          ? 'border-wb-primary/40 bg-wb-primary/10 text-wb-primary-strong hover:border-wb-primary'
+          : 'border-wb-border bg-wb-surface text-wb-muted hover:border-wb-primary hover:text-wb-primary-strong'"
         :title="workspacePath ?? t('chat.workspace.defaultFull')"
         @click="showPicker = true"
       >
-        <FolderOpen class="h-3 w-3 shrink-0 text-wb-primary" />
-        <span class="max-w-[200px] truncate font-medium text-wb-ink">{{ workspaceDisplay }}</span>
+        <FolderOpen
+          class="h-3 w-3 shrink-0"
+          :class="workspacePath ? 'text-wb-primary-strong' : 'text-wb-primary'"
+        />
+        <span class="max-w-[220px] truncate font-medium">{{ workspaceDisplay }}</span>
       </button>
+
+      <!-- 运行中：header 常驻停止入口，不必到输入框区寻找 -->
+      <el-tooltip v-if="streaming" :content="t('chat.stop')" placement="bottom">
+        <el-button type="danger" text circle @click="chat.cancelStream()">
+          <el-icon><Square /></el-icon>
+        </el-button>
+      </el-tooltip>
 
       <!-- 上下文占用环：与输入框同源 liveContextUsage，悬停展开分段详情 -->
       <ContextRing :usage="liveContextUsage" />
@@ -387,14 +440,21 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
 
       <div class="flex shrink-0 items-center gap-1">
         <el-tooltip :content="t('changes.title')" placement="bottom">
-          <el-button
-            :type="rightTab === 'changes' ? 'primary' : 'default'"
-            text
-            circle
-            @click="toggleTab('changes')"
+          <el-badge
+            :value="fileChanges.length"
+            :hidden="rightTab === 'changes' || fileChanges.length === 0"
+            :max="99"
+            :offset="[2, 6]"
           >
-            <el-icon><RefreshCw /></el-icon>
-          </el-button>
+            <el-button
+              :type="rightTab === 'changes' ? 'primary' : 'default'"
+              text
+              circle
+              @click="toggleTab('changes')"
+            >
+              <el-icon><RefreshCw /></el-icon>
+            </el-button>
+          </el-badge>
         </el-tooltip>
         <el-tooltip :content="t('tasks.title')" placement="bottom">
           <el-button
@@ -416,27 +476,26 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
             <el-icon><FolderOpen /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-tooltip :content="t('chat.compact')" placement="bottom">
-          <span class="inline-flex">
-            <el-button text circle :disabled="!currentID || streaming" @click="onOpenCompact">
-              <el-icon><Send /></el-icon>
-            </el-button>
-          </span>
-        </el-tooltip>
-        <el-tooltip :content="t('chat.clearSession')" placement="bottom">
-          <span class="inline-flex">
-            <el-button text circle :disabled="!currentID" @click="onClearMessages">
-              <el-icon><Eraser /></el-icon>
-            </el-button>
-          </span>
-        </el-tooltip>
-        <el-tooltip :content="t('chat.deleteSession')" placement="bottom">
-          <span class="inline-flex">
-            <el-button text circle :disabled="!currentID" @click="onDeleteSession">
-              <el-icon><Trash2 /></el-icon>
-            </el-button>
-          </span>
-        </el-tooltip>
+        <!-- 低频/危险操作收进「更多」菜单，降低 header 密度与误触 -->
+        <el-dropdown trigger="click" @command="onHeaderCommand">
+          <el-button text circle :title="t('chat.moreActions')">
+            <el-icon><MoreHorizontal /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="compact" :disabled="!currentID || streaming">
+                <el-icon><Archive /></el-icon>{{ t('chat.compact') }}
+              </el-dropdown-item>
+              <el-dropdown-item command="clear" :disabled="!currentID" divided>
+                <el-icon><Eraser /></el-icon>{{ t('chat.clearSession') }}
+              </el-dropdown-item>
+              <el-dropdown-item command="delete" :disabled="!currentID">
+                <el-icon class="text-wb-danger"><Trash2 /></el-icon>
+                <span class="text-wb-danger">{{ t('chat.deleteSession') }}</span>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </header>
 
@@ -510,7 +569,12 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
         <div class="min-h-0 flex-1">
           <FileChangesPanel v-if="rightTab === 'changes'" />
           <TaskCenterPanel v-else-if="rightTab === 'tasks'" />
-          <WorkspacePanel v-else :session_id="currentID" />
+          <WorkspacePanel
+            v-else
+            :session_id="currentID"
+            :workspace_path="workspacePath"
+            :pick="() => (showPicker = true)"
+          />
         </div>
       </aside>
     </div>

@@ -15,16 +15,27 @@ import (
 var hiddenWorkspacePrefixes = []string{"local/", ".workbaby/", ".index/"}
 
 // WorkspaceService 会话工作区文件面板：列目录 + 读取（沙箱）+ 内容类型推断。
+//
+// 面板根与工具链共用一套解析：会话绑定了外部目录就展示外部目录，
+// 否则展示默认工作区（workspacesRoot/{sessionID}）——否则「选了目录
+// 面板却是空的、Agent 却在外部目录干活」这种精神分裂会直接劝退用户。
 type WorkspaceService struct {
-	workspacesRoot string // {home}/workspaces
+	workspacesRoot string              // {home}/workspaces
+	resolve        func(string) string // 会话 → 工作区根；nil 或返回空 = 默认根
 }
 
-func NewWorkspaceService(workspacesRoot string) *WorkspaceService {
-	return &WorkspaceService{workspacesRoot: workspacesRoot}
+// NewWorkspaceService 构造；resolve 可空（全部走默认根）。
+func NewWorkspaceService(workspacesRoot string, resolve func(sessionID string) string) *WorkspaceService {
+	return &WorkspaceService{workspacesRoot: workspacesRoot, resolve: resolve}
 }
 
 // Dir 返回某会话的工作区根目录。
 func (s *WorkspaceService) Dir(sessionID string) string {
+	if s.resolve != nil {
+		if p := s.resolve(sessionID); p != "" {
+			return p
+		}
+	}
 	return filepath.Join(s.workspacesRoot, sessionID)
 }
 

@@ -62,6 +62,7 @@ WorkBaby/
 │   ├── tool/                     # ⑧ 工具系统（registry + exec/file/http/websearch/webfetch/...）
 │   ├── skill/                    # ⑨ Skill（parser/registry/builtin）
 │   ├── mcp/                      # ⑩ MCP stdio 客户端（client/adapter/manager）
+│   ├── capability/               # 能力接入：Preload（上下文注入）/ Tools（模型调用）/ Capture（run 后沉淀）三通道
 │   ├── memory/                   # ⑪ 记忆（三层 + formation + recall）
 │   ├── rag/                      # ⑫ 知识库（loader/chunker/indexer/retriever）
 │   ├── workflow/                 # ⑬ 工作流（graph/executor/validator/nodes/）
@@ -74,7 +75,8 @@ WorkBaby/
 │   ├── event/                    # ⑳ 应用内事件总线
 │   ├── db/                       # ㉑ SQLite 打开 + 迁移
 │   ├── pkg/                      # ㉒ 自研底层工具（叶子：无业务语义，AppError/ID/日志/路径/加密/HTTP 规则）
-│   └── tray/                     # ㉓ 系统托盘（Windows Win32 自研 + 非 Windows 空实现）
+│   ├── tray/                     # ㉓ 系统托盘（Windows Win32 自研 + 非 Windows 空实现）
+│   ├── singleinstance/           # ㉔ 单实例保护（命名互斥 + 本地 TCP IPC；非 Windows 空实现）
 │
 ├── frontend/                     # Vue 3 工程
 ├── assets/                       # 内置 Skill（embed）/ 图标 / 默认 sprite
@@ -176,7 +178,7 @@ return errors.New("provider not ready")   // 丢 code，前端无法分流
 | 2000–2999 | 配置 / 持久化 |
 | 3000–3999 | LLM / Provider |
 | 4000–4999 | 工具 / 命令审批 |
-| 5000–5999 | Agent / Harness |
+| 5000–5999 | Agent / Harness（含会话与消息编排） |
 | 6000–6999 | Memory |
 | 7000–7999 | Knowledge / RAG |
 | 8000–8999 | Skill / MCP |

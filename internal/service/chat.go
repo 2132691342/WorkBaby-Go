@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"WorkBaby/internal/capability"
 	"WorkBaby/internal/domain"
 	"WorkBaby/internal/event"
 	"WorkBaby/internal/harness"
@@ -29,8 +32,7 @@ type ChatService struct {
 	bus         *event.Bus
 	reg         *registry.Registry
 	tools       *ToolService
-	mem         *memory.Service
-	skills      *SkillService
+	mem         *memory.Service            // 上下文占用统计（/context 分段）读取长期记忆
 	trust       *TrustService              // 目录信任；nil = 关闭
 	mu          sync.Mutex                 // 串行化 session seq 自增与并发 run 拒绝
 	runs        *runRegistry               // 活动 run 注册中心（按 sessionID → cancel）；用于前端「停止」按钮
@@ -42,6 +44,17 @@ type ChatService struct {
 	steers      *steerQueue                // run 中用户新消息的注入队列（steering / follow-up）
 	seqMu       sync.Mutex                 // 保护 seqs
 	seqs        map[string]int64           // 会话消息序号分配水位（工具消息与注入消息统一分配，防撞号）
+	dataHome    string                     // 数据根（paths.Home）；目录策略默认根由此派生
+	caps        *capability.Registry       // 能力注册表：上下文装配 / 工具暴露 / run 后沉淀三条通道
+}
+
+// memoryCaptureTimeout run 后沉淀（记忆形成等）的独立超时。
+const memoryCaptureTimeout = 30 * time.Second
+
+// WithCapabilities 接入能力注册表；未接入时上下文装配与沉淀均为空操作。
+func (s *ChatService) WithCapabilities(caps *capability.Registry) *ChatService {
+	s.caps = caps
+	return s
 }
 
 // WithExecutionRegistry 启用执行平面：登记 run 的 scope/state，供统一执行拓扑查询。
@@ -90,6 +103,60 @@ func (s *ChatService) WithApprovalService(a *ApprovalService) *ChatService { s.a
 
 // WithTrustService 注入目录信任；仅在 harness 装配 PathTrust 时才生效。
 func (s *ChatService) WithTrustService(t *TrustService) *ChatService { s.trust = t; return s }
+
+// WithDataHome 注入数据根（paths.Home）；目录策略（记忆/快照默认根）由此派生。
+// 必须在装配会话级目录解析闭包前调用。
+func (s *ChatService) WithDataHome(home string) *ChatService {
+	s.dataHome = home
+	return s
+}
+
+// memoryEnabled 全局记忆开关：system_settings memory.enabled（默认 true；空值按 true）。
+func (s *ChatService) memoryEnabled(ctx context.Context) bool {
+	if s.setRepo == nil {
+		return true
+	}
+	row, err := s.setRepo.Get(ctx, domain.SettingKeyMemoryEnabled)
+	if err != nil || row == nil {
+		return true
+	}
+	return strings.TrimSpace(row.V) != "false"
+}
+
+// MemoryEnabled 记忆全局开关（能力装配方回调用）。
+func (s *ChatService) MemoryEnabled(ctx context.Context) bool { return s.memoryEnabled(ctx) }
+
+// SessionDataDirs 某会话的目录布局（目录策略唯一数据源）：
+//
+//	绑定本地工作区 {dir}：
+//	  memory   → {dir}/.workbaby/memory/{sessionID}/MEMORY.md
+//	  snapshot → {dir}/.workbaby/snapshots/{sessionID}
+//	默认工作区（未绑定）：
+//	  memory   → {dataHome}/memory/{sessionID}/MEMORY.md
+//	  snapshot → {dataHome}/snapshots/{sessionID}
+//
+// dataHome 未注入时回落默认会话根（仅测试兜底）。
+func (s *ChatService) SessionDataDirs(ctx context.Context, sessionID string) (memoryFile, snapshotDir string) {
+	home := s.dataHome
+	if home == "" {
+		home = "."
+	}
+	memoryFile = filepath.Join(home, "memory", sessionID, "MEMORY.md")
+	snapshotDir = filepath.Join(home, "snapshots", sessionID)
+	if sessionID == "" || s.sessions == nil {
+		return
+	}
+	row, err := s.sessions.GetByID(ctx, sessionID)
+	if err != nil || row == nil {
+		return
+	}
+	if wp := strings.TrimSpace(row.WorkspacePath); wp != "" {
+		dot := filepath.Join(wp, ".workbaby")
+		memoryFile = filepath.Join(dot, "memory", sessionID, "MEMORY.md")
+		snapshotDir = filepath.Join(dot, "snapshots", sessionID)
+	}
+	return
+}
 
 // gateInternalAllowTools 工具策略门显式放行清单：内部自带 fail-closed 审批（exec / skill 命令级门）
 // 或纯只读/信息型工具，避免与命令级审批双重弹窗；其余工具按 SessionMode × 风险默认裁决。
@@ -206,10 +273,10 @@ func (s *ChatService) emit(runID, sessionID, name string, payload map[string]any
 }
 
 // NewChatService 注入 repo、Registry、工具、记忆与 Skill 服务。
-func NewChatService(sessions *repo.ChatSessionRepo, messages *repo.MessageRepo, provRepo *repo.AiProviderRepo, setRepo *repo.SystemSettingRepo, usages *repo.TokenUsageRepo, bus *event.Bus, reg *registry.Registry, tools *ToolService, mem *memory.Service, skills *SkillService) *ChatService {
+func NewChatService(sessions *repo.ChatSessionRepo, messages *repo.MessageRepo, provRepo *repo.AiProviderRepo, setRepo *repo.SystemSettingRepo, usages *repo.TokenUsageRepo, bus *event.Bus, reg *registry.Registry, tools *ToolService, mem *memory.Service) *ChatService {
 	return &ChatService{
 		sessions: sessions, messages: messages, provRepo: provRepo, setRepo: setRepo, usages: usages,
-		bus: bus, reg: reg, tools: tools, mem: mem, skills: skills, runs: newRunRegistry(),
+		bus: bus, reg: reg, tools: tools, mem: mem, runs: newRunRegistry(),
 		steers: newSteerQueue(), seqs: map[string]int64{},
 	}
 }
@@ -250,6 +317,7 @@ func toSessionRESP(s *domain.ChatSessionDO) domain.ChatSessionRESP {
 		ProviderID:     s.ProviderID,
 		Model:          s.Model,
 		WorkspaceID:    s.WorkspaceID,
+		WorkspacePath:  s.WorkspacePath,
 		Active:         s.Status == domain.SessionStatusActive,
 		MessageCount:   s.MessageCount,
 		LastMessageAt:  s.LastMessageAt,
@@ -293,15 +361,21 @@ func toMessageRESP(m *domain.MessageDO) domain.MessageRESP {
 // 自动解析：用户在前端只看到「模型」（如 gpt-4o / claude-sonnet-4-5），不知道具体 provider id；
 // 这里用 provider_id 为空 + model 非空 的情况下，从 ai_providers 表查 model 字段精确匹配；
 // 都找不到则取第一个 enabled 的 provider。
+// workspace_path 非空时创建即绑定（校验 + 信任登记），保证「选目录 → 建会话」一次完成不丢动作。
 func (s *ChatService) CreateSession(ctx context.Context, req *domain.ChatSessionREQ) (*domain.ChatSessionRESP, error) {
+	wp, err := s.validateWorkspace(ctx, req.WorkspacePath)
+	if err != nil {
+		return nil, err
+	}
 	row := &domain.ChatSessionDO{
-		ID:          pkg.NewID(domain.IDSession),
-		Name:        req.Name,
-		UserID:      domain.LocalUserID,
-		ProviderID:  req.ProviderID,
-		Model:       req.Model,
-		WorkspaceID: req.WorkspaceID,
-		Status:      domain.SessionStatusActive,
+		ID:            pkg.NewID(domain.IDSession),
+		Name:          req.Name,
+		UserID:        domain.LocalUserID,
+		ProviderID:    req.ProviderID,
+		Model:         req.Model,
+		WorkspaceID:   req.WorkspaceID,
+		WorkspacePath: wp,
+		Status:        domain.SessionStatusActive,
 	}
 	if row.Name == "" {
 		row.Name = DefaultSessionName
@@ -402,17 +476,69 @@ func (s *ChatService) SetSessionPermission(ctx context.Context, id, mode string)
 	return &r, nil
 }
 
-func (s *ChatService) UpdateWorkspace(ctx context.Context, id, workspaceID string) (*domain.ChatSessionRESP, error) {
+// UpdateWorkspace 绑定/解绑会话的外部工作目录。
+//
+// 绑定即授权：目录经对话框显式选择，登记为 allow 信任（后续工具不再为它弹审批）。
+// 解绑（空路径）只清字段、不撤销已有信任登记——用户可能还要继续在原目录工作。
+func (s *ChatService) UpdateWorkspace(ctx context.Context, id, workspacePath string) (*domain.ChatSessionRESP, error) {
 	row, err := s.sessions.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	row.WorkspaceID = workspaceID
+	p, err := s.validateWorkspace(ctx, workspacePath)
+	if err != nil {
+		return nil, err
+	}
+	row.WorkspacePath = p
 	if err := s.sessions.Update(ctx, row); err != nil {
 		return nil, err
 	}
 	r := toSessionRESP(row)
 	return &r, nil
+}
+
+// validateWorkspace 校验并规范化外部工作目录（空 = 未绑定，返回空串）。
+// 非空时：NormalizeDir → 必须是真实存在的目录 → 登记 allow 信任（绑定即授权）。
+// CreateSession 与 UpdateWorkspace 共用，保证两条绑定路径行为一致。
+func (s *ChatService) validateWorkspace(ctx context.Context, workspacePath string) (string, error) {
+	p := strings.TrimSpace(workspacePath)
+	if p == "" {
+		return "", nil
+	}
+	dir, derr := NormalizeDir(p)
+	if derr != nil {
+		return "", derr
+	}
+	info, serr := os.Stat(dir)
+	if serr != nil || !info.IsDir() {
+		return "", pkg.New(1021, "workspace directory does not exist", dir)
+	}
+	if s.trust != nil {
+		if _, terr := s.trust.Decide(ctx, domain.WorkspaceTrustREQ{Path: dir, State: string(domain.TrustStateAllow)}); terr != nil {
+			pkg.L.Warn("auto trust workspace failed", "path", dir, "err", terr.Error())
+		}
+	}
+	return dir, nil
+}
+
+// WorkspaceRoot 某会话工具链的工作区根：绑定了外部目录用外部目录，否则用默认根。
+// handler 装配期把它包成 tool.RootResolver 注入文件类工具；默认根为空时返回空串
+// （由 tool.ResolveRoot 的调用方兜底），避免把「未配置」误判成「当前目录」。
+func (s *ChatService) WorkspaceRoot(ctx context.Context, sessionID, defRoot string) string {
+	if sessionID == "" {
+		return defRoot
+	}
+	row, err := s.sessions.GetByID(ctx, sessionID)
+	if err != nil || row == nil {
+		if err != nil {
+			pkg.L.Warn("workspace root resolve failed, fallback to default", "session", sessionID, "err", err.Error())
+		}
+		return defRoot
+	}
+	if p := strings.TrimSpace(row.WorkspacePath); p != "" {
+		return p
+	}
+	return defRoot
 }
 
 // UpdateSessionModel 切换会话使用的 Provider/模型（问题2：聊天输入框的思考强度/温度展示跟随所选模型）。
@@ -657,7 +783,7 @@ func (s *ChatService) SendStream(ctx context.Context, sessionID, content string,
 	}
 
 	// v1：chat 固定走 default Agent；前端 Agent 选择器待 P3 接入。
-	// 首轮（本会话此前无消息）用首条用户消息自动命名，让会话在列表里可辨认。
+	// 首条用户消息自动命名（无历史消息可推导时），让会话在列表里可辨认。
 	firstTurn := ses.MessageCount == 0
 	ids, err := s.prepareRun(ctx, ses, content, harness.ScopeChatTurn, defaultAgentName)
 	if err != nil {
@@ -967,32 +1093,24 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 		return harness.RunResult{Reason: harness.ReasonError, Err: err}
 	}
 
-	// ContextAssembler 装配 system 前缀：人设 → 长期记忆 → Skill 固定序
+	// 上下文装配：能力注册表按序注入（人格 → 工作区 → 记忆 → 知识库 → Skill → 工作流）。
+	// 新增能力只需实现 Capability 并注册，装配代码不随能力增加而膨胀。
 	asm := harness.NewContextAssembler()
-	if msg := def.PersonaSystemMessage(); msg != nil {
-		asm.Add(harness.ContextPiece{Key: "persona", Title: "角色", Body: msg.Content})
+	preload := &capability.PreloadCtx{
+		SessionID: ses.ID,
+		RunID:     runID,
+		UserInput: userInput,
+		Session:   ses,
+		Def:       def,
 	}
-	if s.mem != nil && def.Memory.Enabled {
-		if ltm := s.mem.LongTerm(ctx, ses.ID); ltm != "" {
-			asm.Add(harness.ContextPiece{Key: "memory", Title: "本会话长期记忆", Body: ltm})
-		}
-		// 跨会话召回：按本轮输入从三层记忆取相关条目，否则形成过的记忆永远进不了上下文
-		if recalled := s.recallText(ctx, userInput, def.Memory.RecallLimit); recalled != "" {
-			asm.Add(harness.ContextPiece{Key: "recall", Title: "相关记忆（自动召回，仅供参考）", Body: recalled})
-		}
+	for _, piece := range s.caps.PreloadAll(ctx, preload) {
+		asm.Add(piece)
 	}
-	// 压缩保留指示：写进会话元数据，每次 run 都装进 system——不受历史折叠影响
+	activeSkillTools := preload.State.SkillTools
+	// 压缩保留指示：写进会话元数据，每次 run 都装进 system——不受历史折叠影响；
+	// 置于末段，优先级高于各能力注入的内容
 	if ins := compactInstructions(ses); ins != "" {
 		asm.Add(harness.ContextPiece{Key: "compact", Title: "压缩保留指示", Body: ins})
-	}
-	var activeSkillTools []string
-	if s.skills != nil {
-		if name := s.skills.Match(userInput); name != "" {
-			if sk, ok := s.skills.Get(name); ok {
-				asm.Add(harness.ContextPiece{Key: "skill", Title: "触发 Skill「" + name + "」，请严格按其指导执行", Body: sk.Body})
-				activeSkillTools = sk.Tools
-			}
-		}
 	}
 	if sys := asm.Build(); sys != nil {
 		llmMsgs = append([]*llm.Message{sys}, llmMsgs...)
@@ -1296,11 +1414,35 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 		"updated_at":    nowMs,
 	})
 
-	// 记忆形成（仅 Agent 开启 Formation；coding/research 不沉淀到情景记忆）
-	if s.mem != nil && def.Memory.Formation {
-		go s.recordMemory(ses.ID, llmMsgs, userInput, res.Content)
-	}
+	// run 后沉淀（记忆形成等）：异步执行、独立超时，不阻塞响应；
+	// 各能力按自身策略决定是否沉淀（如 Agent 定义关闭 Formation 时记忆能力直接跳过）
+	s.caps.CaptureAll(&capability.CaptureCtx{
+		SessionID:  ses.ID,
+		RunID:      runID,
+		UserInput:  userInput,
+		Reply:      res.Content,
+		Transcript: captureTranscript(llmMsgs, userInput, res.Content),
+		Def:        def,
+	}, memoryCaptureTimeout)
 	return res
+}
+
+// captureTranscript 组装沉淀用的对话副本：本轮发送给 LLM 的消息 + 用户输入 + 最终回答。
+func captureTranscript(sent []*llm.Message, userInput, reply string) []llm.Message {
+	transcript := make([]llm.Message, 0, len(sent)+2)
+	for _, m := range sent {
+		if m == nil {
+			continue
+		}
+		transcript = append(transcript, *m)
+	}
+	if userInput != "" {
+		transcript = append(transcript, *llm.UserMessage(userInput))
+	}
+	if reply != "" {
+		transcript = append(transcript, *llm.AssistantMessage(reply, nil))
+	}
+	return transcript
 }
 
 // persistUsage 把每次 LLM 调用的用量落 token_usages。
@@ -1333,116 +1475,6 @@ func (s *ChatService) persistUsage(ctx context.Context, ses *domain.ChatSessionD
 	if err := s.usages.BatchCreate(ctx, rows); err != nil {
 		pkg.L.Warn("persist token usage failed", "runID", runID, "turns", len(rows), "err", err.Error())
 	}
-}
-
-// recallText 按本轮输入召回相关记忆并渲染为 system 段文本；无命中返回空。
-// 纯本地检索（FTS5 + RRF 打分），不调 LLM、不阻塞首 token。
-func (s *ChatService) recallText(ctx context.Context, query string, limit int) string {
-	if s.mem == nil || strings.TrimSpace(query) == "" {
-		return ""
-	}
-	hits := s.mem.Recall(ctx, query, memory.RecallOpts{TopK: limit})
-	if len(hits) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	for i := range hits {
-		sb.WriteString("- [")
-		sb.WriteString(string(hits[i].Kind))
-		sb.WriteString("] ")
-		if hits[i].Title != "" {
-			sb.WriteString(hits[i].Title)
-			sb.WriteString("：")
-		}
-		sb.WriteString(truncateRunes(hits[i].Snippet, 200))
-		sb.WriteString("\n")
-	}
-	return strings.TrimSpace(sb.String())
-}
-
-// recordMemory 记忆形成：评估本次对话 → 情景记忆落库 + 长期记忆追加。
-// transcript 用本轮发送给 LLM 的消息 + 最终回答组装。
-func (s *ChatService) recordMemory(sessionID string, sent []*llm.Message, userInput, reply string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	transcript := make([]llm.Message, 0, len(sent)+2)
-	for _, m := range sent {
-		if m == nil {
-			continue
-		}
-		transcript = append(transcript, *m)
-	}
-	if userInput != "" {
-		transcript = append(transcript, *llm.UserMessage(userInput))
-	}
-	if reply != "" {
-		transcript = append(transcript, *llm.AssistantMessage(reply, nil))
-	}
-
-	result := s.mem.Evaluate(ctx, sessionID, transcript)
-	// 情景记忆
-	if result.Episode != nil {
-		if _, err := s.mem.WriteEpisode(ctx, *result.Episode); err != nil {
-			pkg.L.Warn("write episode failed", "session", sessionID, "err", err.Error())
-		}
-	}
-	// 语义记忆（v2）：用户偏好 / 明确要记住
-	for i := range result.Semantic {
-		if _, err := s.mem.WriteFact(ctx, result.Semantic[i]); err != nil {
-			pkg.L.Warn("write fact failed", "session", sessionID, "err", err.Error())
-		}
-	}
-	// 程序记忆（v2）：多步工具调用流程
-	for i := range result.Procedural {
-		if _, err := s.mem.WriteProcedure(ctx, result.Procedural[i]); err != nil {
-			pkg.L.Warn("write procedure failed", "session", sessionID, "err", err.Error())
-		}
-	}
-	// 长期记忆 delta：本次对话要点（首用户 + 末助手，模板生成）
-	if delta := makeLongTermDelta(transcript); delta != "" {
-		if err := s.mem.AppendLongTerm(ctx, sessionID, delta); err != nil {
-			pkg.L.Warn("append long-term failed", "session", sessionID, "err", err.Error())
-		}
-	}
-}
-
-// makeLongTermDelta v1 模板：首条用户消息 + 末条助手消息 + 工具使用。
-func makeLongTermDelta(transcript []llm.Message) string {
-	var firstUser, lastAssistant, tools []string
-	for _, m := range transcript {
-		switch m.Role {
-		case llm.RoleUser:
-			if m.Content != "" && len(firstUser) == 0 {
-				firstUser = append(firstUser, truncateRunes(m.Content, 200))
-			}
-		case llm.RoleAssistant:
-			if m.Content != "" {
-				lastAssistant = []string{truncateRunes(m.Content, 200)}
-			}
-			for _, tc := range m.ToolCalls {
-				tools = append(tools, tc.Function.Name)
-			}
-		case llm.RoleTool:
-			if m.ToolName != "" {
-				tools = append(tools, m.ToolName)
-			}
-		}
-	}
-	out := ""
-	if len(firstUser) > 0 {
-		out += "用户: " + firstUser[0]
-	}
-	if len(lastAssistant) > 0 {
-		if out != "" {
-			out += "\n"
-		}
-		out += "助手: " + lastAssistant[0]
-	}
-	if len(tools) > 0 {
-		out += "\n使用工具: " + joinUnique(tools)
-	}
-	return out
 }
 
 // toLLMMessages 历史消息 → llm.Message；重建 assistant 的工具调用与 tool 消息上下文。
@@ -1504,28 +1536,8 @@ func (s *ChatService) failRun(ctx context.Context, runID, sessionID, assistantMs
 	})
 }
 
-// truncateRunes 按 rune 截断（中文安全）。
-func truncateRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
-}
-
-// joinUnique 去重后按逗号拼接。
-func joinUnique(items []string) string {
-	seen := map[string]bool{}
-	var out []string
-	for _, it := range items {
-		if it == "" || seen[it] {
-			continue
-		}
-		seen[it] = true
-		out = append(out, it)
-	}
-	return strings.Join(out, ", ")
-}
+// truncateRunes 按 rune 截断（中文安全）；统一走叶子工具包实现。
+func truncateRunes(s string, n int) string { return pkg.TruncateRunes(s, n) }
 
 // truncate / splitReply。
 var _ = strings.Builder{}

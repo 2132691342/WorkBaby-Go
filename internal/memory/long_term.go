@@ -15,16 +15,24 @@ import (
 const maxLongTermBytes = 100 << 10
 
 // longTerm 长期记忆：每会话一个 MEMORY.md 文件。
+// 默认落在 {home}/memory/{sessionID}/MEMORY.md；装配方可注入 resolve 覆盖落点
+// （如会话绑定了外部工作目录时改放 {目录}/.workbaby/memory/）。
 type longTerm struct {
-	root string // {home}/workspaces
+	root    string                        // 默认记忆根 {home}/memory
+	resolve func(sessionID string) string // 可选：返回某会话 MEMORY.md 绝对路径；nil = 默认根推导
 }
 
 func newLongTerm(home string) *longTerm {
-	return &longTerm{root: filepath.Join(home, "workspaces")}
+	return &longTerm{root: filepath.Join(home, "memory")}
 }
 
 // Path 返回某会话的 MEMORY.md 路径。
 func (l *longTerm) Path(sessionID string) string {
+	if l.resolve != nil {
+		if p := l.resolve(sessionID); p != "" {
+			return p
+		}
+	}
 	return filepath.Join(l.root, sessionID, "MEMORY.md")
 }
 

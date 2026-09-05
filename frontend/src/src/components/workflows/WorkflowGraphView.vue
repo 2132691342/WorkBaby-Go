@@ -13,6 +13,7 @@ import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
 import { useWorkflowGraphStore } from '@/stores/workflowGraph'
 import { useWorkflowsStore } from '@/stores/workflows'
+import { useChatStore } from '@/stores/chat'
 import { useDialog } from '@/composables/useDialog'
 import { apiGet } from '@/api/client'
 import type { AiProvider, ToolInfo, WorkflowNodeField } from '@/types/api'
@@ -23,6 +24,7 @@ const props = defineProps<{ workflow_id: string }>()
 
 const store = useWorkflowGraphStore()
 const wfStore = useWorkflowsStore()
+const chat = useChatStore() // model 下拉数据源：用户已配置的模型列表
 const dialog = useDialog()
 const { vfNodes, vfEdges, nodeTypes, graphOutputs, error, loading, saving, saveError, selectedNodeID } = storeToRefs(store)
 
@@ -141,11 +143,13 @@ watch(selectedNodeID, () => {
   draft.value = d
 })
 
-/** select 选项：schema 静态 options 优先；providerID / toolName 走动态数据。 */
+/** select 选项：schema 静态 options 优先；providerID / toolName / model 走动态数据。 */
 function fieldOptions(f: WorkflowNodeField): string[] {
   if (f.options && f.options.length > 0) return f.options
   if (f.name === 'providerID') return providers.value.map((p) => p.id)
   if (f.name === 'toolName') return toolList.value.map((x) => x.name)
+  // model 下拉：小白记不住模型名，直接从已配置模型取（跨 provider 去重）
+  if (f.name === 'model') return [...new Set(chat.models.map((m) => m.model))]
   return []
 }
 
@@ -547,9 +551,9 @@ watch(() => props.workflow_id, (id) => {
             class="!w-full"
             @update:model-value="(v: number | undefined) => onFieldInput(f, v)"
           />
-          <!-- select -->
+          <!-- select（model 虽为 string 类型也走下拉：小白记不住模型名） -->
           <el-select
-            v-else-if="f.type === 'select'"
+            v-else-if="f.type === 'select' || f.name === 'model'"
             :model-value="fieldValue(f) as string"
             clearable
             filterable

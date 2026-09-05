@@ -56,7 +56,8 @@ func (r *Registry) Build(ps []domain.AiProviderDO, decAPIKey func(encrypted stri
 func buildOne(p domain.AiProviderDO, key string) (llm.Provider, *pkg.AppError) {
 	switch p.Kind {
 	case domain.ProviderKindOpenAI:
-		return openai.New(p.Name, p.BaseURL, key), nil
+		style := llm.ResolveThinkingStyle(p.ThinkingStyle, p.BaseURL, p.Model)
+		return openai.New(p.Name, p.BaseURL, key).WithThinkingStyle(style), nil
 	case domain.ProviderKindAnthropic:
 		return anthropic.New(p.Name, p.BaseURL, key), nil
 	case domain.ProviderKindOllama:

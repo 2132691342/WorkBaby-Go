@@ -27,6 +27,7 @@ import DOMPurify from 'dompurify'
 import { useThrottledContent } from '@/composables/useThrottledContent'
 import { setupMarkdown } from '@/markdown/setup'
 import { enhanceMarkdown, decorateCodeBlocks, codeTextForCopy } from '@/markdown/enhance'
+import { stripThinkBlocks } from '@/chat/models/blocks'
 import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
 
@@ -69,7 +70,8 @@ const mdFinal = setupMarkdown(new MarkdownIt({
 
 // ===== 流式节流 =====
 const streamingRef = computed(() => props.streaming === true)
-const contentRef = computed(() => props.content)
+// 渲染前剥离 <think> 块：兼容端点把推理写进正文（原生 thinking 走独立通道）
+const contentRef = computed(() => stripThinkBlocks(props.content))
 const throttledContent = useThrottledContent(contentRef, streamingRef)
 
 // ===== 渲染 =====

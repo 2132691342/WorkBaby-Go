@@ -13,6 +13,18 @@ export const Activity = createIcon('Activity', [
   ['path', { d: 'M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2' }],
 ])
 
+export const Archive = createIcon('Archive', [
+  ['rect', { width: '20', height: '5', x: '2', y: '3', rx: '1' }],
+  ['path', { d: 'M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8' }],
+  ['path', { d: 'M10 12h4' }],
+])
+
+export const MoreHorizontal = createIcon('MoreHorizontal', [
+  ['circle', { cx: '12', cy: '12', r: '1', fill: 'currentColor' }],
+  ['circle', { cx: '19', cy: '12', r: '1', fill: 'currentColor' }],
+  ['circle', { cx: '5', cy: '12', r: '1', fill: 'currentColor' }],
+])
+
 export const AtSign = createIcon('AtSign', [
   ['circle', { cx: '12', cy: '12', r: '4' }],
   ['path', { d: 'M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8' }],

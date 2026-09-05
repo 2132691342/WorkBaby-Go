@@ -24,12 +24,13 @@ import {
   Sparkles,
   ChevronDown
 } from '@/components/common/icons'
-import { apiGet } from '@/api/client'
+import { apiGet, apiPost } from '@/api/client'
 import { UploadFile, OpenFileDialog } from '@/wailsjs/go/main/App'
 import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
-import type { AvailableModel, CircuitState, EffectiveParams, FileInfo, QueuedMessage } from '@/types/api'
+import { ElMessageBox } from 'element-plus'
+import type { AvailableModel, CircuitState, EffectiveParams, FileInfo, Message, QueuedMessage } from '@/types/api'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import AttachmentStrip from '@/components/chat/composer/AttachmentStrip.vue'
 import SlashCommandPalette, { type SlashCommand } from '@/components/chat/composer/SlashCommandPalette.vue'
@@ -390,8 +391,7 @@ function pickSlash(cmd: SlashCommand): void {
   slashOpen.value = false
   switch (cmd.id) {
     case 'clear':
-      draft.value = ''
-      toast.info(t('slash.cleared'))
+      void clearSession()
       break
     case 'new':
       emit('send', '__wb_new_session__', [], currentParams())
@@ -419,19 +419,19 @@ function pickSlash(cmd: SlashCommand): void {
       void runCompact()
       break
     case 'tasks':
-      toast.info(t('slash.tasksHint'))
+      void router.push('/tasks')
       break
     case 'agent':
-      toast.info(t('slash.agentHint'))
+      void submitAgentTask()
       break
     case 'trust':
       toast.info(t('slash.trustHint', t(permissionLabel.value)))
       break
     case 'export':
-      toast.info(t('slash.exportHint'))
+      void exportSessionMd()
       break
     case 'help':
-      toast.info(t('slash.helpHint'))
+      void showHelp()
       break
     default:
       // 后端命令：默认清空 + 提示。后端暂无专用接口的命令不会出现在面板
@@ -451,6 +451,103 @@ async function runCompact(): Promise<void> {
   } else {
     toast.error(t('slash.compactFailed'))
   }
+}
+
+/** /clear：真正清空当前会话消息（复用会话删除级联，后端持久化）。 */
+async function clearSession(): Promise<void> {
+  const id = chat.currentID
+  if (!id) {
+    toast.warning(t('chat.noSession'))
+    return
+  }
+  try {
+    await chat.clearMessages()
+    toast.success(t('slash.cleared'))
+  } catch (e) {
+    toast.error(t('chat.operationFailed'), e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** /export：把当前会话导出为本地 Markdown 文件（浏览器 Blob 下载）。 */
+async function exportSessionMd(): Promise<void> {
+  const id = chat.currentID
+  if (!id) {
+    toast.warning(t('chat.noSession'))
+    return
+  }
+  try {
+    const rows = await apiGet<{ items?: Message[] }>(`/api/v1/chat/sessions/${id}/messages?limit=1000`)
+    const items = rows?.items ?? []
+    if (items.length === 0) {
+      toast.info(t('slash.exportEmpty'))
+      return
+    }
+    const lines: string[] = ['# WorkBaby 会话导出', '']
+    for (const m of items) {
+      const who = m.role === 'user' ? '你' : 'WorkBaby'
+      const when = m.created_at ? new Date(m.created_at).toLocaleString() : ''
+      lines.push(`## ${who} ${when ? '· ' + when : ''}`, '')
+      if (m.thinking) lines.push(`> 思考：\n> ${m.thinking.replace(/\n/g, '\n> ')}`, '')
+      lines.push(m.content ?? '', '')
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `workbaby-${new Date().toISOString().slice(0, 10)}.md`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success(t('slash.exportDone'))
+  } catch (e) {
+    toast.error(t('slash.exportFailed'), e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** /agent：把一段子任务交给后台 Agent 跑（worker 执行，任务中心可看进度与结果）。 */
+async function submitAgentTask(): Promise<void> {
+  const id = chat.currentID
+  if (!id) {
+    toast.warning(t('chat.noSession'))
+    return
+  }
+  try {
+    const { value } = await ElMessageBox.prompt(
+      t('slash.agentPromptTip'),
+      t('slash.agentTitle'),
+      {
+        inputType: 'textarea',
+        inputPlaceholder: t('slash.agentPlaceholder'),
+        confirmButtonText: t('slash.agentSubmit'),
+        cancelButtonText: t('ui.btn.cancel')
+      }
+    )
+    const prompt = String(value ?? '').trim()
+    if (!prompt) return
+    await apiPost('/api/v1/tasks', { session_id: id, agent: '', prompt })
+    toast.success(t('slash.agentSubmitted'))
+    void router.push('/tasks')
+  } catch (e) {
+    if (e === 'cancel') return // 用户主动取消，不算失败
+    toast.error(t('slash.agentFailed'), e instanceof Error ? e.message : String(e))
+  }
+}
+
+/** /help：弹出命令清单（所有可执行命令与去向一目了然）。 */
+async function showHelp(): Promise<void> {
+  await ElMessageBox.alert(
+    `<div style="line-height:1.9;font-size:13px">
+      <b>/new</b> 新建会话<br/>
+      <b>/clear</b> 清空当前会话<br/>
+      <b>/compact</b> 压缩历史（后端摘要）<br/>
+      <b>/model</b> 切换模型 · <b>/workspace</b> 绑定目录 · <b>/theme</b> 外观<br/>
+      <b>/attach</b> 添加附件 · <b>/regenerate</b> 重新生成 · <b>/focus</b> 聚焦输入<br/>
+      <b>/export</b> 导出会话 Markdown · <b>/tasks</b> 后台任务 · <b>/agent</b> 子代理<br/>
+      <b>/trust</b> 查看权限 · <b>/help</b> 本帮助<br/>
+      <span style="color:#888">输入 <code>/</code> 实时列出，输入 <code>@</code> 可引用技能/文件夹/文件</span>
+    </div>`,
+    t('slash.helpTitle'),
+    { dangerouslyUseHTMLString: true, confirmButtonText: t('ui.btn.ok') }
+  )
 }
 
 function autoResize(): void {
