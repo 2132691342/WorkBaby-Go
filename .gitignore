@@ -10,6 +10,13 @@
 # Wails
 /build/darwin/
 /build/windows/
+# 安装脚本源码入库（installer/tmp 等构建产物仍忽略）
+!/build/windows/
+/build/windows/*
+!/build/windows/installer/
+/build/windows/installer/*
+!/build/windows/installer/*.nsi
+!/build/windows/installer/*.nsh
 
 # Runtimes（归档经 Git LFS 跟踪，见 .gitattributes）
 /runtimes/*.7z
