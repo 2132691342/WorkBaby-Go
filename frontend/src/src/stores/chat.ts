@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { apiGet, apiPost } from '@/api/client'
 import { streamChat, type StreamHandle } from '@/api/stream'
 import { toolsToBlocks } from '@/chat/models/blocks'
+import { mergeLoadedMessages, resolveRunAssistant, toUiMessages } from '@/chat/models/merge'
 import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
 import type {
@@ -138,11 +139,17 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /** 拉取序号：并发/重连时只有最新一次拉取可写入，过期响应直接丢弃。 */
+  let loadSeq = 0
+
   async function loadMessages(id: string, opts?: { replace?: boolean }): Promise<void> {
+    const seq = ++loadSeq
     // 后端返回分页结构 { items, total, next_seq }（MessageListRESP），
     // 这里先取 items 再与本地乐观消息合并，避免把整包对象当数组喂给 v-for
     const resp = await apiGet<{ items: ApiMessage[]; total: number; next_seq: number }>(`/api/v1/chat/sessions/${id}/messages?limit=200`)
-    const loaded = Array.isArray(resp?.items) ? resp.items : []
+    // 已有更新的拉取发起 → 本次结果过期，丢弃（防止慢响应把新快照覆盖回旧快照）
+    if (seq !== loadSeq) return
+    const loaded = toUiMessages(Array.isArray(resp?.items) ? resp.items : [])
     // replace：流式收尾以权威快照为准——乐观占位与权威内容的前缀匹配在多轮 ReAct /
     // <think> 场景下不可靠，merge 残留会让同一回复出现两条
     messages.value = opts?.replace ? loaded : mergeLoadedMessages(messages.value, loaded)
@@ -158,45 +165,7 @@ export const useChatStore = defineStore('chat', () => {
     return `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   }
 
-  /** 乐观消息与权威消息的配对键（同角色 + 前 120 字相同视为同一条）。 */
-  function contentKey(m: ApiMessage): string {
-    return `${m.role}|${(m.content ?? '').slice(0, 120)}`
-  }
 
-  function mergeLoadedMessages(local: ApiMessage[], loaded: ApiMessage[]): ApiMessage[] {
-    if (local.length === 0) return loaded
-    const byContent = new Map<string, ApiMessage>()
-    const byID = new Map<string, ApiMessage>()
-    for (const m of loaded) {
-      const k = contentKey(m)
-      if (!byContent.has(k)) byContent.set(k, m)
-      byID.set(m.id, m)
-    }
-    const result: ApiMessage[] = []
-    const consumed = new Set<string>()
-    for (const m of local) {
-      if (m.id.startsWith('local-')) {
-        const hit = byContent.get(contentKey(m))
-        if (hit && !consumed.has(hit.id)) {
-          result.push(hit)
-          consumed.add(hit.id)
-          continue
-        }
-        result.push(m)
-        continue
-      }
-      const hit = byID.get(m.id)
-      if (hit) {
-        result.push(hit)
-        consumed.add(hit.id)
-      }
-      // 权威已无此 id → 消息已被删除/截断，丢弃
-    }
-    for (const m of loaded) {
-      if (!consumed.has(m.id)) result.push(m)
-    }
-    return result
-  }
 
   /** 加载可切换的模型列表（provider + 模型两级聚合）。 */
   async function loadModels(): Promise<void> {
@@ -830,11 +799,11 @@ export const useChatStore = defineStore('chat', () => {
         artifacts,
         tasks
       })
-      // 终态即收尾：done/error 到达后立即关闭流式气泡并以权威快照替换，
-      // 不再等 handle.promise——消除「正式消息 + 流式气泡」并存的重影窗口
-      if (update.setStopReason !== undefined && currentID.value) {
+      // 终态即收尾：立即关闭流式气泡，消除「流式气泡 + 权威消息」重影窗口。
+      // 权威快照由 sendMessage / resumeRun 在 handle.promise 结束后统一拉一次——
+      // 这里再发一次请求会与前者并发且返回顺序不定，过期响应由 loadSeq 守卫丢弃。
+      if (update.setStopReason !== undefined) {
         streaming.value = false
-        void safeLoadMessages(currentID.value, { replace: true })
       }
     }
   })
@@ -859,42 +828,30 @@ export const useChatStore = defineStore('chat', () => {
       streamingTools.value.length > 0 ||
       streamingArtifacts.value !== null ||
       streamingGenUi.value !== null
-    const last = messages.value[messages.value.length - 1]
-    if (last && last.role === 'assistant') {
-      if (!last.content || last.content.trim().length === 0) {
-        last.content = content || errText || t('chat.streamFailedPlaceholder')
-        last.status = 'completed'
-        last.updated_at = Date.now()
-      }
-      // 兜底：权威快照若尚未带上过程块，用本地流式累积还原（chat:done 先于落库完成的窗口期）
-      if ((!last.blocks || last.blocks.length === 0) && streamingTools.value.length > 0) {
-        last.blocks = toolsToBlocks(streamingTools.value, last.id)
-      }
-      return
-    }
-    if (messages.value.length === 0 && hasPayload) {
-      const fallback = content || errText || t('chat.streamFailedPlaceholder')
-      messages.value.push({
-        id: genLocalID(),
-        session_id: sessionID,
-        role: 'assistant',
-        content: fallback,
-        status: 'completed',
-        model: null,
-        created_at: Date.now(),
-        updated_at: Date.now()
-      } as unknown as ApiMessage)
-      return
-    }
     if (!hasPayload && !error.value) return
-    // 去重守卫：权威快照已含同内容 assistant 消息时不再 push（防双写重复）
-    const tail = messages.value[messages.value.length - 1]
-    if (tail && tail.role === 'assistant' && (tail.content ?? '').trim() === content) return
+
+    // 权威快照已替换 messages，本 run 回复的落位由 resolveRunAssistant 判定：
+    // dedupe=权威已含（绝不本地再 push） / fill=空占位补正文 / missing=本地兜底
+    const verdict = resolveRunAssistant(messages.value, content)
+    if (verdict === 'dedupe') return
+    if (verdict !== 'missing') {
+      const m = verdict.message
+      m.content = content || errText || t('chat.streamFailedPlaceholder')
+      m.status = 'completed'
+      m.updated_at = Date.now()
+      // 兜底：权威快照若尚未带上过程块，用本地流式累积还原（chat:done 先于落库完成的窗口期）
+      if ((!m.blocks || m.blocks.length === 0) && streamingTools.value.length > 0) {
+        m.blocks = toolsToBlocks(streamingTools.value, m.id)
+      }
+      return
+    }
+    // missing：仅当确有内容/错误可展示时才本地兜底，避免塞无意义的占位气泡
+    if (!content && !errText) return
     const msg = {
       id: genLocalID(),
       session_id: sessionID,
       role: 'assistant',
-      content: content || shortErrorText() || t('chat.streamFailedPlaceholder'),
+      content: content || errText || t('chat.streamFailedPlaceholder'),
       status: 'completed',
       model: null,
       created_at: Date.now(),

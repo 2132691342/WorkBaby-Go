@@ -1,4 +1,5 @@
 import { ElMessageBox } from 'element-plus'
+import { t } from '@/i18n'
 
 /**
  * 全局确认/输入弹窗：Promise 化 API，底层由 ElementPlus `ElMessageBox` 渲染。
@@ -29,8 +30,8 @@ const dialogApi: DialogApi = {
     try {
       await ElMessageBox.confirm(options.content ?? '', options.title, {
         type: options.danger ? 'warning' : 'info',
-        confirmButtonText: options.confirmText ?? '确认',
-        cancelButtonText: options.cancelText ?? '取消',
+        confirmButtonText: options.confirmText ?? t('ui.btn.confirm'),
+        cancelButtonText: options.cancelText ?? t('ui.btn.cancel'),
         confirmButtonClass: options.danger ? 'el-button--danger' : '',
         showClose: false,
         closeOnClickModal: false
@@ -46,9 +47,9 @@ const dialogApi: DialogApi = {
       const { value } = await ElMessageBox.prompt(options.content ?? '', options.title, {
         inputValue: options.defaultValue ?? '',
         inputPlaceholder: options.placeholder,
-        inputValidator: (v: string) => v.trim().length > 0 || '输入不能为空',
-        confirmButtonText: options.confirmText ?? '确认',
-        cancelButtonText: options.cancelText ?? '取消',
+        inputValidator: (v: string) => v.trim().length > 0 || t('ui.msg.inputRequired'),
+        confirmButtonText: options.confirmText ?? t('ui.btn.confirm'),
+        cancelButtonText: options.cancelText ?? t('ui.btn.cancel'),
         closeOnClickModal: false
       })
       return value ?? null
@@ -61,7 +62,7 @@ const dialogApi: DialogApi = {
     try {
       await ElMessageBox.alert(options.content ?? '', options.title, {
         type: 'info',
-        confirmButtonText: options.confirmText ?? '知道了',
+        confirmButtonText: options.confirmText ?? t('ui.btn.ok'),
         closeOnClickModal: true
       })
       return true

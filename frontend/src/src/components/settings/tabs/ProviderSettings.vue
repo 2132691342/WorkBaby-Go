@@ -100,14 +100,14 @@ function circuitBadge(p: AiProvider): { label: string; cls: string } | null {
   const s = circuitStates.value.get(p.id)
   if (!s) return null
   if (!p.enabled) {
-    return { label: '已禁用', cls: 'bg-wb-surface-2 text-wb-muted' }
+    return { label: t('common.disabled'), cls: 'bg-wb-surface-2 text-wb-muted' }
   }
   if (s.state === 'OPEN') {
-    const reason = s.reason || '未就绪（缺少 API Key 或连接配置）'
-    return { label: `不可用：${reason}`, cls: 'bg-wb-danger/15 text-wb-danger' }
+    const reason = s.reason || t('provider.not_ready')
+    return { label: t('provider.unavailable', reason), cls: 'bg-wb-danger/15 text-wb-danger' }
   }
   if (s.state === 'HALF_OPEN') {
-    return { label: '半开探活中', cls: 'bg-wb-warning/15 text-wb-warning' }
+    return { label: t('provider.half_open'), cls: 'bg-wb-warning/15 text-wb-warning' }
   }
   // CLOSED 不显示徽标（默认健康状态）
   return null

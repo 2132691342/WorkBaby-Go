@@ -28,6 +28,7 @@ import { useThrottledContent } from '@/composables/useThrottledContent'
 import { setupMarkdown } from '@/markdown/setup'
 import { enhanceMarkdown, decorateCodeBlocks, codeTextForCopy } from '@/markdown/enhance'
 import { stripThinkBlocks } from '@/chat/models/blocks'
+import { openExternal } from '@/api/shellBridge'
 import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
 
@@ -149,11 +150,25 @@ async function enhance(): Promise<void> {
 }
 
 /**
- * 代码块复制按钮的一次性事件委托。
+ * 容器内点击的一次性事件委托。
  * v-html 重写的是容器的 innerHTML，容器自身的监听器始终存活，故挂一次即可覆盖全部重渲染。
- * 复制按钮位于 details>summary 内时需阻断 summary 的折叠切换。
+ *
+ * <p>两类拦截：
+ * <ul>
+ *   <li>链接：一律 preventDefault 后交系统浏览器打开——WebView 内导航会把
+ *       整个 SPA 页面替换掉，应用随之假死；</li>
+ *   <li>代码块复制按钮：位于 details&gt;summary 内时需阻断 summary 的折叠切换。</li>
+ * </ul>
  */
 function onBodyClick(e: MouseEvent): void {
+  const target = e.target instanceof Element ? e.target : null
+  const link = target?.closest('a[href]')
+  if (link) {
+    e.preventDefault()
+    e.stopPropagation()
+    void openExternal(link.getAttribute('href') ?? '')
+    return
+  }
   const text = codeTextForCopy(e.target)
   if (text === null) return
   e.preventDefault()

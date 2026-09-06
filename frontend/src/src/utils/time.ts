@@ -13,6 +13,7 @@
  *
  * <p>所有函数对 null / 空串 / 非法串统一返回 {@code '—'}，调用方无需再做判空。
  */
+import { t } from '@/i18n'
 
 /** 空值与非法值的统一占位符。 */
 export const TIME_EMPTY = '—'
@@ -56,7 +57,7 @@ export function formatRelativeTime(iso: string | number | null | undefined): str
   const now = new Date()
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
   if (d.getTime() >= startOfToday) return hm
-  if (d.getTime() >= startOfToday - 86400000) return `昨天 ${hm}`
+  if (d.getTime() >= startOfToday - 86400000) return `${t('common.yesterday')} ${hm}`
   if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}/${d.getDate()} ${hm}`
   return formatDateTime(iso)
 }

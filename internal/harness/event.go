@@ -82,15 +82,17 @@ type RunDonePayload struct {
 	Usage      UsagePayload `json:"usage"`
 }
 
-// ErrorPayload 失败事件。
+// ErrorPayload 失败事件。Kind 为机器可读错误类别（timeout/rate_limited/auth/
+// context_length/connection/upstream），前端据此分流文案；Message 尾部附可操作提示。
 type ErrorPayload struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Kind    string `json:"kind,omitempty"`
 }
 
 // RetryPayload 建流瞬时错误退避重试事件（前端展示「限流，N 秒后自动重试」）。
 type RetryPayload struct {
-	Attempt  int    `json:"attempt"`
-	DelayMs  int64  `json:"delay_ms"`
-	Reason   string `json:"reason"`
+	Attempt int    `json:"attempt"`
+	DelayMs int64  `json:"delay_ms"`
+	Reason  string `json:"reason"`
 }

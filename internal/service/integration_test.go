@@ -11,14 +11,12 @@ import (
 	"WorkBaby/internal/tool"
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"os"
 	"path/filepath"
-	"regexp"
 	"testing"
 	"time"
 )
@@ -108,7 +106,6 @@ func TestMcpServiceEnvIsEncryptedAndMasked(t *testing.T) {
 	}
 }
 
-
 // TestMcpServiceSaveRawWritesConfigAndRollsBack 非法 server 名 → 文件已写但 DB 失败 → 备份回退。
 func TestMcpServiceSaveRawWritesConfigAndRollsBack(t *testing.T) {
 	svc, _, _ := newTestMcpService(t)
@@ -133,15 +130,13 @@ func TestMcpServiceSaveRawWritesConfigAndRollsBack(t *testing.T) {
 	assert.Contains(t, string(after), "fs")
 }
 
-// writeCfgTemp 写临时配置文件，返回路径。
+// writeCfgTemp 写临时配置文件，返回路径（保留给后续 MCP/配置类用例复用）。
 func writeCfgTemp(t *testing.T, name, content string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), name)
 	require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
 	return p
 }
-
-
 
 func newFileChangeTestEnv(t *testing.T) (*FileChangeService, string, *repo.FileChangeRepo) {
 	t.Helper()
@@ -219,12 +214,9 @@ func TestFileChangeRollbackModify(t *testing.T) {
 	assert.Equal(t, before, string(got), "回滚后文件内容应等于变更前")
 }
 
-
-// TestFileChangeListBySessionWithLimit 多次变更按时间倒序返回，limit 截断。
-// mustGetFirstID 列出当前唯一会话的全部变更返回第一条 ID（测试用便利函数）。
+// mustGetFirstID 列出当前唯一会话的全部变更返回第一条 ID。
 func mustGetFirstID(t *testing.T, r *repo.FileChangeRepo) string {
 	t.Helper()
-	// 测试用例各会话都写一条：依次查 4 个可能 session id 找到非空。
 	ctx := context.Background()
 	for _, sid := range []string{"SES_1", "SES_2", "SES_3", "SES_L"} {
 		rows, err := r.ListBySession(ctx, sid, 100)
@@ -236,70 +228,6 @@ func mustGetFirstID(t *testing.T, r *repo.FileChangeRepo) string {
 	t.Fatal("no file change rows found in any test session")
 	return ""
 }
-
-func openTestCheckpointDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	dsn := fmt.Sprintf("file:cp_%s_%d?mode=memory&cache=shared", t.Name(), time.Now().UnixNano())
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&domain.AgentCheckpointDO{}))
-	return db
-}
-
-
-func newDashboardTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	dsn := filepath.Join(t.TempDir(), "test.db") + "?_pragma=journal_mode(MEMORY)&_pragma=busy_timeout(5000)"
-	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.Migrate(gdb))
-	t.Cleanup(func() {
-		sqlDB, e := gdb.DB()
-		if e == nil {
-			_ = sqlDB.Close()
-		}
-	})
-	return gdb
-}
-
-// newTokenTrendService 构造仅含 token 仓储的 DashboardService（其余依赖本用例不涉及）。
-func newTokenTrendService(t *testing.T) *DashboardService {
-	t.Helper()
-	gdb := newDashboardTestDB(t)
-	return NewDashboardService(repo.NewDashboardRepo(gdb), repo.NewTokenUsageRepo(gdb), nil)
-}
-
-
-var snakeKey = regexp.MustCompile(`^[a-z0-9_]+$`)
-
-// assertSnakePayload 断言载荷 map 的 key 全部 snake_case。
-func assertSnakePayload(t *testing.T, p map[string]any) {
-	t.Helper()
-	for k := range p {
-		assert.Truef(t, snakeKey.MatchString(k), "事件载荷字段必须 snake_case，实际: %q", k)
-	}
-}
-
-// 事件样例：与前端 types/api + stream.ts mapSSEEvent 消费的字段一一对应。
-func emitFixtures() map[string]map[string]any {
-	return map[string]map[string]any{
-		"chat:stream.start":     {"model": "gpt-4o"},
-		"chat:stream":           {"delta": "hi"},
-		"chat:thinking":         {"delta": "reasoning"},
-		"chat:tool":             {"id": "t1", "name": "file_read", "arguments": `{"path":"a.txt"}`},
-		"chat:tool-start":       {"id": "t1", "name": "file_read"},
-		"chat:tool-result":      {"id": "t1", "name": "file_read", "content": "ok", "error": "", "duration_ms": int64(5)},
-		"chat:approval":         {"id": "APR_1", "command": "go test", "reason": "需要确认", "risk": "needs_approval"},
-		"chat:approval-decided": {"id": "APR_1", "command": "go test", "decision": "approved"},
-		"chat:done": {
-			"status": "completed", "reason": "end_turn", "stop_reason": "end_turn",
-			"message_id": "MSG_1", "usage": harness.UsagePayload{InputTokens: 1, OutputTokens: 2, Total: 3},
-		},
-		"chat:error": {"code": 5001, "message": "boom"},
-	}
-}
-
-
 
 // TestApprovalPendingRestore 守卫审批恢复：审批挂起期间可列出，前端刷新后按 id 回填。
 func TestApprovalPendingRestore(t *testing.T) {

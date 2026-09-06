@@ -1,94 +1,110 @@
-# 04 · Agent 与 Harness 内核
+# 04 Agent 与 Harness 内核
 
-`internal/harness/`：自研轻量 ReAct 内核。不依赖 wails/api/service；LLM/Tool/Memory/Compressor 全部接口注入，单测可全 mock。
+## 定位
 
-## 1. 模块边界
+`internal/harness/` 是 WorkBaby 的 Agent 内核：自研轻量 ReAct 循环，无外部 Agent 框架依赖。本模块产出所有 `chat:*` 事件 + 驱动消息落库 + 工具执行 + 检查点 resume。
 
-```
-harness/
-├── runner.go        # 主循环（流式/ReAct/重试/中间件/检查点落点）
-├── event.go         # 事件类型与载荷（agent.{run|turn|tool}.{phase} + retry）
-├── checkpoint.go    # 检查点快照 + JSONL 存储 + StepRecord（幂等恢复）
-├── auto_compress.go # 结构化摘要压缩器（ContextCompressor）
-├── compress.go      # MicroCompressor（确定性兜底）+ token 估算
-├── delegate.go      # 子 Agent 委派（隔离 + 同参去重）
-├── agents.go        # 内置 Agent 定义（default/coding/research/writer：人设/预算/工具过滤）
-├── definition.go    # Definition（Budget/ToolPolicy/Memory 开关）
-├── middleware.go    # Middleware（BeforeTurn/AfterTurn）
-├── sink.go          # EventSink 事件出口
-├── execution.go     # ExecutionRegistry 多 run 拓扑（parent_run_id）
-├── runctx.go        # runID/sessionID ctx 注入
-└── text_tool_calls.go # 正文工具调用兜底解析
-```
+## 设计要点
 
-依赖铁律：harness 只 import llm/tool/memory/pkg；事件经 sink 出口，由 service 层翻译为 `chat:*`。
+- **Runner = 编排器**（`runner.go`）：每轮「装配 → LLM → 工具 → 回填 → 收尾」，单锁串行（一个 Runner 实例同一时刻只跑一个 run）
+- **事件驱动**：通过 `sink` 接口发出 `Event{Kind, RunID, SessionID, Turn, Payload}`，service 层映射为 SSE
+- **工具护栏链**：单层裁决——`Gate(Decision) × Approver` 在 runner，工具内部不再内置审批
+- **压缩保护配对**：MicroCompressor + HistoryTruncator 用 `safeTailStart` 找非 tool 切点，绝不拆散 assistant(tool_calls) 与其 tool 结果
+- **检查点幂等**：工具步骤记忆化 `stepRecord`，resume 时同 name+args 命中直接复用结果不重放
+- **错误归类 + 操作提示**：分类为机器可读 `kind`，附"去哪调配置"的中文 hint
 
-## 2. 事件体系
+## 核心契约
 
-| Kind | 触发 | 载荷要点 |
+### Config（`DefaultConfig`）
+
+| 字段 | 默认 | 说明 |
 |---|---|---|
-| agent.run.start / run.done | run 起止 | model / reason / stop_reason / usage |
-| agent.turn.start / end | 轮次起止 | end 带本轮用量 |
-| agent.turn.delta / thinking | 流式增量 | kind=content\|thinking |
-| agent.tool.call / start / result | 工具三段 | id/name/arguments；result 含 error/duration/meta/data/refused |
-| agent.retry | 建流瞬时错误退避重试 | attempt/delay_ms/reason |
-| agent.checkpoint / error | 检查点落盘 / 失败 | — |
+| `MaxTurns` | 50 | 单 run 最多轮次 |
+| `ContextBudget` | 120_000 | 估算 token 上限 |
+| `CompressRatio` | 0.9 | 压缩保留比例 |
+| `MaxToolResultLen` | 50_000 | 工具结果回填 LLM 的截断长度 |
+| `ToolParallelism` | 4 | 只读工具并发数；1=串行 |
+| `MaxTokens` | 0 | 全 run token 预算；超即停 |
+| `ToolCallTimeout` | 5min | 工具执行超时 |
+| `StagnationLimit` | 5 | 连续失败/同名同参重试熔断 |
 
-子 Agent 事件带 `parent_run_id` + `agent`，service 层据此分流（子生命周期独立成 `chat:subagent-*`，绝不复用父 `chat:done`）。
+### Middleware 链
 
-## 3. Runner 主循环
+| Middleware | 职责 |
+|---|---|
+| `TokenUsageAccumulator` | `AfterTurn` 累加 + 触发器（per-turn 已在 `EventTurnEnd` 发出） |
+| `HistoryTruncator` | 仅 legacy `CompressTrigger>0` 时挂；现代配置走 `ContextBudget` |
 
-`RunMessages(ctx, runID, sessionID, assistantMessageID, model, msgs) RunResult`：
+### Compressor 接口
 
-1. 组装上下文（调用方装配 system 前缀 + 历史 + 本条输入）；
-2. 每轮：中间件 BeforeTurn → 预算内压缩 → `streamWithRetry` 流式调 LLM（thinking 分离）→ 累积正文/推理 → 发 delta 事件；
-3. 有 tool_call：Schema 校验 → 执行侧 defs 校验（幻觉工具 refused）→ 目录信任闸 → 策略门（deny/ask+审批）→ **幂等命中检查** → 执行（recover 包 panic、单工具超时、结果截断）→ 停滞检测 → 回填 tool 消息 → 落检查点；
-4. 无 tool_call：问 follow-up 缝，无续接则 end_turn 终止；
-5. 终止原因：end_turn / cancelled / error / max_turns / stagnation / token_budget / max_tokens。
+```go
+type Compressor interface {
+    Compress(msgs []*llm.Message, budgetTokens int) []*llm.Message
+}
+```
 
-横切能力收敛为 `LoopHooks` 循环缝集合（均 `WithXxx` 注入，nil 字段 = 关闭），按循环中的位置从外到里：
+- `MicroCompressor`（默认 / 兜底）：先折最旧 assistant+tool 段（→ `[早期工具调用与结果已省略]` 占位 assistant），仍超再按安全切点对半截断
+- `AutoCompressor`（LLM 摘要）：watermark 触发 → LLM 六段交接摘要 → 迭代更新，失败降级 Micro
+- `ContextCompressor`：`CompressCtx(ctx, ...)` 带 ctx 入口
 
-- **streamWithRetry**：仅瞬时错误（限流/5xx/超时）重试，指数退避+抖动、Retry-After 优先、取消优先；流中途错误不重试（防重复输出）；重试发 `agent.retry`。重试耗尽再问 PrepareNextTurn 换模型（有界，防主备横跳）。
-- **Steering / FollowUp 注入缝**：跑工具中途插话 / 说完自动续接，注入后重置停滞计数。
-- **PrepareNextTurn（TurnAdjuster）**：轮间热切换——TurnUpdate 非 nil 字段生效，可换模型 / 换工具集（模型切换有界防横跳，工具集替换同步收紧执行侧暴露校验）。
-- **ShouldStopAfterTurn**：优雅停止点——每轮收尾后询问「该停了吗」，任务完成类主动终止走 end_turn 语义，区别于停滞/预算类被动熔断。
-- **BeforeToolCall（PathTrust）**：目录信任三态闸门，先于策略门。
-- **AfterToolCall**：工具执行后逐字段覆盖 ToolResult（脱敏 / 富化），先于事件发出与幂等记忆。
-- **ToolGate + Approver**：策略门（deny/ask）与人工审批。
-- **中间件**：TokenUsageAccumulator（每轮用量）、HistoryTruncator（旧阈值兜底）。
-- **停滞熔断**：同名同参连续 / 连续工具失败达 StagnationLimit → stagnation。
-- **text_tool_calls**：部分端点把 tool call 写进正文时按白名单解析兜底。
+### 统一工具护栏链
 
-**失败数据化**：runLoop 内所有错误路径置 runErr 后 break，EventError 与 EventRunDone 统一由循环尾唯一出口发出（所有退出路径事件流有始有终）；RunResult.Err 为数据字段而非提前 return。`normalStop` 标志区分「主动收尾」与「跑满轮数还想继续」，修正最后一轮正常说完被误报 max_turns 的边界。
+```
+[runner] toolGate.Decide(name, risk) →
+  Deny   → refused("denied by policy")
+  Ask    → RiskClassifier.ClassifyArgs 拿 desc/risk
+         → risk=="" 时免审放行（白名单安全命令）
+         → 走 Approver → ctx 标记 GuardChain → 工具 Execute 跳过自有审批
+  Allow  → 直接执行
+```
 
-## 4. 检查点与幂等恢复
+### EventTurnEnd payload（per-turn）
 
-`Checkpoint`：runID/sessionID/turn/messages/state/assistantMsgID/content/thinking/usage/**stepRecords**。
+`UsagePayload{InputTokens, OutputTokens, CacheRead, CacheWrite, Total}` —— 全部为**本轮**实际值，非累计（前端展示上下文占比用此值，避免被误读为"占比爆炸"）。
 
-- 存储接口 `CheckpointStore`（Append/LoadLast/Cleanup）：内置 JSONL 文件实现；service 提供 SQL 实现（agent_checkpoints 表，跨重启可恢复、会话删除级联）。
-- 保存时机：每轮工具执行回填后；每会话保留最近 3 个 run。
-- **StepRecords 幂等**：成功工具调用按 `tool:{name}:{args}` 记结果；`Resume` 续跑时同名同参命中直接复用结果并发带 `reused` 标记的事件，**不重放副作用**；失败/被拒不记录，恢复时重试。
-- `Resume(ctx, runID, sessionID, assistantMsgID, model)`：LoadLast → 从 turn+1 续跑，累积值（content/thinking/usage）跨恢复连续。
+### ErrorPayload（终态错误事件）
 
-## 5. 上下文压缩
+`{Code, Message, Kind}`：`Kind` ∈ `timeout / rate_limited / auth / context_length / connection / upstream / approval_denied`，未匹配为空串；`Message` 末尾自动追加对应 hint。
 
-接口 `Compressor.Compress(msgs, budget)`；增强接口 `ContextCompressor.CompressCtx`（runner 优先）。
+### 关键流程
 
-- **MicroCompressor**（默认兜底）：先清最旧 tool 结果，仍超则截断最旧对话；零 LLM 成本。
-- **AutoCompressor**（service 装配）：超预算时把早期历史压成六段交接摘要（目标/进度/决策/文件/下一步/约束）；切点不拆 `assistant(tool_calls)↔tool` 对；尾部保留约 budget/2；摘要迭代更新（旧摘要按前缀指纹并入）；失败降级 Micro。压缩完成经 Notify 回调发可见事件。
+#### ReAct 主循环
 
-## 6. 子 Agent 委派
+```
+for turn := 0; turn < MaxTurns; turn++ {
+  if ctx.Err() != nil { break }
+  msgs = compressor.Compress(msgs, ContextBudget)  // 配对安全
+  stream := provider.Stream(ctx, req)
+  for chunk := range stream {
+    appendDelta / appendThinking / appendToolCall
+    usage += chunk.FinalUsage
+  }
+  buildAssistantMessage + append to msgs
+  if no tool_calls && text clean && !truncated → break end_turn
+  if tool_calls:
+    for each call (parallel if all readonly + parallelism>1):
+      executeOne(call): 暴露校验 → 路径信任 → 工具策略门+per-call 风险 → 注入防护 → 工具 Execute
+      msgs += tool_result
+    saveCheckpoint
+  if no tool_calls && follow-up queue has msgs → continue
+}
+```
 
-`Delegate(ctx, agent, task)`（tool.Delegator 实现，run 开始注入 ctx）：
+#### 截断重发（finish_reason=length / max_tokens）
 
-- 四重隔离：上下文（人设+任务，不继承父历史）/预算（≤12 轮 3 分钟）/工具（只收缩不升权）/输出（只回传 ≤4000 rune 摘要）。
-- 同参去重：并发相同 (agent, task) 共享一次执行，后来者等待首发结果。
-- 事件转发：仅工具层与生命周期事件进父 sink（带 parent_run_id/agent）。
+残缺 tool_calls **不执行**，回填一条 truncated 工具结果让模型缩短重发。
 
-## 7. 错误码（5000 段）
+#### 注入防护
 
-5001 会话不存在 · 5002 会话忙 · 5003 会话无效 · 5004/5005 消息不存在/无效 · 5007 Resume/检查点失败 · 5008 消息不属于会话/委派不可用。
+`HasNestedToolCallMarker(args)` 检查 `<tool_call` / `"tool_calls"` 等伪标记；命中即 `refused("args contain nested tool-call markers (possible prompt injection)")`。
 
-## 8. 测试
+#### 优雅停止
 
-测试只保留复杂链路：ReAct 多轮工具调用（mock LLM）、审批拒绝/门禁、steering 注入、截断重试、委派上下文隔离、上下文压缩、检查点写入+Resume；见 `runner_test.go` / `checkpoint_test.go` / `delegate_test.go` / `compress_test.go`。简单分支与参数校验不设用例。
+`hooks.ShouldStopAfterTurn(ctx, &TurnSignal{Turn, ConsecutiveToolFails})` 每轮收尾询问，返回 true 即以 end_turn 收束（区别于 max_turns 被动熔断）。
+
+## 约束
+
+- harness 不依赖 wails / api / service（CLAUDE.md §2.2）
+- 单 runner 实例同时只能跑一个 run（按 session 串行）
+- 工具消息 `tool_call_id` 必须在 assistant.tool_calls 中存在（toLLMMessages 剥孤儿；压缩保留配对）
+- 上下文压缩以段为最小单位，**绝不拆散 assistant+tool 对**——这是与上游协议兼容的硬底线

@@ -21,14 +21,28 @@ import { zhCN } from './dict-zh'
 import { enUS } from './dict-en'
 import type { Dict } from './types'
 
-/** 当前语言 tag（zh-CN / en-US）。 */
-const locale = ref<string>('zh-CN')
+/** 语言选择的本地持久化键。 */
+const STORAGE_KEY = 'wb.locale'
 
 /** 内置字典表（按 locale tag 索引）。 */
 const messages: Record<string, Dict> = {
   'zh-CN': zhCN,
   'en-US': enUS
 }
+
+/** 恢复上次选择的语言；无记录或不可用时回落 zh-CN。 */
+function restoreLocale(): string {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved && messages[saved]) return saved
+  } catch {
+    // 无 localStorage（隐私模式 / 非安全上下文）时用默认语言
+  }
+  return 'zh-CN'
+}
+
+/** 当前语言 tag（zh-CN / en-US）。 */
+const locale = ref<string>(restoreLocale())
 
 /** 当前 locale 的权威字典（内置；无后端覆盖）。 */
 const dict = computed<Dict>(() => messages[locale.value] ?? zhCN)
@@ -38,10 +52,15 @@ export async function init(): Promise<void> {
   // 已无后端 i18n 端点，本地字典即权威来源。
 }
 
-/** 切换语言：本地即时生效（内置字典），全站响应式刷新。 */
+/** 切换语言：本地即时生效（内置字典）并持久化，重启后保持。 */
 export function setLocale(lang: string): void {
   if (!messages[lang]) return
   locale.value = lang
+  try {
+    localStorage.setItem(STORAGE_KEY, lang)
+  } catch {
+    // 持久化失败不影响本次会话生效
+  }
 }
 
 /** 响应式当前 locale tag。 */

@@ -10,6 +10,7 @@ import {
   X as Close
 } from '@/components/common/icons'
 import { apiGet } from '@/api/client'
+import { openExternal } from '@/api/shellBridge'
 import type { FolderTreeNode, WorkspaceFile } from '@/types/api'
 import { t } from '@/i18n'
 import Skeleton from '@/components/common/Skeleton.vue'
@@ -216,7 +217,7 @@ function refresh(): void {
               :download="f.name"
               :title="t('chat.download')"
               class="hidden shrink-0 text-wb-muted hover:text-wb-primary-strong group-hover:block"
-              @click.stop
+              @click.prevent.stop="openExternal(f.url)"
             >
               <Download class="h-3 w-3" />
             </a>
@@ -286,7 +287,7 @@ function refresh(): void {
       />
       <div v-else class="flex items-center justify-between rounded-md border border-wb-border bg-wb-surface px-2 py-1.5 text-xs text-wb-muted">
         <span class="truncate">{{ selected.name }}</span>
-        <a :href="selected.url" :download="selected.name" class="text-wb-primary-strong hover:underline">{{ t('chat.download') }}</a>
+        <a :href="selected.url" :download="selected.name" class="cursor-pointer text-wb-primary-strong hover:underline" @click.prevent="openExternal(selected.url)">{{ t('chat.download') }}</a>
       </div>
     </div>
   </aside>

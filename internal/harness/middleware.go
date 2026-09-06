@@ -34,7 +34,7 @@ func (a *TokenUsageAccumulator) AfterTurn(u llm.TokenUsage) {
 	a.Total += u.TotalTokens
 }
 
-// Snapshot 当前累计快照（Total 为 0 时用三项之和兜底，部分上游不回 total）。
+// Snapshot 当前累计快照（Total 为 0 时用三项之和兜底，部分上游不回 total 字段）。
 func (a *TokenUsageAccumulator) Snapshot() llm.TokenUsage {
 	total := a.Total
 	if total == 0 {
@@ -69,7 +69,7 @@ func NewHistoryTruncator(threshold int, ratio float64) *HistoryTruncator {
 func (t *HistoryTruncator) Name() string               { return "history-truncator" }
 func (t *HistoryTruncator) AfterTurn(_ llm.TokenUsage) {}
 
-// BeforeTurn 估算历史 token，超阈值时对折截断最旧消息。
+// BeforeTurn 估算历史 token，超阈值时按安全切点截断最旧消息。
 func (t *HistoryTruncator) BeforeTurn(ms []*llm.Message) []*llm.Message {
 	if t.Threshold <= 0 || len(ms) <= 2 {
 		return ms
@@ -84,10 +84,15 @@ func (t *HistoryTruncator) BeforeTurn(ms []*llm.Message) []*llm.Message {
 	if keep >= len(ms) {
 		return ms
 	}
-	// 保留首条（通常是 system）与末尾最新 keep-1 条
-	out := make([]*llm.Message, 0, keep)
+	// 保留首条（通常是 system）与末尾 keep-1 条；切点不落在 tool 消息上——
+	// 否则尾部以孤儿 tool 结果开头，上游以「tool id not found」400 拒绝整轮
+	cut := safeTailStart(ms, len(ms)-keep+1)
+	if cut <= 1 {
+		return ms
+	}
+	out := make([]*llm.Message, 0, len(ms)-cut+1)
 	out = append(out, ms[0])
-	out = append(out, ms[len(ms)-keep+1:]...)
+	out = append(out, ms[cut:]...)
 	return out
 }
 

@@ -48,7 +48,7 @@ type SkillRunTool struct {
 	resolve  ScriptResolver
 	defRoot  string            // 默认工作区（未绑定会话目录时脚本 cwd）
 	rootRes  tool.RootResolver // 会话工作区解析器；nil = 恒用 defRoot
-	approver tool.Approver     // 必需；nil 时拒绝执行（fail-closed）
+	approver tool.Approver     // 兜底审批门；仅在脱离 runner 护栏链直调时生效
 	pathDirs func() []string
 }
 
@@ -69,7 +69,22 @@ func (t *SkillRunTool) rootOf(ctx context.Context) string {
 }
 
 // WithApprover 注入审批门（ApprovalService；同一审批流）。
+// 仅作为脱离 runner 护栏链直调时的兜底；链内调用由策略门统一裁决。
 func (t *SkillRunTool) WithApprover(a tool.Approver) *SkillRunTool { t.approver = a; return t }
+
+// ClassifyArgs 实现 tool.RiskClassifier：执行代码一律 needs_approval（每次确认）。
+func (t *SkillRunTool) ClassifyArgs(args json.RawMessage) (string, string) {
+	var req struct {
+		Skill  string   `json:"skill"`
+		Script string   `json:"script"`
+		Args   []string `json:"args"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return "", ""
+	}
+	desc := fmt.Sprintf("%s(%s/%s %s)", toolName, req.Skill, req.Script, strings.Join(req.Args, " "))
+	return desc, tool.RiskApprovalNeeds
+}
 
 // WithPathDirs 注入内置运行时 bin 目录（node/python 隔离环境）。
 func (t *SkillRunTool) WithPathDirs(f func() []string) *SkillRunTool { t.pathDirs = f; return t }
@@ -134,13 +149,16 @@ func (t *SkillRunTool) Execute(ctx context.Context, raw json.RawMessage) tool.To
 		return tool.ToolResult{Err: pkg.New(9105, "unsupported script language: "+lang, req.Script)}
 	}
 
-	// 审批：执行代码一律过审批门（fail-closed）
-	if t.approver == nil {
-		return tool.ToolResult{Err: pkg.New(4003, "approval service not configured", toolName)}
-	}
+	// 审批：执行代码一律 needs_approval。统一护栏链（runner 策略门）已裁决时不再重复询问；
+	// 脱链直调（测试/裸用）保留审批兜底，fail-closed 语义不变。
 	desc := fmt.Sprintf("%s(%s/%s %s)", toolName, req.Skill, req.Script, strings.Join(req.Args, " "))
-	if !t.approver.Approve(ctx, desc, tool.RiskApprovalNeeds) {
-		return tool.ToolResult{Err: pkg.New(4003, tool.ErrApprovalNeeded.Message+", user denied or timed out", desc)}
+	if !tool.GuardChainActive(ctx) {
+		if t.approver == nil {
+			return tool.ToolResult{Err: pkg.New(4003, "approval service not configured", toolName)}
+		}
+		if !t.approver.Approve(ctx, desc, tool.RiskApprovalNeeds) {
+			return tool.ToolResult{Err: pkg.New(4003, tool.ErrApprovalNeeded.Message+", user denied or timed out", desc)}
+		}
 	}
 
 	// 脚本落临时文件（用完即删）

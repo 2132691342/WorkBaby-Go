@@ -109,7 +109,7 @@ export const usePetStore = defineStore('pet', () => {
     error.value = null
     info.value = null
     try {
-      const selected = await OpenFileDialog('选择 Sprite 图片', '*.png;*.jpg;*.jpeg;*.gif;*.webp')
+      const selected = await OpenFileDialog(t('pet.pickSprite'), '*.png;*.jpg;*.jpeg;*.gif;*.webp')
       if (!selected) return null
       const created = await UploadPetSprite(name?.trim() || basenameFromPath(selected), selected)
       sprites.value = [created, ...sprites.value.filter((s) => s.id !== created.id)]

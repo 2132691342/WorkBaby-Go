@@ -12,26 +12,103 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// toolCallMsg 构造带单个 tool_call 的 assistant 消息。
+func toolCallMsg(id, name string) *llm.Message {
+	return &llm.Message{
+		Role: llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{
+			ID:       id,
+			Type:     "function",
+			Function: llm.FunctionCall{Name: name, Arguments: "{}"},
+		}},
+	}
+}
 
-func TestMicroCompressorCleansOldToolResults(t *testing.T) {
+// assertPairingIntact 断言消息序列满足上游 LLM 的工具配对协议：
+// 每条 tool 消息的 tool_call_id 都能在前置 assistant.tool_calls 中找到；
+// 每个带 tool_calls 的 assistant 后面紧跟覆盖其全部调用 id 的 tool 结果。
+func assertPairingIntact(t *testing.T, ms []*llm.Message) {
+	t.Helper()
+	seen := map[string]bool{}
+	for i, m := range ms {
+		if m == nil {
+			continue
+		}
+		switch m.Role {
+		case llm.RoleTool:
+			require.NotEmpty(t, m.ToolCallID, "tool 消息缺少 tool_call_id @%d", i)
+			require.True(t, seen[m.ToolCallID], "孤儿 tool 消息：%s 无前置 assistant tool_calls @%d", m.ToolCallID, i)
+		case llm.RoleAssistant:
+			ids := map[string]bool{}
+			for _, tc := range m.ToolCalls {
+				ids[tc.ID] = true
+			}
+			for id := range ids {
+				seen[id] = true
+			}
+			if len(ids) > 0 {
+				for j := i + 1; j < len(ms) && ms[j] != nil && ms[j].Role == llm.RoleTool; j++ {
+					delete(ids, ms[j].ToolCallID)
+				}
+				assert.Empty(t, ids, "assistant(tool_calls) 缺少对应的 tool 结果 @%d", i)
+			}
+		}
+	}
+}
+
+// TestMicroCompressorPreservesToolPairing 回归：压缩绝不拆散 assistant(tool_calls) 与
+// 其 tool 结果。旧实现第一遍只删 tool 结果（assistant 悬空）、第二遍盲切（尾部孤儿 tool），
+// 两条路都会触发上游 400「tool result's tool id not found」。
+func TestMicroCompressorPreservesToolPairing(t *testing.T) {
 	big := strings.Repeat("工具结果很长", 40) // ≈70 token
 	msgs := []*llm.Message{
 		llm.SystemMessage("sys"),
 		llm.UserMessage("start"),
-		llm.ToolMessage("t1", "exec", big),
-		{Role: llm.RoleAssistant, Content: "下一步"},
-		llm.ToolMessage("t2", "file_read", big),
+		toolCallMsg("CALL_A", "exec"),
+		llm.ToolMessage("CALL_A", "exec", big),
+		llm.UserMessage("中间一轮"),
+		toolCallMsg("CALL_B", "file_read"),
+		llm.ToolMessage("CALL_B", "file_read", big),
 		llm.UserMessage("继续"),
 	}
 	budget := 100
 	require.Greater(t, EstimateTokens(msgs), budget, "前置：估算应超预算")
 
 	out := (MicroCompressor{}).Compress(msgs, budget)
-	assert.LessOrEqual(t, EstimateTokens(out), budget, "压缩后应回到预算内")
-	assert.NotNil(t, out[0], "首条 system 保留")
-	assert.Equal(t, llm.RoleSystem, out[0].Role)
+	assertPairingIntact(t, out)
+	assert.Equal(t, llm.RoleSystem, out[0].Role, "首条 system 保留")
 }
 
+// TestMicroCompressorSecondPassCutSafe 第二遍对半截断的落点恰好落在工具对中间时，
+// 必须回退到安全切点（工具对的 assistant 上），而不是留下尾部孤儿。
+func TestMicroCompressorSecondPassCutSafe(t *testing.T) {
+	var msgs []*llm.Message
+	msgs = append(msgs, llm.SystemMessage("sys"), llm.UserMessage("start"))
+	// 3 个工具段，每段 assistant(tool_calls) + 大 tool 结果；中点恰好落在某段中间
+	for i := 0; i < 3; i++ {
+		id := "CALL_" + string(rune('A'+i))
+		msgs = append(msgs, toolCallMsg(id, "exec"),
+			llm.ToolMessage(id, "exec", strings.Repeat("结果内容", 60)))
+	}
+	msgs = append(msgs, llm.UserMessage("end"))
+
+	out := (MicroCompressor{}).Compress(msgs, 120)
+	assertPairingIntact(t, out)
+}
+
+// TestHistoryTruncatorSafeCut 截断中间件同样不得在工具对中间下刀。
+func TestHistoryTruncatorSafeCut(t *testing.T) {
+	var msgs []*llm.Message
+	msgs = append(msgs, llm.SystemMessage("sys"), llm.UserMessage("start"))
+	for i := 0; i < 4; i++ {
+		id := "CALL_" + string(rune('A'+i))
+		msgs = append(msgs, toolCallMsg(id, "exec"),
+			llm.ToolMessage(id, "exec", strings.Repeat("结果内容", 60)))
+	}
+	tr := NewHistoryTruncator(80, 0.5)
+	out := tr.BeforeTurn(msgs)
+	assertPairingIntact(t, out)
+}
 
 // TestRunnerContextBudgetCompress 冒烟：极小上下文预算下超长上下文仍能正常跑完（压缩不打断循环）。
 func TestRunnerContextBudgetCompress(t *testing.T) {

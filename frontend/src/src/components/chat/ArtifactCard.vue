@@ -2,6 +2,7 @@
 import type { Component } from 'vue'
 import { PackageCheck, Globe, FileImage, FileText, FileVideo, File as FileIcon, Download } from '@/components/common/icons'
 import type { ArtifactFile, ArtifactPayload } from '@/types/api'
+import { openExternal } from '@/api/shellBridge'
 import { t } from '@/i18n'
 
 /**
@@ -75,11 +76,12 @@ function fmtSize(size?: number): string {
         class="flex items-center gap-2 rounded-lg border border-wb-border bg-wb-surface px-2.5 py-1.5 text-xs"
       >
         <component :is="kindIcon(f.kind)" class="h-3.5 w-3.5 shrink-0 text-wb-primary-strong" />
+        <!-- 链接一律拦截交系统浏览器：WebView 内导航会把 SPA 页面整个替换掉 -->
         <a
           v-if="f.url"
           :href="f.url"
-          :target="f.kind === 'url' ? '_blank' : undefined"
-          class="max-w-[160px] truncate text-wb-ink transition-colors hover:text-wb-primary-strong"
+          class="max-w-[160px] cursor-pointer truncate text-wb-ink transition-colors hover:text-wb-primary-strong"
+          @click.prevent="openExternal(f.url)"
         >
           {{ f.name }}
         </a>
@@ -90,7 +92,8 @@ function fmtSize(size?: number): string {
           :href="f.url"
           :download="f.name"
           :title="t('chat.download')"
-          class="shrink-0 text-wb-muted transition-colors hover:text-wb-primary-strong"
+          class="shrink-0 cursor-pointer text-wb-muted transition-colors hover:text-wb-primary-strong"
+          @click.prevent="openExternal(f.url)"
         >
           <Download class="h-3 w-3" />
         </a>

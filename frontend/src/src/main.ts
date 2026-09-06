@@ -1,10 +1,12 @@
-import { createApp } from 'vue'
+import { computed, createApp, defineComponent, h } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElConfigProvider } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import enUs from 'element-plus/es/locale/lang/en'
 import App from './App.vue'
 import router from './router'
 import { useTheme } from '@/composables/useTheme'
+import { currentLocale } from '@/i18n'
 // Element Plus 全量引入 + dark/css-vars：同 Java 版一致
 import 'element-plus/dist/index.css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
@@ -46,8 +48,20 @@ window.addEventListener('unhandledrejection', (e) => {
   })
 })
 
-const app = createApp(App)
+/** Element Plus 内置文案（分页 / 日期选择器 / 空状态等）按应用语言映射。 */
+const epLocales: Record<string, typeof zhCn> = { 'zh-CN': zhCn, 'en-US': enUs }
+
+/** 根组件：经 ConfigProvider 下发 locale，使 EP 内置文案随应用语言切换。 */
+const Root = defineComponent({
+  name: 'WorkBabyRoot',
+  setup() {
+    const locale = computed(() => epLocales[currentLocale.value] ?? zhCn)
+    return () => h(ElConfigProvider, { locale: locale.value }, { default: () => h(App) })
+  }
+})
+
+const app = createApp(Root)
 app.use(createPinia())
 app.use(router)
-app.use(ElementPlus, { locale: zhCn })
+app.use(ElementPlus)
 app.mount('#app')

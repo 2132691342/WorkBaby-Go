@@ -82,9 +82,8 @@ function onScroll(): void {
 /**
  * 可恢复检查点：这些终态意味着「任务没做完，但可以接着做」。
  *
- * <p>实现上不新增后端接口——AgentScope 的会话状态是持久化的，重新发一条消息时
- * 历史会整体回灌，模型看得见自己上一轮做到哪儿。所以「继续」= 发一条明确的续跑指令，
- * 走正常发送链路即可。
+ * <p>「继续」= 发一条明确的续跑指令，走正常发送链路即可——会话历史整体回灌，
+ * 模型看得见自己上一轮做到哪儿，不需要额外接口。
  */
 const RESUMABLE_REASONS = new Set(['cancelled', 'tool_error_limit', 'max_turns', 'token_budget', 'interrupted'])
 

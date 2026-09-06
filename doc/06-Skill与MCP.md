@@ -1,125 +1,125 @@
-# 06 · Skill 与 MCP
+# 06 Skill 与 MCP
 
-两个并列模块：`internal/skill/`（SKILL.md 解析 + 关键词路由 + 脚本挂工具）与 `internal/mcp/`（MCP stdio 客户端 + 工具桥接）。
+## 定位
 
----
+- **Skill**：项目内置的"会做某件事的小机器人"，由声明式 `manifest.json` + 脚本（node/python/powershell）实现；模型按 Skill 名调用 `run_skill_script` 工具
+- **MCP**（Model Context Protocol）：让 WorkBaby 作为 MCP client 连接外部 MCP server（stdio 传输），把它们暴露的工具当作本地工具用
 
-## 1. Skill 系统
+## Skill
 
-### 1.1 SKILL.md 格式
+### 设计要点
 
-```
----
-name: skill-name             # kebab-case，唯一
-description: ...
-when_to_use: [trigger, keywords]
-allowed_tools: [tool1, tool2] # 工具白名单；空 = 不限制
-version: 1.0
----
+- 内置 Skill 通过 `assets/skills/` embed 进二进制；运行时不依赖外网
+- `SkillSource`（`internal/skill/`）：声明 Skill 名 → system 注入文本 + 工具白名单；命中规则由 `Matcher(input) → match(name)`
+- `run_skill_script`（`internal/tool/skillrun/`）：把脚本落临时目录、用内置 runtime（node/python/pwsh）直跑，无 shell
+- 审批：脚本执行一律 `RiskApprovalNeeds`（直跑解释器 = 等同本地命令）
+- 沙箱：脚本 cwd 跟随会话工作区根（`WorkspaceRoot`）
 
-Markdown body  # 注入 system prompt
-```
+### 核心契约
 
-解析失败返回 8002。
+#### manifest.json
 
-### 1.2 三种来源
-
-| 来源 | 生命周期 |
-|---|---|
-| builtin | `assets/skills/` 编译期 embed，启动 upsert 进表；只读 |
-| download | 本地 zip 批量导入：每个含 `SKILL.md` 的目录为一个包（`scripts/` 子目录随包入库为可执行脚本） |
-| custom | UI 编辑器创建 / 编辑（meta + SKILL.md 正文 + scripts） |
-
-**唯一真相源是 `skills` 表**；SKILL.md 只是导入/导出格式。builtin 按 name upsert 且只读：zip 导入遇同名内置包直接跳过（避免覆盖后被启动期回写），custom/download 同名覆盖但保留用户启停状态。
-
-**导入入口**：UI「从 zip 导入技能包」→ 原生对话框选 zip → `POST /api/v1/skills/import-zip`（服务端 `skill.ImportZip`），返回 `{imported, skipped, failed}` 逐包结果；单个包失败不阻断整体。
-
-### 1.3 文件结构
-
-```
-internal/skill/
-├── parser.go     # SKILL.md 解析（yaml frontmatter + body）
-├── registry.go   # 运行时注册 + 关键词路由（Build/Reload/Get/Match）
-└── builtin.go    # 从 embed FS 装载内置 Skill
+```json
+{
+  "name": "<skill-id>",
+  "version": "1.0.0",
+  "matcher": { "keywords": ["..."], "regex": "..." },
+  "system": "你是一个...角色",
+  "tools": ["file_read", "web_search"],
+  "scripts": [
+    { "name": "main", "language": "python", "file": "scripts/main.py", "args_schema": {} }
+  ]
+}
 ```
 
-- 单个 Skill 解析失败降级（记日志跳过）；
-- `Match` 是确定性关键词匹配。
-
-### 1.4 Skill 注入
-
-chat service 发送时：关键词检测命中 → skill body 注入 system prompt + 工具白名单取交集。
-
-### 1.5 Skill 执行引擎
-
-**执行侧策略收紧**：harness `execOne` 校验调用工具必须在本次 run 暴露的 defs 中；模型幻觉出的未暴露工具名 → Refused 结构化回执（不计失败熔断，模型换路自愈）。Skill 白名单由此成为真实执行边界（而非仅 LLM 可见性过滤）。
-
-**scripts 挂成工具**：`SkillREQ.scripts[]`（name/language/code）随 Skill 存 `skills.scripts_json`；注册通用工具 `run_skill_script`（`internal/tool/skillrun`）：
-
-| 项 | 语义 |
-|---|---|
-| 参数 | `{skill, script, args?}`；resolver 从 skills 表解析脚本 |
-| 解释器 | 固定映射 javascript→node / python→python / powershell→powershell，参数数组直传不经 shell |
-| 隔离 | 脚本落临时文件用完即删；cwd = 会话工作区；内置运行时 bin 目录前置 PATH |
-| 审批 | RiskExec，执行前过 ApprovalService（fail-closed：无审批门拒绝执行） |
-| 限制 | 单脚本 ≤256KB；单次运行 2min 超时；错误码 9105 / 4003 / 8004 |
-
----
-
-## 2. MCP（Model Context Protocol）
-
-### 2.1 模块职责
-
-- 桌面端 stdio 客户端（`internal/mcp/client.go`），JSON-RPC 2.0 行协议；
-- 工具经 `MCPAdapter` 桥接进统一 `Tool` 接口，命名 `mcp__{server}__{tool}` 防冲突；
-- 启动期 `mcp.Manager.Reload` 拨号 + 工具注册到 `tool.Registry`；
-- 慢客户端断开 + Last-Event-ID 重放与 chat 的 SSE 同套机制（`server/sse.go`）。
-
-### 2.2 接口子集（v1）
-
-| 方法 | 说明 |
-|---|---|
-| `initialize` | 握手 + 协议版本协商 |
-| `tools/list` | 列出 server 暴露的工具 |
-| `tools/call` | 调用工具（JSON-RPC params） |
-| `notifications/cancelled` | 客户端取消通知 |
-
-### 2.3 文件结构
+#### SkillSource.Preload
 
 ```
-internal/mcp/
-├── client.go   # stdio 客户端（exec.Command + Stdin/Stdout pipe + 行协议）
-├── adapter.go  # MCP 工具 → 统一 Tool 接口（MCPAdapter）
-└── manager.go  # 多 server 管理 + Reload + 工具注册/注销
+输入 user_input → Matcher 命中 → 返回 ContextPiece{Key:"skill", Body:system} + 工具白名单
+              ↓ 注入到 SystemMessage
+              ↓ SkillTools 写进 RunState（该 run 的工具集收窄）
 ```
 
-### 2.4 配置（`mcp.json`）
+#### `run_skill_script` 工具入参
 
-配置源 `mcp.json`，支持 `mcpServers` 对象与 `servers` 数组两种格式（兼容历史配置）。同步规则见 `doc/02` §8.2。
+| 字段 | 类型 | 必填 |
+|---|---|---|
+| `skill` | string | ✓ |
+| `script` | string | ✓（manifest.scripts[].name） |
+| `args` | []string | — |
 
-### 2.5 错误处理
+返回 `CombinedOutput` + `exit code`，args 数组形式直传解释器，不拼 shell。
 
-- 慢客户端：发送缓冲满即断开（触发重连重放），不丢帧；
-- 子进程非 JSON 行忽略；
-- 进程死亡 → 工具调用返回明确错误；
-- 解析失败 → 工具不注册，调用时报 8001。
+## MCP
 
----
+### 设计要点
 
-## 3. 安全
+- **stdio 客户端**（`internal/mcp/`）遵循 [MCP 2025-06-18 spec](https://modelcontextprotocol.io/specification/2025-06-18)
+- **Manager** 管理 server 进程生命周期：启动 / 重启 / 停用 / 失败降级
+- MCP server 注册的工具经 `tool.Registry` 直接挂入 harness，无需适配层
+- 工具名可能与内置冲突 → 注册时加 `mcp_<server>_<name>` 前缀
+- 错误归一为 AppError 8003（连接失败 / 协议错）
+- 内置运行时不依赖 npm / pip（用 17 节描述的 portable 打包）
 
-- Skill 脚本执行走 `run_skill_script` 工具，**不可绕过审批门**（fail-closed）；
-- MCP 子进程仅启动白名单内命令（`mcp.json` 信任级别高于 exec 白名单，因配置源由用户编辑）；
-- 所有工具的入参按 JSON Schema 校验后再执行。
+### 核心契约
 
----
+#### mcp.json 配置
 
-## 4. 错误码
+```json
+{
+  "servers": [
+    {
+      "name": "<server-id>",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "env": { "ROOT": "${workspace}" },
+      "enabled": true
+    }
+  ]
+}
+```
 
-| Code | 含义 |
-|---|---|
-| 8000 | Skill/MCP 通用 |
-| 8001 | skill / mcp server 不存在 |
-| 8002 | SKILL.md 解析失败 |
-| 8003 | builtin skill 只读 |
-| 8004 | skill 禁用 / 脚本不存在 |
+DB 同步：`mcp_servers` 表持久化启停状态（mcp.json 是源，DB 是同步对象）。
+
+#### Client.Connect / ListTools / CallTool
+
+```go
+client, _ := stdioClient.NewClient(transport)  // 启动子进程 + JSON-RPC 握手
+tools,  _ := client.ListTools()                // → []tool.ToolDefinition
+res,   _ := client.CallTool(ctx, name, args)   // → content 或 isError
+```
+
+启停控制：`Manager.ReloadServers()` 读 mcp.json + DB → 启/停 server → 增删 `tool.Registry` 条目。
+
+### 关键流程
+
+#### 启动失败优雅降级
+
+```
+Manager.Startup(...)
+  for each server in enabled list:
+    client, err := stdioClient.NewClient(...)
+    if err != nil:
+      log.Warn("MCP server {name} 启动失败，标记 degraded", err)
+      continue  // 不中断整体启动
+  return Manager with degraded set
+```
+
+UI 侧：Settings → MCP 面板显示 server 状态，failed 标红并给出 stderr 前 200 字符。
+
+## Skill 与 MCP 的边界
+
+| | Skill | MCP |
+|---|---|---|
+| 来源 | 项目内置（embed） | 外部服务（stdio 子进程） |
+| 工具入口 | `run_skill_script` | MCP server 注册的每个工具独立 |
+| System 注入 | SkillSource.Preload | 无（由 tool description 自然暴露） |
+| 工具白名单 | manifest.tools | MCP server 实际暴露的工具 |
+| 审批 | `RiskApprovalNeeds`（脚本 = 命令） | 按 MCP 工具的 RiskLevel + Gate 决策 |
+
+## 约束
+
+- Skill 脚本直跑解释器不拼 shell（避免命令注入）
+- MCP 工具 schema 必须可被 JSON Schema 解析，schema 编译失败 = 注册失败（4004）
+- MCP server 子进程崩溃 → Manager 状态置 degraded，重启由下次 ReloadServers 触发
+- Skill system 注入与 MCP 工具白名单均为**请求级临时**，不落库到会话历史

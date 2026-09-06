@@ -9,22 +9,27 @@
  * <p>doc/15 §7 与后端 pkg/apperror.go 一一对应。
  */
 
+import { t } from '@/i18n'
+
 interface AppErrorShape {
   code: number
   message?: string
   details?: string
 }
 
-const FALLBACK = '操作失败，请重试'
+/** 解析不出结构化错误时的兜底文案（随语言切换）。 */
+function fallback(): string {
+  return t('common.failRetry')
+}
 
 export function errorMessage(e: unknown): string {
   if (typeof e === 'string') return e
   if (e instanceof Error) {
     const m = e.message
     // Wails 返回的 message 形如 "[3001] provider not ready: <name>"，直接透传
-    return m || FALLBACK
+    return m || fallback()
   }
-  return FALLBACK
+  return fallback()
 }
 
 export function errorCode(e: unknown): number | undefined {

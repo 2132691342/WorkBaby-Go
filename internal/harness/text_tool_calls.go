@@ -9,8 +9,7 @@ import (
 	"WorkBaby/internal/llm"
 )
 
-// text_tool_calls.go 文本工具调用兜底：部分 OpenAI 兼容端点（及不少国产/本地模型）
-// 不支持结构化 tool_calls，会把调用意图写成正文。
+// 文本工具调用兜底：部分 OpenAI 兼容端点不支持结构化 tool_calls，会把调用意图写成正文。
 //
 // 解析形态（按优先级）：
 //   - XML 标签：<tool_call name="x">{...}</tool_call> 或 <tool_call>{"name":"x",...}</tool_call>
@@ -111,4 +110,25 @@ func textCandidates(text string) []textCandidate {
 		out = append(out, textCandidate{body: trimmed})
 	}
 	return out
+}
+
+// nestedToolCallMarkers 参数文本中的伪调用标记（小写比较）。
+// 工具结果（网页 / 文件内容）可能携带诱导性文本，模型原样回传进参数即成注入载体。
+var nestedToolCallMarkers = []string{
+	"<tool_call", "</tool_call", "<toolcall",
+	`"tool_calls"`, `"tool_call"`,
+}
+
+// HasNestedToolCallMarker 检测参数文本里是否嵌着工具调用标记（提示注入防护）。
+//
+// <p>命中即拒绝执行：正常参数（路径 / 命令 / 查询语句）不会包含这些形态；
+// 误杀率远低于把网页里的伪调用当真执行的风险。
+func HasNestedToolCallMarker(args string) bool {
+	lower := strings.ToLower(args)
+	for _, m := range nestedToolCallMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return false
 }

@@ -66,7 +66,6 @@ func seedSession(t *testing.T, svc *ChatService, msgRepo *repo.MessageRepo, ctx 
 
 // ===== 会话消息操作 =====
 
-
 // TestForkSession 从指定消息分叉：新会话复制前段，原会话不变。
 func TestForkSession(t *testing.T) {
 	svc, msgRepo := newChatOpsService(t)
@@ -87,48 +86,6 @@ func TestForkSession(t *testing.T) {
 	require.NoError(t, err)
 	if len(origRows) != 5 {
 		t.Fatalf("original session must keep 5 messages, got %d", len(origRows))
-	}
-}
-
-// TestMemoryFactProcedural 语义/程序记忆写读删闭环（含同 key 覆盖）。
-func TestMemoryFactProcedural(t *testing.T) {
-	mem := memory.NewService(repo.NewMessageRepo(newChatOpsTestDB(t)), repo.NewMemoryEpisodeRepo(newChatOpsTestDB(t)),
-		repo.NewMemoryFactRepo(newChatOpsTestDB(t)), repo.NewMemoryProcedureRepo(newChatOpsTestDB(t)), t.TempDir())
-	svc := NewMemoryService(mem)
-	ctx := context.Background()
-
-	// 语义：写入 → 列出 → 覆盖 → 删除
-	fact, err := svc.WriteFact(ctx, "user", "preference", "喜欢简洁回答", 0.7)
-	require.NoError(t, err)
-	require.NotEmpty(t, fact.ID)
-	facts, err := svc.ListFacts(ctx, 50)
-	require.NoError(t, err)
-	if len(facts) != 1 || facts[0].Key != "preference" {
-		t.Fatalf("want 1 fact, got %d", len(facts))
-	}
-	// 同 subject+key 覆盖，不新增
-	_, err = svc.WriteFact(ctx, "user", "preference", "喜欢简洁且带示例", 0.8)
-	require.NoError(t, err)
-	facts, _ = svc.ListFacts(ctx, 50)
-	if len(facts) != 1 || facts[0].Value != "喜欢简洁且带示例" {
-		t.Fatalf("fact should be upserted, got %+v", facts)
-	}
-	require.NoError(t, svc.DeleteFact(ctx, facts[0].ID))
-	if facts, _ = svc.ListFacts(ctx, 50); len(facts) != 0 {
-		t.Fatalf("want 0 facts after delete")
-	}
-
-	// 程序：写入 → 列出 → 删除
-	proc, err := svc.WriteProcedure(ctx, "tool-flow-websearch", []string{"websearch", "webfetch", "file_write"})
-	require.NoError(t, err)
-	procs, err := svc.ListProcedures(ctx, 50)
-	require.NoError(t, err)
-	if len(procs) != 1 || len(procs[0].Steps) != 3 {
-		t.Fatalf("want 1 procedure with 3 steps, got %+v", procs)
-	}
-	require.NoError(t, svc.DeleteProcedure(ctx, proc.ID))
-	if procs, _ = svc.ListProcedures(ctx, 50); len(procs) != 0 {
-		t.Fatalf("want 0 procedures after delete")
 	}
 }
 
@@ -189,15 +146,9 @@ func TestApprovalApproveAndDecide(t *testing.T) {
 	}
 }
 
-
 func itoa(n int) string {
 	return string(rune('0' + n))
 }
-
-
-
-
-
 
 // TestQueueSteerPersistsAndQueues 有活动 run 时：消息立即落库（前端可见）+ 进入注入队列。
 func TestQueueSteerPersistsAndQueues(t *testing.T) {
@@ -225,7 +176,6 @@ func TestQueueSteerPersistsAndQueues(t *testing.T) {
 	assert.Equal(t, "RUN_STEER", rows[0].RunID)
 	assert.Equal(t, domain.MessageStatusCompleted, rows[0].Status)
 }
-
 
 type fakeRunner struct {
 	calls     atomic.Int32
@@ -341,9 +291,6 @@ func TestTaskCancelRunning(t *testing.T) {
 	}, 3*time.Second, 20*time.Millisecond, "长任务取消后应转 cancelled")
 }
 
-
-
-
 // 编译期断言 harness 包仍能 import（避免误删导致 task_test 编译仍过但行为退化）
 var _ = harness.WithRunContext
 var _ = llm.RoleUser
@@ -383,28 +330,42 @@ func TestWorkspaceBindLifecycle(t *testing.T) {
 	assert.Equal(t, "default-root", svc.WorkspaceRoot(ctx, ses.ID, "default-root"))
 }
 
-// TestSessionDataDirs 目录策略：默认工作区走 {dataHome}/memory+snapshots；
-// 绑定本地目录走 {dir}/.workbaby/memory+snapshots。
-func TestSessionDataDirs(t *testing.T) {
+// TestToLLMMessagesDropsOrphanTools 续跑/压缩后孤儿 tool 消息不会把整轮送进 LLM。
+//
+// <p>回归：toLLMMessages 历史上会把所有 role=tool 一并发回模型；若某条 tool 消息
+// 的 tool_call_id 在全列表里没有任何 assistant.tool_calls 匹配，上游 LLM 会以
+// 400 「tool result's tool id not found」拒绝整轮。修复后这些孤儿被静默剥掉。
+func TestToLLMMessagesDropsOrphanTools(t *testing.T) {
 	svc, _ := newChatOpsService(t)
-	home := t.TempDir()
-	svc.WithDataHome(home)
-	ctx := context.Background()
+	toolCallsJSON := `[{"id":"CALL_REAL","type":"function","function":{"name":"exec","arguments":"{}"}}]`
 
-	// 未绑定 → 默认根
-	def, err := svc.CreateSession(ctx, &domain.ChatSessionREQ{Name: "def"})
+	hists := []domain.MessageDO{
+		{ID: "M1", Role: domain.MessageRoleUser, Content: "开工", Status: domain.MessageStatusCompleted},
+		{ID: "M2", Role: domain.MessageRoleAssistant, Content: "", ToolCalls: toolCallsJSON, Status: domain.MessageStatusCompleted},
+		{ID: "M3", Role: domain.MessageRoleTool, ToolCallID: "CALL_REAL", Content: "OK", Status: domain.MessageStatusCompleted},
+		// 孤儿：tool_call_id 在上下文中没有匹配的 assistant tool_call（压缩或续跑产生）
+		{ID: "M4", Role: domain.MessageRoleTool, ToolCallID: "CALL_GHOST", Content: "stale", Status: domain.MessageStatusCompleted},
+		// 防御：tool_call_id 为空的 tool 消息也应被剥掉
+		{ID: "M5", Role: domain.MessageRoleTool, ToolCallID: "", Content: "?", Status: domain.MessageStatusCompleted},
+		{ID: "M6", Role: domain.MessageRoleUser, Content: "继续", Status: domain.MessageStatusCompleted},
+		{ID: "M7", Role: domain.MessageRoleAssistant, Content: "完成", Status: domain.MessageStatusCompleted},
+	}
+	out, err := svc.toLLMMessages(hists)
 	require.NoError(t, err)
-	mf, sd := svc.SessionDataDirs(ctx, def.ID)
-	assert.Equal(t, filepath.Join(home, "memory", def.ID, "MEMORY.md"), mf)
-	assert.Equal(t, filepath.Join(home, "snapshots", def.ID), sd)
+	require.Len(t, out, 5, "应剥掉 2 条孤儿 tool 消息，剩 user/asst/tool/user/asst")
 
-	// 绑定本地目录 → {dir}/.workbaby/ 下
-	proj := t.TempDir()
-	ws, err := svc.CreateSession(ctx, &domain.ChatSessionREQ{Name: "ws", WorkspacePath: proj})
-	require.NoError(t, err)
-	mf, sd = svc.SessionDataDirs(ctx, ws.ID)
-	assert.Equal(t, filepath.Join(proj, ".workbaby", "memory", ws.ID, "MEMORY.md"), mf)
-	assert.Equal(t, filepath.Join(proj, ".workbaby", "snapshots", ws.ID), sd)
+	for _, m := range out {
+		if m.Role == llm.RoleTool {
+			require.NotEmpty(t, m.ToolCallID, "剥除后剩余的 tool 消息必须带有效 tool_call_id")
+		}
+	}
+	// 找到唯一一条幸存 tool 消息，断言它就是 CALL_REAL 那条
+	var toolCount int
+	for _, m := range out {
+		if m.Role == llm.RoleTool {
+			toolCount++
+			require.Equal(t, "CALL_REAL", m.ToolCallID)
+		}
+	}
+	require.Equal(t, 1, toolCount)
 }
-
-

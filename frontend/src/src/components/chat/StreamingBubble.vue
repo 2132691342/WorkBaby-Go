@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Loader2 } from '@/components/common/icons'
+import { Brain, ChevronDown, Loader2 } from '@/components/common/icons'
 import TaskTimeline from '@/components/chat/TaskTimeline.vue'
 import ArtifactCard from '@/components/chat/ArtifactCard.vue'
 import GenUiRenderer from '@/components/genui/GenUiRenderer.vue'
@@ -13,7 +13,7 @@ import { t } from '@/i18n'
 
 /**
  * 流式中的 assistant 气泡：
- * 思考面板（自动展开/折叠）+ 工具时间线 + 交付卡片 + GenUI + 流式正文 + 用量徽标。
+ * 思考面板（自动展开/折叠 + 流式自动滚底）+ 工具卡片 + 交付卡片 + GenUI + 流式正文 + 用量徽标。
  *
  * <p>流式状态直接读 chat store；焦点模式下隐藏思考与工具时间线。
  */
@@ -31,6 +31,28 @@ const { enabled: focusMode } = useFocusMode()
 
 const hasThinking = computed(() => streamingThinking.value.length > 0)
 const tools = computed(() => streamingTools.value)
+
+// ===== 思考面板：思考中自动展开，正文开始产出后自动折叠；展开期间流式自动滚底 =====
+const thinkingOpen = ref(true)
+const thinkingBody = ref<HTMLElement | null>(null)
+
+watch(
+  () => streamingContent.value.length,
+  (now, prev) => {
+    if (now > 0 && prev === 0) thinkingOpen.value = false
+  }
+)
+
+watch(streamingThinking, async () => {
+  if (!thinkingOpen.value) return
+  await nextTick()
+  const el = thinkingBody.value
+  if (el) el.scrollTop = el.scrollHeight
+})
+
+function onThinkingToggle(e: Event): void {
+  thinkingOpen.value = (e.target as HTMLDetailsElement).open
+}
 </script>
 
 <template>
@@ -43,14 +65,26 @@ const tools = computed(() => streamingTools.value)
       <Loader2 class="h-3 w-3 animate-spin" />
       {{ t('chat.retryHint', streamingRetry.attempt, Math.max(1, Math.round(streamingRetry.delay_ms / 1000))) }}
     </div>
-    <!-- 流式思考面板：思考中自动展开，正文开始产出后自动折叠（:open 驱动 details）；焦点模式下隐藏 -->
+    <!-- 流式思考面板：思考中自动展开，正文开始产出后自动折叠；展开期间流式自动滚底 -->
     <details
       v-if="!focusMode && hasThinking"
-      class="mb-2 rounded-lg bg-wb-lavender/10 p-2 text-xs text-wb-muted"
-      :open="!streamingContent"
+      class="group mb-2 rounded-lg border border-wb-lavender/20 bg-wb-lavender/[0.07]"
+      :open="thinkingOpen"
+      @toggle="onThinkingToggle"
     >
-      <summary class="cursor-pointer select-none text-wb-muted">{{ t('chat.thinking') }}</summary>
-      <pre class="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap font-sans leading-relaxed">{{ streamingThinking }}</pre>
+      <summary class="flex cursor-pointer select-none items-center gap-1.5 px-2.5 py-1.5 text-xs text-wb-muted">
+        <Brain class="h-3.5 w-3.5 text-wb-lavender" />
+        <span>{{ thinkingOpen ? t('chat.thinking') : t('chat.thoughtDone') }}</span>
+        <Loader2 v-if="!streamingContent" class="h-3 w-3 animate-spin text-wb-lavender" />
+        <ChevronDown
+          class="ml-auto h-3 w-3 transition-transform duration-200"
+          :class="thinkingOpen ? 'rotate-180' : ''"
+        />
+      </summary>
+      <pre
+        ref="thinkingBody"
+        class="mx-2.5 mb-2 max-h-48 overflow-y-auto whitespace-pre-wrap font-sans text-[11px] leading-relaxed text-wb-muted/90"
+      >{{ streamingThinking }}</pre>
     </details>
 
     <!-- 任务步骤时间线（工具调用可视化）；焦点模式下隐藏（与 Claude Code focus 一致） -->

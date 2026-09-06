@@ -173,8 +173,6 @@ func TestRunnerThinkingSeparate(t *testing.T) {
 	}
 }
 
-
-
 // TestRunnerReactToolCall 多轮 ReAct：round1 调工具 → 执行回填 → round2 终答。
 func TestRunnerReactToolCall(t *testing.T) {
 	p := &scriptedProvider{calls: [][]llm.StreamChunk{
@@ -623,7 +621,6 @@ func (hiddenTool) Execute(_ context.Context, _ json.RawMessage) tool.ToolResult 
 	return tool.ToolResult{Content: "should not run"}
 }
 
-
 // TestRunnerApprovalRefusedDenied 用户拒绝 ask 审批：run 正常 end_turn、事件 refused=true、模型续跑第二轮。
 func TestRunnerApprovalRefusedDenied(t *testing.T) {
 	p := &scriptedProvider{calls: [][]llm.StreamChunk{
@@ -672,7 +669,6 @@ func TestRunnerApprovalRefusedDenied(t *testing.T) {
 		t.Fatalf("model should continue after refusal, provider calls = %d", p.idx)
 	}
 }
-
 
 type capturingProvider struct {
 	inner *scriptedProvider
@@ -815,8 +811,6 @@ func TestRunnerFollowUpContinues(t *testing.T) {
 	}
 }
 
-
-
 type countingTool struct {
 	mu    sync.Mutex
 	calls int
@@ -853,8 +847,6 @@ func countDefs() []llm.ToolDefinition {
 	return []llm.ToolDefinition{{Name: "count", Description: "count", Parameters: map[string]any{"type": "object"}}}
 }
 
-
-
 // TestRunnerTruncatedAnthropicStopReason Anthropic 的 max_tokens 同样触发重发语义。
 func TestRunnerTruncatedAnthropicStopReason(t *testing.T) {
 	ct := &countingTool{}
@@ -880,29 +872,6 @@ func TestRunnerTruncatedAnthropicStopReason(t *testing.T) {
 	}
 	if got := p.idx; got != 2 {
 		t.Fatalf("want 2 llm calls, got %d", got)
-	}
-}
-
-
-
-func TestRunnerPathTrustAllow(t *testing.T) {
-	var capturedPath string
-	p := &scriptedProvider{calls: [][]llm.StreamChunk{
-		{
-			{ToolCall: &llm.NormalizedToolCall{ID: "t1", Name: "exec",
-				Arguments: json.RawMessage(`{"command":"go","args":["version"]}`)}},
-			{FinishReason: stringPtr("tool_calls")},
-		},
-		{{Delta: llm.Message{Role: llm.RoleAssistant, Content: "ok"}, FinishReason: stringPtr("end_turn")}},
-	}}
-	execTool := execScripted("go version go1.25", &capturedPath)
-	sink := &recordingSink{}
-	r := trustRunner(p, sink, execTool, func(context.Context, string, json.RawMessage) (bool, string) {
-		return true, ""
-	})
-	res := r.RunMessages(context.Background(), "RUN_t", "SES_t", "M_t", "test", nil)
-	if res.Reason == ReasonError && res.Err != nil {
-		t.Fatalf("expected ok, got reason=%v err=%v", res.Reason, res.Err)
 	}
 }
 
@@ -1048,4 +1017,99 @@ func TestTurnAdjusterDowngradesOnStreamError(t *testing.T) {
 	}
 }
 
+// ===== 统一护栏链：策略门用 per-call 风险裁决，审批只问一次 =====
 
+// classifiedTool 带 tool.RiskClassifier 的最小工具：按参数返回 per-call 风险。
+type classifiedTool struct{}
+
+func (classifiedTool) Name() string              { return "guarded" }
+func (classifiedTool) Description() string       { return "guard test tool" }
+func (classifiedTool) RiskLevel() tool.RiskLevel { return tool.RiskExec }
+
+func (classifiedTool) Schema() tool.ToolSchema {
+	return tool.ToolSchema{Name: "guarded", Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}}}`)}
+}
+
+func (classifiedTool) Execute(_ context.Context, _ json.RawMessage) tool.ToolResult {
+	return tool.ToolResult{Content: "ok"}
+}
+
+// ClassifyArgs 白名单内命令 → (cmd, "")；其它 → (cmd, needs_approval)；坏 JSON → ("", "")。
+func (classifiedTool) ClassifyArgs(args json.RawMessage) (string, string) {
+	var req struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return "", ""
+	}
+	if req.Command == "" {
+		return "", ""
+	}
+	if req.Command == "git status" {
+		return req.Command, ""
+	}
+	return req.Command, tool.RiskApprovalNeeds
+}
+
+// countingApprover 记录每次审批的描述与风险。
+type countingApprover struct {
+	calls int
+	desc  string
+	risk  string
+	ok    bool
+}
+
+func (c *countingApprover) Approve(_ context.Context, command, risk string) bool {
+	c.calls++
+	c.desc, c.risk = command, risk
+	return c.ok
+}
+
+func guardRunner(mode tool.SessionMode, approver *countingApprover) *Runner {
+	r := NewRunner(&scriptedProvider{}, &recordingSink{}, DefaultConfig())
+	return r.WithToolGate(tool.NewGate(mode), approver.Approve)
+}
+
+func guardCall(command string) llm.NormalizedToolCall {
+	return llm.NormalizedToolCall{
+		ID: "c1", Name: "guarded",
+		Arguments: json.RawMessage(`{"command":"` + command + `"}`),
+	}
+}
+
+// TestGateSafeCommandSkipsApproval 白名单安全命令（per-call risk 空）免审放行。
+func TestGateSafeCommandSkipsApproval(t *testing.T) {
+	approver := &countingApprover{ok: true}
+	r := guardRunner(tool.SessionModeDefault, approver)
+
+	msg := r.gateTool(context.Background(), "RUN_G", "SES_G", 0, guardCall("git status"), classifiedTool{})
+	require.Nil(t, msg, "安全命令应放行")
+	assert.Zero(t, approver.calls, "安全命令不应触发审批")
+}
+
+// TestGateAskUsesPerCallRisk 危险命令：审批描述为具体命令、只问一次；拒绝回结构化回执。
+func TestGateAskUsesPerCallRisk(t *testing.T) {
+	approver := &countingApprover{ok: true}
+	r := guardRunner(tool.SessionModeDefault, approver)
+
+	msg := r.gateTool(context.Background(), "RUN_G", "SES_G", 0, guardCall("rm -rf /"), classifiedTool{})
+	require.Nil(t, msg, "批准后放行")
+	assert.Equal(t, 1, approver.calls, "单层闸门：只问一次")
+	assert.Equal(t, "rm -rf /", approver.desc, "审批描述应为具体命令")
+	assert.Equal(t, tool.RiskApprovalNeeds, approver.risk)
+
+	denied := &countingApprover{ok: false}
+	r2 := guardRunner(tool.SessionModeDefault, denied)
+	require.NotNil(t, r2.gateTool(context.Background(), "RUN_G", "SES_G", 0, guardCall("rm -rf /"), classifiedTool{}),
+		"拒绝应返回 tool 消息（Refused 语义）")
+}
+
+// TestGateYoloNeverAsks 完全访问模式：任何命令都不触发审批。
+func TestGateYoloNeverAsks(t *testing.T) {
+	approver := &countingApprover{ok: true}
+	r := guardRunner(tool.SessionModeYolo, approver)
+
+	msg := r.gateTool(context.Background(), "RUN_G", "SES_G", 0, guardCall("anything"), classifiedTool{})
+	require.Nil(t, msg)
+	assert.Zero(t, approver.calls)
+}

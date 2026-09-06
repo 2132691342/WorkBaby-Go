@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useClipboard } from '@vueuse/core'
-import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText } from '@/components/common/icons'
+import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, Brain } from '@/components/common/icons'
 import type { Message } from '@/types/api'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
@@ -11,7 +11,7 @@ import { useFocusMode } from '@/composables/useFocusMode'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import TaskTimeline from '@/components/chat/TaskTimeline.vue'
 import UsageBadge from '@/components/chat/UsageBadge.vue'
-import { resolveMessageBlocks, blocksToToolCalls } from '@/chat/models/blocks'
+import { resolveMessageBlocks, blocksToToolCalls, stripThinkBlocks } from '@/chat/models/blocks'
 import type { ToolCallInfo } from '@/stores/chat/ChatStreamDecoder'
 
 /**
@@ -84,9 +84,9 @@ function fmtTime(iso: string | number): string {
  */
 const { copy: copyToClipboard } = useClipboard({ legacy: true })
 
-/** 剥离 Markdown 语法 → 纯文本（回应「复制出来是 MD」的痛点）。 */
+/** 剥离 Markdown 语法 → 纯文本（回应「复制出来是 MD」的痛点）；think 块一并剥离。 */
 function stripMarkdown(md: string): string {
-  return md
+  return stripThinkBlocks(md)
     .replace(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g, (_m, code: string) => code.trim() + '\n')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
@@ -257,7 +257,11 @@ async function forkFrom(): Promise<void> {
       :class="isUser ? 'bg-wb-primary text-white' : 'border border-wb-border bg-wb-surface text-wb-ink'"
     >
       <span v-if="isUser" class="whitespace-pre-wrap">{{ message.content }}</span>
-      <MarkdownRenderer v-else :content="message.content" :streaming="false" />
+      <MarkdownRenderer v-else-if="message.content?.trim()" :content="message.content" :streaming="false" />
+      <!-- assistant 整轮只跑了工具、没写收尾文本：给个简洁占位，避免「消息空白但工具齐全」的违和 -->
+      <span v-else-if="historyTools.length > 0" class="text-[12px] text-wb-muted">
+        {{ t('chat.toolsOnlyMessage', historyTools.length) }}
+      </span>
     </div>
 
     <!-- 编辑模式 -->
@@ -322,9 +326,15 @@ async function forkFrom(): Promise<void> {
     </div>
 
     <!-- 历史消息的思考过程回看（默认折叠；焦点模式下隐藏） -->
-    <details v-if="!focusMode && !isUser && message.thinking && !editing" class="mt-1 max-w-[80%] rounded-lg bg-wb-lavender/10 px-3 py-2 text-xs text-wb-muted">
-      <summary class="cursor-pointer select-none">{{ t('chat.thoughtDone') }}</summary>
-      <pre class="mt-1 whitespace-pre-wrap font-sans leading-relaxed">{{ message.thinking }}</pre>
+    <details
+      v-if="!focusMode && !isUser && message.thinking && !editing"
+      class="mt-1 max-w-[80%] rounded-lg border border-wb-lavender/20 bg-wb-lavender/[0.07] text-xs text-wb-muted"
+    >
+      <summary class="flex cursor-pointer select-none items-center gap-1.5 px-2.5 py-1.5">
+        <Brain class="h-3.5 w-3.5 text-wb-lavender" />
+        {{ t('chat.thoughtDone') }}
+      </summary>
+      <pre class="mx-2.5 mb-2 max-h-48 overflow-y-auto whitespace-pre-wrap font-sans text-[11px] leading-relaxed text-wb-muted/90">{{ message.thinking }}</pre>
     </details>
 
     <!-- 用量元信息：悬浮看精确值；为空隐藏 -->

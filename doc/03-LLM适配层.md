@@ -1,89 +1,80 @@
-# 03 · LLM 适配层
+# 03 LLM 适配层
 
-`internal/llm/`：统一 Provider 抽象 + 三种协议适配（openai / anthropic / ollama），把流式协议、工具调用、推理文本、用量统计归一化后交给 `internal/harness/` 消费，并以错误分类驱动有界重试。
+## 定位
 
-## 设计
+`internal/llm/` 把上游差异（OpenAI / Anthropic / Ollama / 国产兼容端）归一为统一的 `ChatRequest` / `ChatResponse` / `StreamChunk` / `Message` / `TokenUsage` 协议供 harness 使用。
 
-- **一个接口，三种协议**：所有上游经 `Provider` 接口接入；`registry` 子包按 `AiProviderDO.kind` 构建实例（未知 kind 报 3020），构建失败记入 unready 表并在就绪接口可见。
-- **协议归一化**：正文/推理分离的 `Message`、`TokenUsage`、`NormalizedToolCall` 是跨协议通货；各家的帧格式与字段差异全部在适配层内部吸收。
-- **参数三级合并**：`ResolveParams` 按 请求 > Provider > 全局默认 取最高优先级非 nil 值；`ExtraBody` 浅合并；显式 `disabled` 的 ThinkingConfig 保留（显式意图不参与零值判断）。
-- **错误即分类**：HTTP/transport 错误统一映射为 3000 段 `AppError`，重试器只看分类桶，不解析上游报文。
-- **边界**：`llm/` 不 import harness / agent / api / service / wails；不感知会话与持久化。
+## 设计要点
+
+- **Provider 接口**（`llm.Provider`）：`Name` / `Kind` / `Chat` / `Stream` / `Models` / `Ping`，每个上游一个实现（`openai/`、`anthropic/`、`ollama/`）
+- **流式 `StreamChunk`** 统一形态：`{Delta Message, ToolCall *NormalizedToolCall, FinalUsage *TokenUsage, FinishReason *string, Err error}`；harness 循环消费
+- **工具调用归一**：`NormalizedToolCall{ID, Name, Arguments json.RawMessage}`，所有上游（结构化 + 文本兜底）汇流到同一形态
+- **thinking 方言探测**：7 种方言（auto / none / adaptive / enabled / reasoning_effort / enable_bool），未知上游回落 `none`（不注入任何字段，宁可不开也不发错）
+- **重试**：`DefaultRetryPolicy()` 仅重试瞬时错误（429 / 5xx / 超时），指数退避 + 抖动，`Retry-After` 优先
+- **错误归一化**：`UpstreamError` 抽人话 + 原始 JSON 不得进 UI 文案
 
 ## 核心契约
 
-### Provider 接口（`provider.go`）
+### ChatRequest
 
-| 方法 | 语义 |
+| 字段 | 含义 |
 |---|---|
-| `Name() string` / `Kind() ProviderKind` | 展示名；协议族 `openai` / `anthropic` / `ollama` |
-| `Chat(ctx, *ChatRequest) (*ChatResponse, error)` | 非流式单轮 |
-| `Stream(ctx, *ChatRequest) (<-chan StreamChunk, error)` | 流式；流结束/取消后由实现 close；流中错误经 `StreamChunk{Err}` 发送 |
-| `Models(ctx) ([]ModelInfo, error)` | 模型清单 |
-| `Ping(ctx) error` | 连通性 |
+| `Model` | 当前 run 的模型名 |
+| `Messages` | 已归一化的消息序列（harness 装配） |
+| `Tools` | `[]ToolDefinition{Name, Description, Parameters}` |
+| `Temperature` / `TopP` / `MaxTokens` / `Thinking` / `ExtraBody` | 三层合并：请求级 > Provider 级 > 全局默认 |
+| `User` | 固定 `"local"`（本机单用户） |
 
-`ChatRequest`：Model / Messages（system 在首）/ Tools / Temperature / TopP / MaxTokens / Stop / Thinking / ExtraBody / User。
-`StreamChunk`：Delta(Message 片段) / ToolCall（闭合时填一次）/ FinalUsage（末片）/ FinishReason / Err。
+### TokenUsage
 
-### 归一化类型
-
-| 类型 | 要点 |
+| 字段 | 含义 |
 |---|---|
-| `Message` | Role / Content / Thinking（推理文本独立，不混入 Content）/ ToolCalls / ToolCallID / ToolName |
-| `TokenUsage` | InputTokens / OutputTokens / CacheReadTokens / CacheWriteTokens / TotalTokens |
-| `NormalizedToolCall` | ID / Name / Arguments(`json.RawMessage`) |
-| `toolcall.Accumulator` | OpenAI 流式 tool_calls 累积器：按 index 拼参数字符串，括号配对判完整后吐出；流尾 `Dump()` 兜底未闭合调用 |
+| `InputTokens` / `OutputTokens` | 本轮实际 |
+| `CacheReadTokens` / `CacheWriteTokens` | 缓存拆分维度（与 Input 拆解，不叠加） |
+| `TotalTokens` | 上游给出（部分上游不回 → 用三项之和兜底） |
 
-### 三适配（`openai/` `anthropic/` `ollama/`）
+### Thinking 方言探测表
 
-| 适配 | 端点 | 流式帧 | 工具调用 | 推理文本 |
-|---|---|---|---|---|
-| openai | `{base}/chat/completions`（base 由用户完整给出，含版本段） | SSE `data:` 行，`[DONE]` 终止 | `tool_calls` 字符串片段 → Accumulator | reasoning_content/thinking 归入 Thinking |
-| anthropic | `{base}/v1/messages`（anthropic-version: 2023-06-01） | SSE 事件序列 message_start → content_block_* → message_delta → message_stop | `content_block.type==tool_use` 完整块 | `content_block.type==thinking` 块 |
-| ollama | `{base}/api/chat`（默认 `http://127.0.0.1:11434`） | ndjson 每行一对象，`done:true` 终止 | `message.tool_calls` 完整数组 | — |
-
-三家 429 响应均把 `Retry-After` 头经 `RetryAfterHint` 以 `retry_after=Ns` 后缀嵌入错误文本。
-
-### 错误码（3000 段，`errors.go`）与 MapHTTPStatus
-
-| 码 | 语义 | HTTP 映射 |
+| 探测 | 命中 host | 命中 model |
 |---|---|---|
-| 3000 | 通用 | — |
-| 3001 | provider 未就绪 | — |
-| 3002 | API key 无效 | 401 / 403 |
-| 3003 | 限流 | 429 |
-| 3004 | 上游服务错误 | 5xx |
-| 3005 | 响应超时 / transport 错误 | 408；连接类错误 |
-| 3006 | 其余 4xx 请求错误 | ≥400 兜底 |
-| 3007 | 模型不存在/无权限 | 404 |
-| 3008 | 上下文过长 | 413 |
-| 3009 | 能力未支持 | — |
+| `adaptive` | `minimax / minimax.chat / api.minimax` | — |
+| `enabled` | `bigmodel.cn / open.bigmodel / volces.com / volcengineapi.com / ark.cn-beijing / moonshot.cn / moonshot.ai` | — |
+| `enable_bool` | `dashscope / bailian / aliyuncs.com` | qwen3 / `-thinking` |
+| `reasoning_effort` | `api.openai.com` | `o1` / `o3` / `o4` / `gpt-5` |
+| `none` | `deepseek.com / api.deepseek` | — |
+| `none`（默认） | — | 其它 |
 
-### 错误分类与重试（`retry.go`）
+显式指定（Provider 设置）优先于探测。
 
-| ErrorClass | 归入条件 | 策略 |
-|---|---|---|
-| transient | 3003/3004/3005、`[3003][3004][3005]` 内层标记、超时、EOF/连接重置/拒绝 | 可重试 |
-| auth | 3001/3002（配置错误） | 不重试 |
-| context | 3008（需压缩） | 不重试 |
-| request | 3006/3007/3009（请求本身错） | 不重试 |
-| cancelled | `context.Canceled` | 永不重试，且优先于一切判定 |
-| unknown | 其余 | 保守不重试 |
+### `ResolveParams(req, providerParams, defaults)`
 
-- `ClassifyError`：先看外层 `AppError` 码；`pkg.Wrap` 会把内层段位码字符串化进 Details，故再扫描错误文本中的 `[code]` 标记兜底。
-- `RetryPolicy`：`DefaultRetryPolicy()` = 3 次尝试、800ms 基准、8s 封顶；`Backoff` = Retry-After 优先，否则 `基准<<attempt` + 0~25% 抖动，封顶；`Wait` 期间尊重 ctx 取消。
-- `RetryAfter`：从错误文本正则提取 `retry_after=(\d+)s`（1~120s 有效，越界按 0）。
+合并顺序：请求级 `reqParams` → `providerParams` → `defaults`。三处都缺时回落 LLM API 默认。
 
 ## 关键流程
 
-1. **建流重试**：harness `Runner.streamWithRetry` 调 `provider.Stream`；建流失败且 `IsTransient` 时，发 `EventRetry`（service 侧转为 `chat:retry` 事件，载荷 attempt / delay_ms / reason），`Wait` 退避后重建流，最多 `MaxAttempts` 次。
-2. **流中途错误不重试**：避免重复输出；错误经 `StreamChunk{Err}` 交给 harness 处置。
-3. **归一化**：适配层逐帧解析 → Delta/Thinking 片段、Accumulator 闭合的 `NormalizedToolCall`、末片 `FinalUsage` → harness 持续 Emit 并累计用量。
-4. **就绪管理**：registry 构建/单实例 Reload；`PingAll` 顺序探活；未就绪原因在 `Status` 中可见，熔断状态由 service 侧对外暴露。
+### 流式响应汇聚
+
+```
+provider.Stream() → chan StreamChunk
+  → harness 循环：
+    Delta.Content → EventTurnDelta("content", ...)
+    Delta.Thinking → EventTurnThinking("thinking", ...)
+    ToolCall → EventToolCall(...)
+    FinalUsage → 累计 r.usage
+    FinishReason → 终止判定
+    Err → 跳出本轮收尾
+```
+
+### BuildAssistantMessage
+
+构造发给下一轮的 assistant 消息：合并 `content` + `tool_calls`（`role=assistant`）。
+
+### 上游错误归一化
+
+`ExtractUpstreamError(body)` → `UpstreamError{StatusCode, Message, Kind, Raw}`，前端拿 `Message`（人话），不直接拼 `Raw`。
 
 ## 约束
 
-- 依赖方向单向：registry → openai/anthropic/ollama → llm 基础类型；`llm/` 不反向依赖任何实现。
-- HTTP 客户端不设 `Client.Timeout`（会把长流式在 30s 硬截断）：建连 10s / 响应头 30s，生命周期由调用方 ctx 控制。
-- BaseURL 不做补全或嗅探：路径不合规得到 provider 明确错误（404/400），便于排查。
-- 重试只发生在建流阶段且仅限瞬时类；取消信号永远优先、不吞不重。
+- 任何上游差异（字段名 / 枚举值 / 默认开闭）都在 `internal/llm/<provider>/` 内吸收，不泄漏到 harness
+- thinking 字段默认**不下发**（避免未知上游 400）；用户显式选择才发
+- `chatcmpl-tool-*` 风格的 tool call id 由上游给，harness 不造，但保证幂等键 `tool:<name>|<args>` 在 resume 时命中

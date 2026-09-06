@@ -1478,13 +1478,42 @@ func (s *ChatService) persistUsage(ctx context.Context, ses *domain.ChatSessionD
 }
 
 // toLLMMessages 历史消息 → llm.Message；重建 assistant 的工具调用与 tool 消息上下文。
+//
+// <p>同时按全列表里所有 assistant 的 tool_calls 预先索引，过滤掉孤儿
+// {@code role=tool}（tool_call_id 在上下文中没有匹配的 assistant tool_call）。
+// 孤儿通常由以下路径产生：续跑/编辑重发后旧 tool 结果残留、压缩器只摘掉
+// assistant 段而保留 tool 段、checkpoint 续跑把过期 turn 的 tool 结果回放。
+// 不剥掉的话上游 LLM 会以「tool result's tool id not found」400 拒绝整轮。
 func (s *ChatService) toLLMMessages(hists []domain.MessageDO) ([]*llm.Message, error) {
+	knownToolIDs := make(map[string]struct{}, len(hists))
+	for _, m := range hists {
+		if m.Role != domain.MessageRoleAssistant || m.ToolCalls == "" {
+			continue
+		}
+		var calls []llm.ToolCall
+		if err := json.Unmarshal([]byte(m.ToolCalls), &calls); err != nil {
+			continue
+		}
+		for _, c := range calls {
+			if c.ID != "" {
+				knownToolIDs[c.ID] = struct{}{}
+			}
+		}
+	}
 	out := make([]*llm.Message, 0, len(hists))
 	for i := range hists {
 		m := hists[i]
 		if m.Status == domain.MessageStatusStreaming {
 			// 当前 assistant 占位不回填（避免循环引用）
 			continue
+		}
+		if m.Role == domain.MessageRoleTool {
+			if m.ToolCallID == "" {
+				continue
+			}
+			if _, ok := knownToolIDs[m.ToolCallID]; !ok {
+				continue
+			}
 		}
 		lm := &llm.Message{Role: llm.RoleType(m.Role), Content: m.Content, Thinking: m.Thinking}
 		if m.Role == domain.MessageRoleTool {

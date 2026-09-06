@@ -18,9 +18,9 @@ import (
 // ExecTool 执行白名单内命令；参数数组形式，绝不拼 shell。
 type ExecTool struct {
 	policy    tool.ExecPolicy
-	approver  tool.Approver              // 可选；nil = 无审批门（白名单外/危险命令直接拒绝）
-	pathDirs  func() []string            // 内置运行时 bin 目录提供者；nil = 不增强 PATH
-	whitelist func() []string            // 可选；非 nil 时每次执行动态覆盖 policy.AllowedBinaries（运行时设置页白名单）
+	approver  tool.Approver                    // 兜底审批门；仅在脱离 runner 护栏链直调时生效
+	pathDirs  func() []string                  // 内置运行时 bin 目录提供者；nil = 不增强 PATH
+	whitelist func() []string                  // 可选；非 nil 时每次执行动态覆盖 policy.AllowedBinaries（运行时设置页白名单）
 	root      func(ctx context.Context) string // 会话工作区根；nil = cwd 缺省用进程当前目录
 }
 
@@ -28,7 +28,32 @@ type ExecTool struct {
 func New(policy tool.ExecPolicy) *ExecTool { return &ExecTool{policy: policy} }
 
 // WithApprover 注入审批门（service 层 ApprovalService 实现 tool.Approver）。
+// 仅作为脱离 runner 护栏链直调时的兜底；链内调用由策略门统一裁决。
 func (t *ExecTool) WithApprover(a tool.Approver) *ExecTool { t.approver = a; return t }
+
+// ClassifyArgs 实现 tool.RiskClassifier：按本次命令给出审批描述与 per-call 风险。
+// 白名单内安全命令返回 (command, "")——策略门据此免审放行。
+func (t *ExecTool) ClassifyArgs(args json.RawMessage) (string, string) {
+	var req execReq
+	if err := json.Unmarshal(args, &req); err != nil {
+		return "", ""
+	}
+	full := req.Command
+	if len(req.Args) > 0 {
+		full += " " + strings.Join(req.Args, " ")
+	}
+	if strings.TrimSpace(full) == "" {
+		return "", ""
+	}
+	ok, risk := t.effectivePolicy().Classify(full)
+	if ok {
+		return full, ""
+	}
+	if risk == "" {
+		return "", "" // 空命令：交 Execute 硬拒绝，不走审批
+	}
+	return full, risk
+}
 
 // WithRootResolver 注入会话工作区根解析器（tool.ResolveRoot 包装 RootResolver）；
 // 入参 cwd 缺省且解析出有效根时，命令在该目录执行——与 file 系工具的沙箱根一致。
@@ -93,20 +118,25 @@ func (t *ExecTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 	if len(req.Args) > 0 {
 		full += " " + strings.Join(req.Args, " ")
 	}
-	// 安全分类：白名单内直接放行；白名单外/危险命令走审批门（无审批门则沿用原拒绝语义）
+	// 安全分类：白名单内直接放行；白名单外/危险命令按护栏链裁决。
+	// 统一护栏链（runner 策略门 + 单次审批）已裁决时不再重复询问——单层闸门；
+	// 脱链直调（测试/裸用）保留审批兜底，fail-closed 语义不变。
 	policy := t.effectivePolicy()
 	if ok, risk := policy.Classify(full); !ok {
 		if risk == "" {
 			return tool.ToolResult{Err: pkg.New(4001, tool.ErrBinaryDenied.Message, "<empty>")}
 		}
-		if t.approver == nil {
-			if risk == tool.RiskApprovalIrrev {
-				return tool.ToolResult{Err: pkg.New(4002, tool.ErrPatternDenied.Message, full)}
+		switch {
+		case tool.GuardChainActive(ctx):
+			// runner 护栏链已放行（含审批通过），不再二次询问
+		case t.approver != nil:
+			if !t.approver.Approve(ctx, full, risk) {
+				return tool.ToolResult{Err: pkg.New(4003, tool.ErrApprovalNeeded.Message+", user denied or timed out", full)}
 			}
+		case risk == tool.RiskApprovalIrrev:
+			return tool.ToolResult{Err: pkg.New(4002, tool.ErrPatternDenied.Message, full)}
+		default:
 			return tool.ToolResult{Err: pkg.New(4001, tool.ErrBinaryDenied.Message, req.Command)}
-		}
-		if !t.approver.Approve(ctx, full, risk) {
-			return tool.ToolResult{Err: pkg.New(4003, tool.ErrApprovalNeeded.Message+", user denied or timed out", full)}
 		}
 	}
 

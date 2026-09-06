@@ -8,6 +8,7 @@
  */
 import { computed } from 'vue'
 import ChartNode from './ChartNode.vue'
+import { openExternal } from '@/api/shellBridge'
 import { t } from '@/i18n'
 
 export interface UiNode {
@@ -241,8 +242,9 @@ const nodeKind = computed(() => props.node.kind.toLowerCase())
     link
     type="primary"
     size="small"
-    :href="str(node.props?.href, '#')"
     tag="a"
+    :href="str(node.props?.href, '#')"
+    @click.prevent="openExternal(str(node.props?.href, '#'))"
   >
     {{ str(node.props?.label, '') }}
   </el-button>

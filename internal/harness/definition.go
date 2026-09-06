@@ -17,7 +17,7 @@ type Definition struct {
 	Name        string       // 唯一名（"default" / "coding" / "research" / "writer"）
 	Description string       // 一句话职责（未来供 UI 选择与命令面板）
 	Persona     string       // 人设/方法论 system 段；空 = 不注入
-	Tools       ToolPolicy   // 工具策略（v1 只消费 Allow/Deny；P1-D 扩展三级）
+	Tools       ToolPolicy   // 工具策略（Allow/Ask/Deny 三级）
 	Memory      MemoryPolicy // 记忆策略
 	Budget      Budget       // 运行预算
 }

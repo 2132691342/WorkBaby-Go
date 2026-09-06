@@ -50,7 +50,7 @@ func DefaultConfig() Config {
 		StagnationLimit:  5,
 		MaxToolResultLen: 50_000,
 		ToolParallelism:  4,
-		ContextBudget:    120_000, // 估算 token；Micro 压缩兜底
+		ContextBudget:    120_000, // 估算 token 上限
 		CompressRatio:    0.9,
 	}
 }
@@ -91,18 +91,18 @@ type Runner struct {
 	toolDefs        []llm.ToolDefinition
 	middlewares     []Middleware
 	cfg             Config
-	checkpoints     CheckpointStore        // 可选；nil = 不落检查点（JSONL 或 SQL 实现）
-	hooks           LoopHooks              // 循环缝集合（nil 字段 = 关闭）
-	compressor      Compressor             // 上下文压缩器；默认 Micro；nil 时 ByContextBudget 关闭
-	reqParams       RequestParams          // 请求级采样参数（chat 透传；nil = 不覆盖）
-	providerParams  *llm.ProviderParams    // Provider 级（ai_providers.temperature/thinking）；nil = 走全局
-	defaults        llm.Defaults           // 全局默认（system_settings.chat.defaultTemperature/Thinking）
-	model           string                 // 当前 run 的模型（子 Agent 委派继承同一模型）
-	execs           *ExecutionRegistry     // 执行平面；委派时登记子 run 拓扑（nil = 不登记）
-	modelSwitches   int                    // 本 run 已发生的模型切换次数（有界防横跳）
-	steps           map[string]StepRecord  // 幂等恢复：已完成成功工具调用（name+args → 结果）
-	stepsMu         sync.Mutex             // 工具并发路径保护 steps
-	delegateMu      sync.Mutex             // 委派去重保护
+	checkpoints     CheckpointStore            // 可选；nil = 不落检查点（JSONL 或 SQL 实现）
+	hooks           LoopHooks                  // 循环缝集合（nil 字段 = 关闭）
+	compressor      Compressor                 // 上下文压缩器；默认 Micro；nil 时 ByContextBudget 关闭
+	reqParams       RequestParams              // 请求级采样参数（chat 透传；nil = 不覆盖）
+	providerParams  *llm.ProviderParams        // Provider 级（ai_providers.temperature/thinking）；nil = 走全局
+	defaults        llm.Defaults               // 全局默认（system_settings.chat.defaultTemperature/Thinking）
+	model           string                     // 当前 run 的模型（子 Agent 委派继承同一模型）
+	execs           *ExecutionRegistry         // 执行平面；委派时登记子 run 拓扑（nil = 不登记）
+	modelSwitches   int                        // 本 run 已发生的模型切换次数（有界防横跳）
+	steps           map[string]StepRecord      // 幂等恢复：已完成成功工具调用（name+args → 结果）
+	stepsMu         sync.Mutex                 // 工具并发路径保护 steps
+	delegateMu      sync.Mutex                 // 委派去重保护
 	delegateFlights map[string]*delegateFlight // 同参委派在飞表（agent|task → flight）
 }
 
@@ -239,9 +239,8 @@ func NewRunner(p llm.Provider, sink Sink, cfg Config) *Runner {
 		cfg.MaxToolResultLen = 50_000
 	}
 	mws := defaultMiddlewares()
-	// legacy CompressTrigger：显式声明时才追加 HistoryTruncator 兜底。
-	// 现代配置走 ContextBudget（Micro 压缩器每轮压缩），两者不并存；truncator 仅在
-	// 调用方关闭 ContextBudget 而仍想按阈值截断时生效（压缩管线闭环）。
+	// CompressTrigger 仅在调用方关闭 ContextBudget 且仍想按阈值截断时显式追加 HistoryTruncator；
+	// 现代配置走 ContextBudget + Micro 压缩器每轮压缩，两者不并存。
 	if cfg.CompressTrigger > 0 {
 		mws = append(mws, NewHistoryTruncator(cfg.CompressTrigger, cfg.CompressRatio))
 	}
@@ -285,7 +284,7 @@ func (r *Runner) WithCheckpointStore(store CheckpointStore) *Runner {
 	return r
 }
 
-// WithToolGate 启用 P1-D 工具策略门（allow/ask/deny × SessionMode）。
+// WithToolGate 启用工具策略门（allow/ask/deny × SessionMode）。
 // approve 委托人工审批（通常包 ApprovalService.Approve）；approve 为 nil 时 ask 按放行处理。
 func (r *Runner) WithToolGate(gate *tool.Gate, approve func(ctx context.Context, description, risk string) bool) *Runner {
 	r.hooks.ToolGate = gate
@@ -389,7 +388,7 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			break
 		}
 
-		// P1-E 上下文预算：每轮前把消息压回 ContextBudget 内；
+		// 上下文预算：每轮前把消息压回 ContextBudget 内；
 		// Auto（结构化摘要）优先，确定性 Micro 兜底
 		if r.cfg.ContextBudget > 0 && r.compressor != nil {
 			if cc, ok := r.compressor.(ContextCompressor); ok {
@@ -482,7 +481,7 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		contentAll.WriteString(content.String())
 		thinkingAll.WriteString(thinking.String())
 
-		// 文本工具调用兜底：部分兼容端点把 tool call 写进正文；只认本次暴露的工具名
+		// 文本工具调用兜底：部分兼容端点把调用意图写成正文；只认本次暴露的工具名
 		if len(toolCalls) == 0 {
 			if textCalls := parseTextToolCalls(content.String(), r.toolDefs); len(textCalls) > 0 {
 				toolCalls = textCalls
@@ -495,14 +494,15 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		// 组装 assistant 消息（含 tool_calls）并回填
 		msgs = append(msgs, buildAssistantMessage(content.String(), toolCalls))
 
-		// 轮次结束附带累计用量（快照含缓存拆分），供前端流式 stats 与中途中断兜底
-		snap := r.usage.Snapshot()
+		// 轮次结束附带本轮用量，供前端流式 stats（上下文进度条）。必须是 per-turn：
+		// usage 在循环里随最新一块流式响应被覆盖，对应当前 turn 实际送入模型的 token；
+		// 用累计快照会让 53 个工具轮后 input_tokens 累到百万级，把进度条顶到 100%。
 		r.sink.Emit(Event{Kind: EventTurnEnd, RunID: runID, SessionID: sessionID, Turn: turn, Payload: UsagePayload{
-			InputTokens:  snap.InputTokens,
-			OutputTokens: snap.OutputTokens,
-			CacheRead:    snap.CacheReadTokens,
-			CacheWrite:   snap.CacheWriteTokens,
-			Total:        snap.TotalTokens,
+			InputTokens:  usage.InputTokens,
+			OutputTokens: usage.OutputTokens,
+			CacheRead:    usage.CacheReadTokens,
+			CacheWrite:   usage.CacheWriteTokens,
+			Total:        usage.TotalTokens,
 		}})
 
 		// 截断重发：输出被上限截断时 tool call 参数多半残缺——不执行（必失败或行为危险），
@@ -574,7 +574,8 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		finalUsage = r.usage.Snapshot()
 	}
 
-	// 统一出口：先错误事件后终态 RunDone——所有退出路径都从这里收束，事件流有始有终
+	// 统一出口：先错误事件后终态 RunDone——所有退出路径都从这里收束，事件流有始有终。
+	// 错误按类别归一（kind）并附可操作提示，用户看到的不是原始堆栈而是「下一步怎么办」。
 	if runErr != nil {
 		ae, _ := pkg.As(runErr)
 		code, msg := 5000, runErr.Error()
@@ -585,7 +586,11 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 				msg = msg + ": " + ae.Details
 			}
 		}
-		r.sink.Emit(Event{Kind: EventError, RunID: runID, SessionID: sessionID, Payload: ErrorPayload{Code: code, Message: msg}})
+		kind, hint := classifyRunError(runErr)
+		if hint != "" {
+			msg = msg + "\n" + hint
+		}
+		r.sink.Emit(Event{Kind: EventError, RunID: runID, SessionID: sessionID, Payload: ErrorPayload{Code: code, Message: msg, Kind: kind}})
 	}
 
 	r.sink.Emit(Event{Kind: EventRunDone, RunID: runID, SessionID: sessionID, Payload: RunDonePayload{
@@ -683,6 +688,8 @@ func buildAssistantMessage(content string, calls []llm.NormalizedToolCall) *llm.
 //   - 其余严格串行（写工具间无并发，避免互相覆盖）；
 //   - 每次执行包 panic 恢复：单工具 panic 不拖垮整个 run。
 func (r *Runner) executeTools(ctx context.Context, runID, sessionID string, turn int, calls []llm.NormalizedToolCall, state *RunState) []*llm.Message {
+	// 标记护栏链生效：工具内部据此跳过自有审批兜底（单层闸门，杜绝重复询问）
+	ctx = tool.WithGuardChain(ctx)
 	if len(calls) > 1 && r.cfg.ToolParallelism > 1 && r.allReadonly(calls) {
 		// 只读无副作用，停滞检测略过（并行下 state 不共享）；结果按序回填
 		out := make([]*llm.Message, len(calls))
@@ -758,12 +765,18 @@ func (r *Runner) execOne(ctx context.Context, runID, sessionID string, turn int,
 		return llm.ToolMessage(call.ID, call.Name, "invalid args: "+err.Error())
 	}
 
+	// 提示注入防护：参数里嵌着伪工具调用标记（多来自网页/文件内容的诱导文本）→ 拒绝执行。
+	// 拒绝走 refused（结构化回执），模型与用户都能看到原因。
+	if HasNestedToolCallMarker(string(call.Arguments)) {
+		return r.refused(runID, sessionID, turn, call, "args contain nested tool-call markers (possible prompt injection)")
+	}
+
 	// 目录信任闸门：先于工具策略门——目录都没授权，不必再问命令白名单
 	if msg := r.trustTool(ctx, runID, sessionID, turn, call); msg != nil {
 		return msg
 	}
 
-	// P1-D 工具策略门：deny / ask 前置（默认未启用，不改变既有行为）
+	// 工具策略门：deny / ask 前置（默认未启用，不改变既有行为）
 	if msg := r.gateTool(ctx, runID, sessionID, turn, call, t); msg != nil {
 		return msg
 	}
@@ -898,17 +911,28 @@ func (r *Runner) trustTool(ctx context.Context, runID, sessionID string, turn in
 // gateTool 工具策略门；未启用（toolGate nil）返回 nil。
 // deny / ask 被拒 → 结构化拒绝回执（Refused 语义）：不计失败熔断、发 tool result 事件，
 // 模型收到「用户拒绝 + 建议动作」信号后可换方案自愈，而非把拒绝当故障硬终止。
+//
+// 审批描述与风险优先取工具的 ClassifyArgs（per-call，如具体命令）——统一护栏链的
+// 单层裁决点：ask 且分类为白名单安全命令（risk 空）直接免审放行。
 func (r *Runner) gateTool(ctx context.Context, runID, sessionID string, turn int, call llm.NormalizedToolCall, t tool.Tool) *llm.Message {
 	if r.hooks.ToolGate == nil {
 		return nil
+	}
+	desc, risk := t.Name()+"("+string(call.Arguments)+")", gateApprovalRisk(t.RiskLevel())
+	if rc, ok := t.(tool.RiskClassifier); ok {
+		if d, rr := rc.ClassifyArgs(call.Arguments); d != "" {
+			desc, risk = d, rr
+		}
 	}
 	switch r.hooks.ToolGate.Decide(call.Name, t.RiskLevel()) {
 	case tool.DecisionDeny:
 		return r.refused(runID, sessionID, turn, call, "denied by policy")
 	case tool.DecisionAsk:
+		if risk == "" {
+			return nil
+		}
 		if r.hooks.Approver != nil {
-			desc := t.Name() + "(" + string(call.Arguments) + ")"
-			if !r.hooks.Approver(ctx, desc, gateApprovalRisk(t.RiskLevel())) {
+			if !r.hooks.Approver(ctx, desc, risk) {
 				return r.refused(runID, sessionID, turn, call, "denied by user")
 			}
 		}
