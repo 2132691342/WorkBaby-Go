@@ -818,54 +818,6 @@ export interface RecallEntry {
   snippet: string
 }
 
-/** 媒体预设。 */
-export interface MediaPreset {
-  id: string
-  name: string
-  kind: 'image' | 'video' | 'audio' | 'model3d' | 'vfx' | string
-  backend: string
-  model: string | null
-  params_json: string | null
-  is_default: boolean
-  enabled: boolean
-  created_at: number
-  updated_at: number
-}
-
-/** 创建/更新 preset 请求。 */
-export interface MediaPresetReq {
-  name: string
-  kind: string
-  backend: string
-  model?: string | null
-  params_json?: string | null
-  is_default?: boolean
-  enabled?: boolean
-}
-
-/** 媒体产物。 */
-export interface MediaArtifact {
-  id: string
-  kind: string
-  preset_id: string | null
-  prompt: string | null
-  preview_url: string
-  download_url: string
-  mime_type: string | null
-  width: number | null
-  height: number | null
-  file_size: number | null
-  created_at: number
-}
-
-/** 媒体生成请求。 */
-export interface MediaGenerateReq {
-  kind: string
-  prompt: string
-  preset_id?: string | null
-  params?: Record<string, unknown>
-}
-
 /** GenUI 节点类型。 */
 export type UiNodeKind =
   | 'stack' | 'grid' | 'row'

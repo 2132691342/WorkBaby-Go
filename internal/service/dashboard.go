@@ -29,8 +29,8 @@ func (s *DashboardService) Stats(ctx context.Context) (*domain.DashboardStatsRES
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).UnixMilli()
 
 	var (
-		memEpisodes, memFacts, memProcedures, mediaArtifacts, cronJobs int64
-		todaySessions, todayMessages, todayTokens                      int64
+		memEpisodes, memFacts, memProcedures, cronJobs int64
+		todaySessions, todayMessages, todayTokens      int64
 	)
 	var err error
 
@@ -41,9 +41,6 @@ func (s *DashboardService) Stats(ctx context.Context) (*domain.DashboardStatsRES
 		return nil, err
 	}
 	if memProcedures, err = s.repo.CountMemoryProcedures(ctx); err != nil {
-		return nil, err
-	}
-	if mediaArtifacts, err = s.repo.CountMediaArtifacts(ctx); err != nil {
 		return nil, err
 	}
 	if cronJobs, err = s.repo.CountCronJobs(ctx); err != nil {
@@ -63,10 +60,6 @@ func (s *DashboardService) Stats(ctx context.Context) (*domain.DashboardStatsRES
 	if err != nil {
 		return nil, err
 	}
-	recentMedia, err := s.recentMedia(ctx)
-	if err != nil {
-		return nil, err
-	}
 	recentExecutions, err := s.recentExecutions(ctx)
 	if err != nil {
 		return nil, err
@@ -81,14 +74,12 @@ func (s *DashboardService) Stats(ctx context.Context) (*domain.DashboardStatsRES
 		MemoryEpisodes:   memEpisodes,
 		MemoryFacts:      memFacts,
 		MemoryProcedures: memProcedures,
-		MediaArtifacts:   mediaArtifacts,
 		CronJobs:         cronJobs,
 		AiToolsTotal:     toolsTotal,
 		TodaySessions:    todaySessions,
 		TodayMessages:    todayMessages,
 		TodayTokens:      todayTokens,
 		RecentMessages:   recentMessages,
-		RecentMedia:      recentMedia,
 		RecentExecutions: recentExecutions,
 		System:           systemInfo(),
 	}, nil
@@ -261,10 +252,6 @@ func (s *DashboardService) Overview(ctx context.Context, version, phase, home st
 	if err != nil {
 		return nil, err
 	}
-	media, err := s.repo.CountMediaArtifacts(ctx)
-	if err != nil {
-		return nil, err
-	}
 	providers, err := s.repo.CountProviders(ctx)
 	if err != nil {
 		return nil, err
@@ -289,7 +276,6 @@ func (s *DashboardService) Overview(ctx context.Context, version, phase, home st
 		Workflows:      workflows,
 		CronJobs:       cronJobs,
 		Channels:       channels,
-		MediaArtifacts: media,
 	}, nil
 }
 
@@ -310,27 +296,6 @@ func (s *DashboardService) recentMessages(ctx context.Context) ([]domain.RecentM
 			Role:      string(m.Role),
 			Content:   content,
 			CreatedAt: m.CreatedAt,
-		})
-	}
-	return out, nil
-}
-
-func (s *DashboardService) recentMedia(ctx context.Context) ([]domain.RecentMediaRESP, error) {
-	rows, err := s.repo.ListRecentMedia(ctx, 8)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]domain.RecentMediaRESP, 0, len(rows))
-	for _, a := range rows {
-		out = append(out, domain.RecentMediaRESP{
-			ID:        a.ID,
-			Kind:      string(a.Kind),
-			Prompt:    a.Prompt,
-			MimeType:  a.MimeType,
-			Width:     a.Width,
-			Height:    a.Height,
-			FileSize:  a.FileSize,
-			CreatedAt: a.CreatedAt,
 		})
 	}
 	return out, nil

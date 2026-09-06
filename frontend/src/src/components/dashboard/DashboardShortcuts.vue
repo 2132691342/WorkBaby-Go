@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import {
-  Brain, Film, Clock, ArrowRight, MessageSquare, GitBranch, Zap
+  Brain, Clock, ArrowRight, MessageSquare, GitBranch, Zap
 } from '@/components/common/icons'
 import { t } from '@/i18n'
 
@@ -33,14 +33,6 @@ const shortcuts = [
     descKey: 'dashboard.go.kdocsDesc',
     icon: Brain,
     tint: 'bg-wb-lavender/15 text-wb-lavender',
-    featured: false
-  },
-  {
-    to: '/media',
-    titleKey: 'dashboard.go.media',
-    descKey: 'dashboard.go.mediaDesc',
-    icon: Film,
-    tint: 'bg-wb-warning/15 text-wb-warning',
     featured: false
   },
   {

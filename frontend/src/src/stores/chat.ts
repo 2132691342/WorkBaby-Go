@@ -830,6 +830,12 @@ export const useChatStore = defineStore('chat', () => {
         artifacts,
         tasks
       })
+      // 终态即收尾：done/error 到达后立即关闭流式气泡并以权威快照替换，
+      // 不再等 handle.promise——消除「正式消息 + 流式气泡」并存的重影窗口
+      if (update.setStopReason !== undefined && currentID.value) {
+        streaming.value = false
+        void safeLoadMessages(currentID.value, { replace: true })
+      }
     }
   })
 

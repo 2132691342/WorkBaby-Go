@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { apiGet, apiPost } from '@/api/client'
-import { t } from '@/i18n'
 import type { McpServer } from '@/types/api'
 
 /**
@@ -62,7 +61,6 @@ export const useMcpStore = defineStore('mcp', () => {
         content: rawContent.value
       })
       activeCount.value = r.active
-      info.value = t('mcp.savedJson', r.active)
       await load()
       return true
     } catch (e) {
@@ -74,19 +72,19 @@ export const useMcpStore = defineStore('mcp', () => {
   }
 
   /** 触发后端热重载（让新 MCP server 配置立即生效）。 */
-  async function reload(): Promise<void> {
+  async function reload(): Promise<{ ok: boolean; active: number }> {
     error.value = null
-    info.value = null
     try {
       const r = await apiPost<{ reloaded: boolean; active: number }>(
         '/api/v1/mcp/servers/reload',
         {}
       )
       activeCount.value = r.active
-      info.value = t('mcp.reloaded', r.active)
       await load()
+      return { ok: true, active: r.active }
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
+      return { ok: false, active: activeCount.value }
     }
   }
 

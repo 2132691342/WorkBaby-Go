@@ -274,7 +274,7 @@ function removeScript(i: number): void {
       <div class="space-y-3">
         <div class="grid grid-cols-2 gap-3">
           <el-form-item :label="t('skill.scriptName')" class="mb-0">
-            <el-input v-model="scriptForm.name" placeholder="hello" />
+            <el-input v-model="scriptForm.name" :placeholder="t('skill.scriptNamePlaceholder')" />
           </el-form-item>
           <el-form-item :label="t('skill.scriptLanguage')" class="mb-0">
             <el-select v-model="scriptForm.language" class="w-full">

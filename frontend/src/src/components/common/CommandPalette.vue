@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import {
   MessageSquare, LayoutGrid, LayoutDashboard, GitBranch, Clock, Brain, BookOpen,
   Folder, Server, Zap, Radio, ScrollText, Settings, FileText, Layers,
-  Image as ImageIcon, Cat, Sparkles, Eraser, RefreshCw, Crosshair, Shield, Wrench
+  Cat, Sparkles, Eraser, RefreshCw, Crosshair, Shield, Wrench
 } from '@/components/common/icons'
 import { t } from '@/i18n'
 import { apiGet, apiPost } from '@/api/client'
@@ -61,7 +61,6 @@ const NAV_ITEMS = [
   { to: '/folders', labelKey: 'nav.folders', icon: Folder },
   { to: '/files', labelKey: 'nav.files', icon: FileText },
   { to: '/tasks', labelKey: 'nav.tasks', icon: Layers },
-  { to: '/media', labelKey: 'nav.media', icon: ImageIcon },
   { to: '/pet', labelKey: 'nav.pet', icon: Cat },
   { to: '/tools', labelKey: 'nav.tools', icon: Wrench },
   { to: '/mcp', labelKey: 'nav.mcp', icon: Server },

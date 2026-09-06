@@ -424,9 +424,16 @@ function pickSlash(cmd: SlashCommand): void {
     case 'agent':
       void submitAgentTask()
       break
-    case 'trust':
-      toast.info(t('slash.trustHint', t(permissionLabel.value)))
+    case 'trust': {
+      // 循环切换权限档位（confirm → auto → full），替代无动作提示
+      const cycle: PermissionLevel[] = ['confirm', 'auto', 'full']
+      const idx = cycle.indexOf(permissionLevel.value)
+      const next = cycle[(idx + 1) % cycle.length]
+      const labelKey = PERMISSION_ITEMS.find((p) => p.value === next)?.labelKey ?? 'chat.perm.auto'
+      emit('change-permission', next)
+      toast.success(t('slash.trustHint', t(labelKey)))
       break
+    }
     case 'export':
       void exportSessionMd()
       break

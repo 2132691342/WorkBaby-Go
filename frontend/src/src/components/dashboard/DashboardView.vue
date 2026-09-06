@@ -6,12 +6,11 @@ import DashboardActivity from '@/components/dashboard/DashboardActivity.vue'
 import DashboardShortcuts from '@/components/dashboard/DashboardShortcuts.vue'
 import DashboardTokenCharts from '@/components/dashboard/DashboardTokenCharts.vue'
 import DashboardTrendExec from '@/components/dashboard/DashboardTrendExec.vue'
-import DashboardMedia from '@/components/dashboard/DashboardMedia.vue'
 import DashboardRuntime from '@/components/dashboard/DashboardRuntime.vue'
 
 /**
  * 仪表盘：Hero 问候 → 活动流/Bento 入口 → Token 趋势与缓存命中环形图
- * → 趋势柱状图与工作流执行 → 媒体网格 → 折叠的系统运行时。
+ * → 趋势柱状图与工作流执行 → 折叠的系统运行时。
  * 数据源 GET /api/v1/dashboard/*；各区块组件经 dashboard store 自取数据。
  */
 const dashboard = useDashboardStore()
@@ -49,10 +48,7 @@ onMounted(() => {
       <!-- ==================== Row 2b：趋势 + 工作流执行 ==================== -->
       <DashboardTrendExec />
 
-      <!-- ==================== Row 3：媒体缩略图 ==================== -->
-      <DashboardMedia />
-
-      <!-- ==================== Row 4：折叠的系统运行时 ==================== -->
+      <!-- ==================== Row 3：折叠的系统运行时 ==================== -->
       <DashboardRuntime />
 
       <div v-if="dashboard.error" class="rounded-lg bg-wb-danger/10 px-3 py-2 text-sm text-wb-danger">

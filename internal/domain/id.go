@@ -26,8 +26,6 @@ const (
 	IDChannel        = "CHANNEL"
 	IDChannelLog     = "CH_LOG"
 	IDCron           = "CRON"
-	IDMedia          = "MEDIA"
-	IDMediaPreset    = "MEDIA_PRESET"
 	IDSprite         = "SPRITE"
 	IDFolder         = "FOLDER"
 	IDFile           = "FILE"

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"WorkBaby/internal/capability"
 	"WorkBaby/internal/channel"
 	"WorkBaby/internal/channel/email"
 	"WorkBaby/internal/channel/webhook"
-	"WorkBaby/internal/capability"
 	"WorkBaby/internal/config"
 	cronjob "WorkBaby/internal/cron"
 	"WorkBaby/internal/db"
@@ -22,8 +22,6 @@ import (
 	"WorkBaby/internal/harness"
 	"WorkBaby/internal/llm/registry"
 	"WorkBaby/internal/mcp"
-	"WorkBaby/internal/media"
-	mediaoffline "WorkBaby/internal/media/offline"
 	"WorkBaby/internal/memory"
 	"WorkBaby/internal/pet"
 	"WorkBaby/internal/pkg"
@@ -40,7 +38,7 @@ import (
 	filetool "WorkBaby/internal/tool/file"
 	functools "WorkBaby/internal/tool/functools"
 	httptool "WorkBaby/internal/tool/http"
-	requestinput  "WorkBaby/internal/tool/requestinput"
+	requestinput "WorkBaby/internal/tool/requestinput"
 	skillrun "WorkBaby/internal/tool/skillrun"
 	todotool "WorkBaby/internal/tool/todo"
 	webfetchtool "WorkBaby/internal/tool/webfetch"
@@ -85,7 +83,6 @@ type Handler struct {
 	workflowSvc  *service.WorkflowService
 	channelSvc   *channel.Service
 	cronSvc      *cronjob.Scheduler
-	mediaSvc     *media.Service
 	petSvc       *pet.Service
 	petCtrl      *pet.Controller
 	folderSvc    *service.FolderService
@@ -421,7 +418,6 @@ func (h *Handler) Startup(ctx context.Context) error {
 		filepath.Join(paths.Home, "workspaces"),
 		filepath.Join(paths.Home, "runtimes"),
 		filepath.Join(paths.Home, "knowledge"),
-		filepath.Join(paths.Home, "media"),
 		filepath.Join(paths.Home, "files"),
 	}
 	h.trustSvc = service.NewTrustService(repo.NewWorkspaceTrustRepo(gdb), trustRoots...).
@@ -540,9 +536,6 @@ func (h *Handler) Startup(ctx context.Context) error {
 		pkg.L.Warn("cron start failed", "err", err)
 	}
 
-	// 媒体生成：离线占位生成 + 产物落 {home}/media/{YYYY-MM}/，元数据落库
-	h.mediaSvc = media.NewService(repo.NewMediaPresetRepo(gdb), repo.NewMediaArtifactRepo(gdb), mediaoffline.New(), filepath.Join(paths.Home, "media"))
-
 	// 文件系统：文件夹树 + 文件托管 + 会话工作区面板（面板与工具链共用会话目录解析）
 	h.folderSvc = service.NewFolderService(repo.NewFolderRepo(gdb))
 	h.fileSvc = service.NewFileService(repo.NewFileRepo(gdb), filepath.Join(paths.Home, "files"))
@@ -580,7 +573,6 @@ func (h *Handler) Startup(ctx context.Context) error {
 		ctx:          ctx,
 		fileSvc:      h.fileSvc,
 		workspaceSvc: h.workspaceSvc,
-		mediaSvc:     h.mediaSvc,
 		petSvc:       h.petSvc,
 	}
 	h.bindEventBridge()

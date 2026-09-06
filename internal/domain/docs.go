@@ -34,5 +34,4 @@ type AdminOverviewRESP struct {
 	Workflows      int64  `json:"workflows"`
 	CronJobs       int64  `json:"cron_jobs"`
 	Channels       int64  `json:"channels"`
-	MediaArtifacts int64  `json:"media_artifacts"`
 }

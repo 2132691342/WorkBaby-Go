@@ -66,17 +66,16 @@ WorkBaby/
 │   ├── memory/                   # ⑪ 记忆（三层 + formation + recall）
 │   ├── rag/                      # ⑫ 知识库（loader/chunker/indexer/retriever）
 │   ├── workflow/                 # ⑬ 工作流（graph/executor/validator/nodes/）
-│   ├── media/                    # ⑭ 媒体（generator + offline/）
-│   ├── pet/                      # ⑮ 桌宠（controller/service/sprite）
-│   ├── channel/                  # ⑯ 通知（email/ + webhook/）
-│   ├── cron/                     # ⑰ 定时（scheduler）
-│   ├── runtime/                  # ⑱ 运行时设施（paths/runtimes/archive）
-│   ├── config/                   # ⑲ 配置（Viper）
-│   ├── event/                    # ⑳ 应用内事件总线
-│   ├── db/                       # ㉑ SQLite 打开 + 迁移
-│   ├── pkg/                      # ㉒ 自研底层工具（叶子：无业务语义，AppError/ID/日志/路径/加密/HTTP 规则）
-│   ├── tray/                     # ㉓ 系统托盘（Windows Win32 自研 + 非 Windows 空实现）
-│   ├── singleinstance/           # ㉔ 单实例保护（命名互斥 + 本地 TCP IPC；非 Windows 空实现）
+│   ├── pet/                      # ⑭ 桌宠（controller/service/sprite）
+│   ├── channel/                  # ⑮ 通知（email/ + webhook/）
+│   ├── cron/                     # ⑯ 定时（scheduler）
+│   ├── runtime/                  # ⑰ 运行时设施（paths/runtimes/archive）
+│   ├── config/                   # ⑱ 配置（Viper）
+│   ├── event/                    # ⑲ 应用内事件总线
+│   ├── db/                       # ⑳ SQLite 打开 + 迁移
+│   ├── pkg/                      # ㉑ 自研底层工具（叶子：无业务语义，AppError/ID/日志/路径/加密/HTTP 规则）
+│   ├── tray/                     # ㉒ 系统托盘（Windows Win32 自研 + 非 Windows 空实现）
+│   ├── singleinstance/           # ㉓ 单实例保护（命名互斥 + 本地 TCP IPC；非 Windows 空实现）
 │
 ├── frontend/                     # Vue 3 工程
 ├── assets/                       # 内置 Skill（embed）/ 图标 / 默认 sprite
@@ -182,7 +181,7 @@ return errors.New("provider not ready")   // 丢 code，前端无法分流
 | 6000–6999 | Memory |
 | 7000–7999 | Knowledge / RAG |
 | 8000–8999 | Skill / MCP |
-| 9000–9999 | Media / Workflow / Pet / Channel / Cron |
+| 9000–9999 | Workflow / Pet / Channel / Cron |
 
 ### 2.5 命名规范
 

@@ -22,7 +22,7 @@ const KNOWN_PREFIXES = [
   '/api/v1/memory/',
   '/api/v1/channels',
   '/api/v1/cron/',
-  '/api/v1/media/',
+
   '/api/v1/pet/',
   '/api/v1/folders',
   '/api/v1/files',

@@ -43,11 +43,6 @@ func (r *DashboardRepo) CountMemoryProcedures(ctx context.Context) (int64, error
 	return r.count(ctx, &domain.MemoryProcedureDO{}, 0)
 }
 
-// CountMediaArtifacts 媒体产物数。
-func (r *DashboardRepo) CountMediaArtifacts(ctx context.Context) (int64, error) {
-	return r.count(ctx, &domain.MediaArtifactDO{}, 0)
-}
-
 // CountCronJobs 定时任务数（未删除）。
 func (r *DashboardRepo) CountCronJobs(ctx context.Context) (int64, error) {
 	var n int64
@@ -137,18 +132,6 @@ func (r *DashboardRepo) ListRecentMessages(ctx context.Context, limit int) ([]do
 	var rows []domain.MessageDO
 	if err := r.db.WithContext(ctx).Order("created_at DESC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, pkg.Wrap(2010, "list recent messages failed", err)
-	}
-	return rows, nil
-}
-
-// ListRecentMedia 最近媒体产物（倒序）。
-func (r *DashboardRepo) ListRecentMedia(ctx context.Context, limit int) ([]domain.MediaArtifactDO, error) {
-	if limit <= 0 || limit > 50 {
-		limit = 8
-	}
-	var rows []domain.MediaArtifactDO
-	if err := r.db.WithContext(ctx).Order("created_at DESC").Limit(limit).Find(&rows).Error; err != nil {
-		return nil, pkg.Wrap(2010, "list recent media failed", err)
 	}
 	return rows, nil
 }

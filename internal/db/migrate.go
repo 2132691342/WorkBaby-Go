@@ -33,8 +33,6 @@ func Migrate(db *gorm.DB) error {
 		&domain.ChannelConfigDO{},
 		&domain.ChannelMessageLogDO{},
 		&domain.CronJobDO{},
-		&domain.MediaPresetDO{},
-		&domain.MediaArtifactDO{},
 		&domain.PetConfigDO{},
 		&domain.PetSpriteDO{},
 		&domain.FolderDO{},

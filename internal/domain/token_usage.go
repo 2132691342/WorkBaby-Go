@@ -9,7 +9,6 @@ const (
 	UsageSourceChat     TokenUsageSource = "chat"
 	UsageSourceWorkflow TokenUsageSource = "workflow"
 	UsageSourceCron     TokenUsageSource = "cron"
-	UsageSourceMedia    TokenUsageSource = "media"
 	UsageSourceMemory   TokenUsageSource = "memory"
 )
 

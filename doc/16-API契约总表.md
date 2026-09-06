@@ -13,7 +13,7 @@
 | 响应 | `{ code, message, data?, details? }`；`code=0` 成功；`1404` 未命中路由 |
 | 方法 | 业务仅 `GET` / `POST`；删除一律 `POST .../delete` |
 | 字段 | 下划线小驼峰（`message_count` / `user_message_id` / `api_key_masked`） |
-| 静态资源 | `/files/**` 走 Wails AssetServer（媒体 `/files/media/{id}`、sprite `/files/sprites/{id}`、托管文件 `/files/files/{id}`、工作区 `/files/workspace/{sessionId}?path=`），**不是** API |
+| 静态资源 | `/files/**` 走 Wails AssetServer（sprite `/files/sprites/{id}`、托管文件 `/files/files/{id}`、工作区 `/files/workspace/{sessionId}?path=`），**不是** API |
 
 ---
 
@@ -156,16 +156,13 @@
 | GET/POST | `/api/v1/memory/facts` + `:id/delete` | 语义记忆 |
 | GET/POST | `/api/v1/memory/procedures` + `:id/delete` | 程序记忆 |
 
-### 2.10 channels / cron / media / pet / folders / files
+### 2.10 channels / cron / pet / folders / files
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET/POST | `/api/v1/channels` + `:id/{update,delete,start,stop,test}` | 通知通道 |
 | GET | `/api/v1/channels/:id/messages?limit=` | 通道消息日志 |
 | GET/POST | `/api/v1/cron/jobs` + `:id/{update,delete,trigger}` | 定时任务 |
-| GET/POST | `/api/v1/media/presets` + `:id/{update,delete,activate}` | 媒体预设 |
-| POST | `/api/v1/media/generate` | 生成媒体 |
-| GET | `/api/v1/media/artifacts?limit=` + `:id/delete` | 媒体产物（预览用 `/files/media/{id}`） |
 | GET | `/api/v1/pet/state` | 返回状态字符串 |
 | GET | `/api/v1/pet/config` + `POST config/update` | 桌宠配置 |
 | GET/POST | `/api/v1/pet/sprites` + `:id/delete` | 桌宠 sprite（预览用 `/files/sprites/{id}`） |

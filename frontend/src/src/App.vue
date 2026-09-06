@@ -17,14 +17,8 @@ import {
   Brain,
   LayoutDashboard,
   LayoutGrid,
-  FileText,
-  Folder,
-  ImageIcon,
-  Wrench,
   Server,
   Zap,
-  PawPrint,
-  Radio,
   Layers
 } from '@/components/common/icons'
 import { storeToRefs } from 'pinia'
@@ -90,28 +84,19 @@ const mainNav: NavItem[] = [
   { id: 'chat', to: '/chat', labelKey: 'nav.chat', icon: MessageSquare },
   { id: 'workflows', to: '/workflows', labelKey: 'nav.workflows', icon: GitBranch },
   { id: 'tasks', to: '/tasks', labelKey: 'nav.tasks', icon: ListTree },
-  { id: 'cron', to: '/cron', labelKey: 'nav.cron', icon: Clock }
+  { id: 'cron', to: '/cron', labelKey: 'nav.cron', icon: Clock },
+  { id: 'dashboard', to: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard },
+  { id: 'overview', to: '/home', labelKey: 'nav.overview', icon: LayoutGrid }
 ]
 
-// 高频资源直出侧栏；其余低频页面收进「资源」可折叠子菜单——入口永远可达，
-// 只是折叠收纳（命令面板 Ctrl+K 仍然全部直达）
+// 资源组：高频资源直出；低频管理页（文件/文件夹/桌宠/工具/通道）收进
+// 「更多资源」聚合页（/more，tab 切换）——入口永远可达，侧栏不再有二级菜单
 const resourceNav: NavItem[] = [
   { id: 'memory', to: '/memory', labelKey: 'nav.memory', icon: Brain },
-  { id: 'knowledge', to: '/kdocs', labelKey: 'nav.knowledge', icon: BookOpen }
-]
-
-// 折叠子菜单收纳的低频页面（仪表盘 / 概览 / 文件 / 媒体 / 工具 / MCP / Skill / 桌宠 / 通道）
-const moreNav: NavItem[] = [
-  { id: 'dashboard', to: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard },
-  { id: 'overview', to: '/home', labelKey: 'nav.overview', icon: LayoutGrid },
-  { id: 'files', to: '/files', labelKey: 'nav.files', icon: FileText },
-  { id: 'folders', to: '/folders', labelKey: 'nav.folders', icon: Folder },
-  { id: 'media', to: '/media', labelKey: 'nav.media', icon: ImageIcon },
-  { id: 'tools', to: '/tools', labelKey: 'nav.tools', icon: Wrench },
+  { id: 'knowledge', to: '/kdocs', labelKey: 'nav.knowledge', icon: BookOpen },
   { id: 'mcp', to: '/mcp', labelKey: 'nav.mcp', icon: Server },
   { id: 'skills', to: '/skills', labelKey: 'nav.skills', icon: Zap },
-  { id: 'pet', to: '/pet', labelKey: 'nav.pet', icon: PawPrint },
-  { id: 'channels', to: '/channels', labelKey: 'nav.channels', icon: Radio }
+  { id: 'more', to: '/more', labelKey: 'nav.moreResources', icon: Layers }
 ]
 
 /** 管理后台已并入设置中心「关于」tab，导航不再单独暴露 admin。 */
@@ -129,7 +114,7 @@ const focusMode = useFocusMode()
 
 /** 当前高亮菜单项：/home 精确匹配，其余支持子路由（chat/:id），取最长前缀命中。 */
 const activeIndex = computed(() => {
-  const all = [...mainNav, ...resourceNav, ...moreNav, ...systemNav]
+  const all = [...mainNav, ...resourceNav, ...systemNav]
   const hits = all.filter((i) =>
     i.to === '/home' ? route.path === '/home' : route.path === i.to || route.path.startsWith(i.to + '/')
   )
@@ -366,34 +351,12 @@ async function onNewSessionShortcut(): Promise<void> {
               <el-icon><component :is="item.icon" class="h-[18px] w-[18px]" /></el-icon>
               <template #title>{{ t(item.labelKey) }}</template>
             </el-menu-item>
-            <!-- 低频页面折叠收纳：入口永远可达，仅展开时可见 -->
-            <el-sub-menu index="res-more">
-              <template #title>
-                <el-icon><Layers class="h-[18px] w-[18px]" /></el-icon>
-                <span>{{ t('nav.moreResources') }}</span>
-              </template>
-              <el-menu-item v-for="item in moreNav" :key="item.id" :index="item.to">
-                <el-icon><component :is="item.icon" class="h-[18px] w-[18px]" /></el-icon>
-                <template #title>{{ t(item.labelKey) }}</template>
-              </el-menu-item>
-            </el-sub-menu>
           </el-menu-item-group>
           <template v-else>
             <el-menu-item v-for="item in resourceNav" :key="item.id" :index="item.to">
               <el-icon><component :is="item.icon" class="h-[18px] w-[18px]" /></el-icon>
               <template #title>{{ t(item.labelKey) }}</template>
             </el-menu-item>
-            <!-- 折叠态：sub-menu 自动转 popout 弹出 -->
-            <el-sub-menu index="res-more-collapsed">
-              <template #title>
-                <el-icon><Layers class="h-[18px] w-[18px]" /></el-icon>
-                <span>{{ t('nav.moreResources') }}</span>
-              </template>
-              <el-menu-item v-for="item in moreNav" :key="item.id" :index="item.to">
-                <el-icon><component :is="item.icon" class="h-[18px] w-[18px]" /></el-icon>
-                <template #title>{{ t(item.labelKey) }}</template>
-              </el-menu-item>
-            </el-sub-menu>
           </template>
 
           <el-menu-item-group v-if="!collapsed">

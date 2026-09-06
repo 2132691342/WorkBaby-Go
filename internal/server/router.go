@@ -858,56 +858,6 @@ func (s *Server) registerRoutes() {
 		unwrap(c, v, err)
 	})
 
-	// ---- media ----
-	v1.GET("/media/presets", func(c *gin.Context) {
-		v, err := h.ListMediaPresets(c.Query("kind"))
-		unwrap(c, v, err)
-	})
-	v1.POST("/media/presets", func(c *gin.Context) {
-		var req domain.MediaPresetREQ
-		if err := BindJSON(c, &req); err != nil {
-			Fail(c, err)
-			return
-		}
-		v, err := h.CreateMediaPreset(req)
-		unwrap(c, v, err)
-	})
-	v1.POST("/media/presets/:id/update", func(c *gin.Context) {
-		var req domain.MediaPresetREQ
-		if err := BindJSON(c, &req); err != nil {
-			Fail(c, err)
-			return
-		}
-		v, err := h.UpdateMediaPreset(c.Param("id"), req)
-		unwrap(c, v, err)
-	})
-	v1.POST("/media/presets/:id/delete", func(c *gin.Context) {
-		v, err := h.DeleteMediaPreset(c.Param("id"))
-		unwrap(c, v, err)
-	})
-	v1.POST("/media/presets/:id/activate", func(c *gin.Context) {
-		v, err := h.ActivateMediaPreset(c.Param("id"))
-		unwrap(c, v, err)
-	})
-	v1.POST("/media/generate", func(c *gin.Context) {
-		var req domain.MediaGenerateREQ
-		if err := BindJSON(c, &req); err != nil {
-			Fail(c, err)
-			return
-		}
-		v, err := h.GenerateMedia(req)
-		unwrap(c, v, err)
-	})
-	v1.GET("/media/artifacts", func(c *gin.Context) {
-		limit := atoi(c.DefaultQuery("limit", "20"), 20)
-		v, err := h.ListMediaArtifacts(limit)
-		unwrap(c, v, err)
-	})
-	v1.POST("/media/artifacts/:id/delete", func(c *gin.Context) {
-		v, err := h.DeleteMediaArtifact(c.Param("id"))
-		unwrap(c, v, err)
-	})
-
 	// ---- pet ----
 	v1.GET("/pet/state", func(c *gin.Context) {
 		v, err := h.GetPetState()

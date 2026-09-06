@@ -6,14 +6,12 @@ type DashboardStatsRESP struct {
 	MemoryEpisodes   int64                 `json:"memory_episodes"`
 	MemoryFacts      int64                 `json:"memory_facts"`
 	MemoryProcedures int64                 `json:"memory_procedures"`
-	MediaArtifacts   int64                 `json:"media_artifacts"`
 	CronJobs         int64                 `json:"cron_jobs"`
 	AiToolsTotal     int64                 `json:"ai_tools_total"`
 	TodaySessions    int64                 `json:"today_sessions"`
 	TodayMessages    int64                 `json:"today_messages"`
 	TodayTokens      int64                 `json:"today_tokens"`
 	RecentMessages   []RecentMessageRESP   `json:"recent_messages"`
-	RecentMedia      []RecentMediaRESP     `json:"recent_media"`
 	RecentExecutions []RecentExecutionRESP `json:"recent_executions"`
 	System           *SystemInfoRESP       `json:"system"`
 }
@@ -24,18 +22,6 @@ type RecentMessageRESP struct {
 	SessionID string `json:"session_id"`
 	Role      string `json:"role"`
 	Content   string `json:"content"`
-	CreatedAt int64  `json:"created_at"`
-}
-
-// RecentMediaRESP 最近媒体产物（缩略图区）。
-type RecentMediaRESP struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`
-	Prompt    string `json:"prompt"`
-	MimeType  string `json:"mime_type"`
-	Width     *int   `json:"width"`
-	Height    *int   `json:"height"`
-	FileSize  int64  `json:"file_size"`
 	CreatedAt int64  `json:"created_at"`
 }
 

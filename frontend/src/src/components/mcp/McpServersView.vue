@@ -14,13 +14,23 @@ import type { McpServer } from '@/types/api'
 
 const mcp = useMcpStore()
 const toast = useToast()
-const { servers, loading, error, info, activeCount, rawContent, savingRaw } = storeToRefs(mcp)
+const { servers, loading, error, activeCount, rawContent, savingRaw } = storeToRefs(mcp)
 
 async function handleSaveRaw(): Promise<void> {
   if (await mcp.saveRaw()) {
     toast.success(t('mcp.savedJson', activeCount.value))
   } else {
     toast.error(error.value ?? t('common.saveFailed'))
+  }
+}
+
+/** 重载 MCP：成功/失败统一走 message 提示（不再用页内信息条）。 */
+async function handleReload(): Promise<void> {
+  const r = await mcp.reload()
+  if (r.ok) {
+    toast.success(t('mcp.reloaded', r.active))
+  } else {
+    toast.error(error.value ?? t('chat.operationFailed'))
   }
 }
 
@@ -60,7 +70,7 @@ onMounted(() => {
               {{ t('mcp.reveal') }}
             </el-button>
           </el-tooltip>
-          <el-button type="success" plain @click="mcp.reload">
+          <el-button type="success" plain @click="handleReload">
             <span class="mr-1">🔄</span>
             {{ t('mcp.reload') }}
             <el-tag v-if="activeCount > 0" size="small" type="success" class="ml-1">{{ activeCount }}</el-tag>
@@ -69,7 +79,6 @@ onMounted(() => {
       </header>
 
       <div v-if="error" class="rounded-lg bg-wb-danger/15 px-3 py-2 text-sm text-wb-danger">{{ error }}</div>
-      <div v-if="info" class="rounded-lg bg-wb-success/15 px-3 py-2 text-sm text-wb-success">{{ info }}</div>
 
       <!-- JSON 编辑器（直接编辑 mcp.json） -->
       <section class="card p-5">

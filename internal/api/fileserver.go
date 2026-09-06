@@ -6,14 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"WorkBaby/internal/media"
 	"WorkBaby/internal/pet"
 	"WorkBaby/internal/service"
 )
 
 // FileServer 服务本地受管文件（main.go AssetServer 转发 /files/**）：
-// /files/media/{id} → 媒体产物；/files/sprites/{id} → 桌宠 sprite；
-// /files/files/{id} → 托管文件（files 表）；/files/workspace/{sessionId}?path= → 会话工作区文件。
+// /files/sprites/{id} → 桌宠 sprite；/files/files/{id} → 托管文件（files 表）；
+// /files/workspace/{sessionId}?path= → 会话工作区文件。
 // 均按 id/sessionId+path 查表或沙箱校验，不暴露任意路径。
 //
 // 刻意不挂在 Handler 上：Handler 是 Wails 绑定类型，http.ResponseWriter / http.Request
@@ -23,14 +22,11 @@ type FileServer struct {
 	ctx          context.Context
 	fileSvc      *service.FileService
 	workspaceSvc *service.WorkspaceService
-	mediaSvc     *media.Service
 	petSvc       *pet.Service
 }
 
 func (f *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
-	case strings.HasPrefix(r.URL.Path, "/files/media/"):
-		f.serveMedia(w, r, strings.TrimPrefix(r.URL.Path, "/files/media/"))
 	case strings.HasPrefix(r.URL.Path, "/files/sprites/"):
 		f.serveSprite(w, r, strings.TrimPrefix(r.URL.Path, "/files/sprites/"))
 	case strings.HasPrefix(r.URL.Path, "/files/files/"):
@@ -75,22 +71,6 @@ func (f *FileServer) serveWorkspaceFile(w http.ResponseWriter, r *http.Request, 
 		w.Header().Set("Content-Disposition", `attachment; filename="`+filepath.Base(path)+`"`)
 	}
 	_, _ = w.Write(bs)
-}
-
-func (f *FileServer) serveMedia(w http.ResponseWriter, r *http.Request, id string) {
-	if id == "" || strings.Contains(id, "/") || f.mediaSvc == nil || f.ctx == nil {
-		http.NotFound(w, r)
-		return
-	}
-	row, err := f.mediaSvc.FindArtifact(f.ctx, id)
-	if err != nil || row.FilePath == "" {
-		http.NotFound(w, r)
-		return
-	}
-	if r.URL.Query().Get("dl") == "1" {
-		w.Header().Set("Content-Disposition", `attachment; filename="`+id+`"`)
-	}
-	http.ServeFile(w, r, row.FilePath)
 }
 
 func (f *FileServer) serveSprite(w http.ResponseWriter, r *http.Request, id string) {

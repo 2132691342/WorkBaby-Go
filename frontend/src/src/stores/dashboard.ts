@@ -6,7 +6,7 @@ import { apiGet } from '@/api/client'
  * 仪表盘统计契约（双主机 Go 后端，camelCase）。
  *
  * <p>对应 {@code GET /api/v1/dashboard/stats}：累计计数 + 今日活动 +
- * 最近活动列表（消息/媒体/工作流执行）+ Go 运行时信息。
+ * 最近活动列表（消息/工作流执行）+ Go 运行时信息。
  */
 export interface SystemInfo {
   os_name: string
@@ -28,18 +28,6 @@ export interface RecentMessage {
   created_at: number
 }
 
-/** 最近媒体产物（缩略图区用）。 */
-export interface RecentMedia {
-  id: string
-  kind: string
-  prompt: string | null
-  mime_type: string | null
-  width: number | null
-  height: number | null
-  file_size: number | null
-  created_at: number
-}
-
 /** 最近工作流执行。 */
 export interface RecentExecution {
   id: string
@@ -55,7 +43,6 @@ export interface Stats {
   memory_episodes: number
   memory_facts: number
   memory_procedures: number
-  media_artifacts: number
   cron_jobs: number
   ai_tools_total: number
   // 今日
@@ -64,7 +51,6 @@ export interface Stats {
   today_tokens: number
   // 最近活动
   recent_messages: RecentMessage[]
-  recent_media: RecentMedia[]
   recent_executions: RecentExecution[]
   // 运行时
   system: SystemInfo | null
