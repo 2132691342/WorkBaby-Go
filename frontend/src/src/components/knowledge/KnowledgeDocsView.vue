@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { BookOpen, FolderOpen, FileText, Upload } from '@/components/common/icons'
+import { BookOpen, Upload, Search, Plus, Eye, Pencil, Trash2 } from '@/components/common/icons'
 import { OpenFileDialog } from '@/wailsjs/go/main/App'
 import { apiGet, apiPost } from '@/api/client'
 import { useKnowledgeDocsStore } from '@/stores/kdocs'
@@ -18,7 +18,7 @@ import type { KnowledgeDoc } from '@/types/api'
  */
 const kdocs = useKnowledgeDocsStore()
 const { docs, groups, filterGroup, search, error, showCreate, form, editing } = storeToRefs(kdocs)
-const { load, doSave, startEdit, doDelete } = kdocs
+const { load, startEdit, doDelete, doSave } = kdocs
 
 /** source_type 选项（中英 i18n 双语，避免硬编码英文给中文用户）。 */
 const SOURCE_TYPES = computed(() => [
@@ -40,11 +40,59 @@ async function reload(): Promise<void> {
 
 onMounted(reload)
 
-/** el-dialog 关闭。 */
+/** 提交态：锁定弹窗关闭与重复提交。 */
+const saving = ref(false)
+
+/** 表单校验错误（行内提示，不再只靠 toast）。 */
+const formError = ref('')
+
+/** 弹窗关闭。 */
 function closeDialog(): void {
+  if (saving.value) return
   showCreate.value = false
   editing.value = null
+  formError.value = ''
 }
+
+/** 保存（新建 / 编辑共用 store.doSave）。 */
+async function submit(): Promise<void> {
+  if (!form.value.name.trim()) {
+    formError.value = t('kdoc.errRequired')
+    return
+  }
+  if (!form.value.source.trim()) {
+    formError.value = t('kdoc.errRequired')
+    return
+  }
+  formError.value = ''
+  saving.value = true
+  try {
+    await doSave()
+    if (!kdocs.error) closeDialog()
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 来源类型切换时给出对应占位与提示。 */
+const sourcePlaceholder = computed(() =>
+  form.value.source_type === 'file'
+    ? t('kdoc.sourcePlaceholderFile')
+    : form.value.source_type === 'url'
+      ? 'https://example.com/docs/getting-started'
+      : t('kdoc.sourcePlaceholder')
+)
+
+const sourceTypeHint = computed(() => {
+  switch (form.value.source_type) {
+    case 'file':
+      return t('kdoc.emptyHintFile')
+    case 'url':
+      return t('kdoc.emptyHintUrl')
+    default:
+      return t('kdoc.emptyHintText')
+  }
+})
 
 /** 打开新建对话框。 */
 function openCreate(): void {
@@ -70,6 +118,14 @@ function openView(row: KnowledgeDoc): void {
 function basenameNoExt(p: string): string {
   const seg = p.replace(/\\/g, '/').split('/').pop() ?? ''
   return seg.replace(/\.[^.]+$/, '') || ''
+}
+
+/** 字节数 → 人类可读（KB / MB），原型表格大小列展示。 */
+function formatSize(bytes?: number | null): string {
+  if (!bytes) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 /** 列表「来源」列展示：file 型只显示文件名（源文件已受管复制到知识库目录，不向用户暴露磁盘路径）。
@@ -152,203 +208,189 @@ async function importManagedFile(): Promise<void> {
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-y-auto text-wb-ink">
-    <div class="mx-auto w-full max-w-5xl space-y-5 px-6 py-8">
-      <header class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-wb-primary/10 text-wb-primary">
-          <BookOpen class="h-5 w-5" />
-        </div>
+  <div class="scroll wb-ui">
+    <div class="wrap" style="max-width: 1000px">
+      <!-- Hero -->
+      <header class="hero">
+        <div class="tile"><BookOpen class="ic" /></div>
         <div>
-          <h1 class="font-display text-lg font-semibold text-wb-ink">{{ t('kdoc.title') }}</h1>
-          <p class="text-xs text-wb-muted">{{ t('kdoc.count', docs.length, groups.length) }}</p>
+          <h1>{{ t('kdoc.title') }}</h1>
+          <p>{{ t('kdoc.count', docs.length, groups.length) }}</p>
         </div>
-        <div class="ml-auto flex items-center gap-2">
-          <span v-if="importStatus" class="inline-flex items-center gap-1 text-xs text-wb-muted">
-            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-wb-primary" />
-            {{ importStatus }}
-          </span>
-          <el-button :loading="importingFile" @click="importManagedFile">
-            <Upload class="h-3.5 w-3.5" />
-            <span class="ml-1">{{ t('kdoc.importFile') }}</span>
-          </el-button>
-          <el-button type="primary" @click="openCreate">{{ t('kdoc.newDoc') }}</el-button>
-        </div>
+        <span class="sp" />
+        <span v-if="importStatus" class="flex-r fs11 muted">
+          <span class="led g" />
+          {{ importStatus }}
+        </span>
+        <button class="btn" :disabled="importingFile" @click="importManagedFile">
+          <Upload class="ic ic-sm" />
+          {{ t('kdoc.importFile') }}
+        </button>
+        <button class="btn btn-primary" @click="openCreate">
+          <Plus class="ic ic-sm" />
+          {{ t('kdoc.newDoc') }}
+        </button>
       </header>
 
-      <div class="flex flex-wrap items-center gap-3">
-        <el-input
-          v-model="search"
-          :placeholder="t('kdoc.searchPlaceholder')"
-          clearable
-          class="!w-64"
-          @keyup.enter="reload"
-        />
-        <el-select v-model="filterGroup" :placeholder="t('kdoc.allGroups')" clearable class="!w-44" @change="reload">
-          <el-option v-for="g in groups" :key="g" :value="g" :label="g" />
-        </el-select>
-        <el-button @click="reload">{{ t('knowledge.search') }}</el-button>
-      </div>
-
-      <div v-if="error" class="rounded-lg bg-wb-danger/15 px-3 py-2 text-sm text-wb-danger">
-        {{ error }}
-        <el-button link type="primary" class="ml-2" @click="reload">{{ t('common.retry') }}</el-button>
-      </div>
-
-      <div v-if="loading && docs.length === 0" class="flex items-center gap-2 text-sm text-wb-muted">
-        <span class="inline-block h-2 w-2 animate-pulse rounded-full bg-wb-primary" />
-        {{ t('ui.status.loading') }}
-      </div>
-
-      <el-table v-else-if="docs.length > 0" :data="docs" stripe class="wb-el-table">
-        <el-table-column :label="t('kdoc.titleField')" min-width="220" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span class="font-medium text-wb-ink">{{ row.name }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('kdoc.sourceTypeLabel')" width="120">
-          <template #default="{ row }">
-            <el-tag size="small" effect="plain">{{ row.source_type }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('kdoc.sourceField')" min-width="240" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span class="text-xs text-wb-muted">{{ displaySource(row as KnowledgeDoc) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('kdoc.chunkCount')" width="80" align="center">
-          <template #default="{ row }">
-            <span class="text-xs text-wb-muted">{{ row.chunk_count }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('kdoc.statusLabel')" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.status === 'indexed' ? 'success' : row.status === 'failed' ? 'danger' : 'info'" size="small">
-              {{ t(`kdoc.status.${row.status || 'pending'}`) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('memory.center.col.time')" width="160">
-          <template #default="{ row }">
-            <span class="text-xs text-wb-muted">{{ formatDateTime(row.updated_at) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('memory.center.col.actions')" width="170" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openView(row)">{{ t('kdoc.viewDoc') }}</el-button>
-            <el-button link type="primary" size="small" @click="startEdit(row)">{{ t('ui.btn.edit') }}</el-button>
-            <el-button link type="danger" size="small" @click="doDelete(row)">{{ t('ui.btn.delete') }}</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <!-- 空状态：明确的引导卡，附带 3 种 source 的说明 + 主按钮 -->
-      <section v-else class="card flex flex-col items-center px-6 py-10 text-center">
-        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-wb-primary/10 text-wb-primary">
-          <BookOpen class="h-7 w-7" />
+      <!-- 工具栏：搜索框弹性撑满 + 分组选择器定宽 + 按钮与提示不换行（窄屏允许整体换行） -->
+      <div class="kdoc-toolbar">
+        <div class="field-wrap kdoc-toolbar__search">
+          <Search class="ic ic-sm" />
+          <input v-model="search" class="input with-icon" :placeholder="t('kdoc.searchPlaceholder')" @keyup.enter="reload" />
         </div>
-        <h3 class="mt-4 font-display text-base font-semibold text-wb-ink">{{ t('kdoc.emptyTitle') }}</h3>
-        <p class="mt-1 max-w-md text-xs text-wb-muted">{{ t('kdoc.emptyHint') }}</p>
-        <div class="mt-6 grid w-full max-w-2xl grid-cols-1 gap-3 sm:grid-cols-3">
-          <button
-            type="button"
-            class="rounded-xl border border-wb-border bg-wb-surface-2 px-4 py-3 text-left transition-colors hover:border-wb-primary/40 hover:bg-wb-surface"
-            @click="openCreateWithType('text')"
-          >
-            <p class="text-xs font-semibold text-wb-primary-strong">{{ t('kdoc.sourceType.text') }}</p>
-            <p class="mt-1 text-[11px] leading-relaxed text-wb-muted">{{ t('kdoc.emptyHintText') }}</p>
-          </button>
-          <button
-            type="button"
-            class="rounded-xl border border-wb-border bg-wb-surface-2 px-4 py-3 text-left transition-colors hover:border-wb-primary/40 hover:bg-wb-surface"
-            @click="openCreateWithType('file')"
-          >
-            <p class="text-xs font-semibold text-wb-primary-strong">{{ t('kdoc.sourceType.file') }}</p>
-            <p class="mt-1 text-[11px] leading-relaxed text-wb-muted">{{ t('kdoc.emptyHintFile') }}</p>
-          </button>
-          <button
-            type="button"
-            class="rounded-xl border border-wb-border bg-wb-surface-2 px-4 py-3 text-left transition-colors hover:border-wb-primary/40 hover:bg-wb-surface"
-            @click="openCreateWithType('url')"
-          >
-            <p class="text-xs font-semibold text-wb-primary-strong">{{ t('kdoc.sourceType.url') }}</p>
-            <p class="mt-1 text-[11px] leading-relaxed text-wb-muted">{{ t('kdoc.emptyHintUrl') }}</p>
-          </button>
+        <select v-model="filterGroup" class="input narrow" @change="reload">
+          <option value="">{{ t('kdoc.allGroups') }}</option>
+          <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
+        </select>
+        <button class="btn" @click="reload">
+          <Search class="ic ic-sm" />
+          {{ t('knowledge.search') }}
+        </button>
+        <span class="fs11 muted">{{ t('kdoc.chunkHint') }}</span>
+      </div>
+
+      <div v-if="error" class="alert a-danger">
+        <span>{{ error }}</span>
+        <button class="btn btn-sm" @click="reload">{{ t('common.retry') }}</button>
+      </div>
+
+      <!-- 表格 -->
+      <div class="card p-sm">
+        <div v-if="loading && docs.length === 0" class="empty">{{ t('ui.status.loading') }}</div>
+        <div v-else-if="docs.length === 0" class="empty">{{ t('kdoc.emptyTitle') }}</div>
+        <div v-else class="tbl-wrap">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="min-width: 210px">{{ t('kdoc.titleField') }}</th>
+                <th>{{ t('kdoc.sourceTypeLabel') }}</th>
+                <th class="ta-r">{{ t('kdoc.sizeLabel') }}</th>
+                <th class="ta-r">{{ t('kdoc.chunkCount') }}</th>
+                <th>{{ t('kdoc.groupLabel') }}</th>
+                <th>{{ t('kdoc.statusLabel') }}</th>
+                <th class="ta-r">{{ t('memory.center.col.time') }}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in docs" :key="row.id">
+                <td style="font-weight: 500">{{ row.name }}</td>
+                <td>
+                  <span class="badge" :class="row.source_type === 'file' ? 'b-neutral' : row.source_type === 'pdf' ? 'b-danger' : row.source_type === 'xlsx' ? 'b-info' : row.source_type === 'docx' ? 'b-primary' : 'b-neutral'">
+                    {{ row.source_type }}
+                  </span>
+                </td>
+                <td class="ta-r mono">{{ formatSize(row.size_bytes) }}</td>
+                <td class="ta-r mono">{{ row.chunk_count }}</td>
+                <td>{{ (row as Record<string, unknown>).group as string || '—' }}</td>
+                <td>
+                  <span class="badge" :class="`b-${row.status === 'indexed' ? 'success' : row.status === 'failed' ? 'danger' : row.status === 'indexing' ? 'warning' : 'neutral'}`">
+                    <span class="dot" />{{ t(`kdoc.status.${row.status || 'pending'}`) }}
+                  </span>
+                </td>
+                <td class="ta-r mono">{{ formatDateTime(row.updated_at) }}</td>
+                <td>
+                  <div class="tbl-actions">
+                    <button class="btn-icon" :title="t('kdoc.viewDoc')" @click="openView(row)"><Eye class="ic ic-sm" /></button>
+                    <button class="btn-icon" :title="t('ui.btn.edit')" @click="startEdit(row)"><Pencil class="ic ic-sm" /></button>
+                    <button class="btn-icon" style="color: var(--wb-danger)" :title="t('ui.btn.delete')" @click="doDelete(row)"><Trash2 class="ic ic-sm" /></button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-        <el-button type="primary" class="mt-6" @click="openCreate">{{ t('kdoc.newDoc') }}</el-button>
-      </section>
+      </div>
     </div>
 
-    <el-dialog
-      :model-value="showCreate"
+    <!-- 新建 / 编辑：与全局表单弹窗一致（720px + 28px 控件 + 12px 字号） -->
+    <FormDialog
+      v-model="showCreate"
       :title="editing ? t('kdoc.editDoc') : t('kdoc.newDocTitle')"
-      width="560px"
-      append-to-body
-      @update:model-value="(v: boolean) => (!v ? closeDialog() : undefined)"
+      :submitting="saving"
+      @confirm="submit"
+      @close="closeDialog"
     >
-      <el-form class="wb-el-form wb-form-grid" label-position="top" @submit.prevent="doSave">
-        <el-form-item :label="t('kdoc.titleField')" class="wb-form-cell">
-          <el-input v-model="form.name" :placeholder="t('kdoc.titleField')" clearable />
-        </el-form-item>
-        <el-form-item :label="t('kdoc.sourceTypeLabel')" class="wb-form-cell">
-          <el-select v-model="form.source_type" class="w-full">
-            <el-option v-for="st in SOURCE_TYPES" :key="st.value" :value="st.value" :label="st.label" />
-          </el-select>
-        </el-form-item>
-        <el-form-item :label="t('kdoc.sourceField')" class="wb-form-cell">
-          <!-- file 型：原生「选择文件」对话框，免手动粘贴路径 -->
-          <div v-if="form.source_type === 'file'" class="mb-2 flex w-full items-center gap-2">
-            <el-button size="small" type="primary" plain @click="pickSourceFile">
-              <el-icon class="mr-1"><FolderOpen /></el-icon>
-              {{ t('kdoc.pickFile') }}
-            </el-button>
-            <span v-if="form.source" class="inline-flex min-w-0 items-center gap-1 truncate rounded bg-wb-primary/10 px-2 py-1 text-xs text-wb-primary-strong">
-              <FileText class="h-3 w-3 shrink-0" />
-              <span class="truncate">{{ form.source }}</span>
-            </span>
-          </div>
-          <el-input
-            v-model="form.source"
-            type="textarea"
-            :rows="form.source_type === 'file' ? 3 : 8"
-            :placeholder="form.source_type === 'file' ? t('kdoc.sourcePlaceholderFile') : t('kdoc.sourcePlaceholder')"
-            clearable
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="closeDialog">{{ t('ui.btn.cancel') }}</el-button>
-        <el-button type="primary" @click="doSave">{{ editing ? t('ui.btn.save') : t('ui.btn.create') }}</el-button>
-      </template>
-    </el-dialog>
+      <div class="wb-fgrid">
+        <Field :label="t('kdoc.titleField')" required full :error="formError">
+          <input v-model="form.name" class="input" :placeholder="t('kdoc.titleField')" />
+        </Field>
 
-    <!-- 文档详情抽屉：只读元数据核对（状态/分块/来源/失败原因） -->
-    <el-drawer
+        <Field :label="t('kdoc.sourceTypeLabel')" :hint="sourceTypeHint">
+          <select v-model="form.source_type" class="input">
+            <option v-for="st in SOURCE_TYPES" :key="st.value" :value="st.value">{{ st.label }}</option>
+          </select>
+        </Field>
+
+        <Field :label="t('kdoc.sourceField')" required full>
+          <div v-if="form.source_type === 'file'" class="kdoc-src">
+            <input v-model="form.source" class="input" :placeholder="sourcePlaceholder" />
+            <button class="btn" @click="pickSourceFile">
+              <Upload class="ic ic-sm" />
+              {{ t('kdoc.pickFile') }}
+            </button>
+          </div>
+          <textarea
+            v-else
+            v-model="form.source"
+            class="input"
+            rows="6"
+            :placeholder="sourcePlaceholder"
+          />
+        </Field>
+      </div>
+    </FormDialog>
+
+    <!-- 详情：只读核对元数据 -->
+    <el-dialog
       :model-value="viewing !== null"
       :title="viewing?.name ?? ''"
-      size="420px"
-      append-to-body
-      @update:model-value="(v: boolean) => (!v ? (viewing = null) : undefined)"
+      width="640px"
+      align-center
+      class="wb-form-dialog"
+      @update:model-value="viewing = null"
     >
-      <div v-if="viewing" class="flex flex-col gap-3 text-sm">
-        <div class="flex items-center gap-2">
-          <el-tag :type="viewing.status === 'indexed' ? 'success' : viewing.status === 'failed' ? 'danger' : 'info'" size="small">
-            {{ t(`kdoc.status.${viewing.status || 'pending'}`) }}
-          </el-tag>
-          <el-tag size="small" effect="plain">{{ viewing.source_type }}</el-tag>
-        </div>
-        <div class="flex items-center justify-between border-b border-wb-border pb-2">
-          <span class="text-xs text-wb-muted">{{ t('kdoc.chunkCount') }}</span>
-          <span class="text-wb-ink">{{ viewing.chunk_count }}</span>
-        </div>
-        <div class="border-b border-wb-border pb-2">
-          <div class="mb-1 text-xs text-wb-muted">{{ t('kdoc.sourceField') }}</div>
-          <div class="break-all font-mono text-xs text-wb-ink">{{ viewing.source }}</div>
-        </div>
-        <div v-if="viewing.error_msg" class="rounded-lg bg-wb-danger/10 px-3 py-2 text-xs text-wb-danger">
-          {{ viewing.error_msg }}
-        </div>
-        <div class="text-xs text-wb-muted">{{ t('kdoc.viewUpdatedAt') }}：{{ formatDateTime(viewing.updated_at) }}</div>
+      <div v-if="viewing" class="kv">
+        <span>{{ t('kdoc.sourceTypeLabel') }}</span>
+        <span>{{ viewing.source_type }}</span>
+        <span>{{ t('kdoc.sourceField') }}</span>
+        <span class="mono">{{ displaySource(viewing) }}</span>
+        <span>{{ t('kdoc.sizeLabel') }}</span>
+        <span class="mono">{{ formatSize(viewing.size_bytes) }}</span>
+        <span>{{ t('kdoc.chunkCount') }}</span>
+        <span class="mono">{{ viewing.chunk_count }}</span>
+        <span>{{ t('kdoc.statusLabel') }}</span>
+        <span>{{ t(`kdoc.status.${viewing.status || 'pending'}`) }}</span>
+        <span>{{ t('kdoc.viewUpdatedAt') }}</span>
+        <span class="mono">{{ formatDateTime(viewing.updated_at) }}</span>
       </div>
-    </el-drawer>
+      <div v-if="viewing?.error_msg" class="alert a-danger mt10">{{ viewing.error_msg }}</div>
+      <template #footer>
+        <div class="wb-form-actions">
+          <button class="btn" @click="viewing = null">{{ t('ui.btn.cancel') }}</button>
+          <button class="btn btn-primary" @click="viewing && startEdit(viewing); viewing = null">
+            {{ t('ui.btn.edit') }}
+          </button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.kdoc-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.kdoc-toolbar__search {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.kdoc-src {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+</style>

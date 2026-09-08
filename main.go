@@ -53,12 +53,15 @@ func main() {
 	}()
 
 	err := wails.Run(&options.App{
-		Title:            "WorkBaby",
-		Width:            1280,
-		Height:           800,
-		MinWidth:         960,
-		MinHeight:        640,
-		BackgroundColour: &options.RGBA{R: 245, G: 247, B: 250, A: 1},
+		Title:     "WorkBaby",
+		Width:     1280,
+		Height:    800,
+		MinWidth:  960,
+		MinHeight: 640,
+		// Frameless：启用前端自绘标题栏（wb-ui.css .titlebar + winctl），
+		// 拖拽区用 --wails-draggable:drag 声明；Windows 下缩放手柄由 Wails 自带。
+		Frameless:        true,
+		BackgroundColour: &options.RGBA{R: 247, G: 247, B: 245, A: 1},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 			// /files/** 走本地受管文件服务（媒体产物/工作区预览）；其余回退嵌入前端资源
@@ -70,10 +73,10 @@ func main() {
 				http.FileServer(http.FS(assets)).ServeHTTP(w, r)
 			}),
 		},
-		OnStartup:      app.startup,
-		OnDomReady:     app.domReady,
-		OnBeforeClose:  app.beforeClose,
-		OnShutdown:     app.shutdown,
+		OnStartup:     app.startup,
+		OnDomReady:    app.domReady,
+		OnBeforeClose: app.beforeClose,
+		OnShutdown:    app.shutdown,
 		// 双主机：业务 API 走 gin HTTP（app.startup 启动并注入端口）；
 		// Wails 绑定仅保留系统能力（文件对话框 / 剪贴板 / 托盘）。
 		Bind: []interface{}{app},

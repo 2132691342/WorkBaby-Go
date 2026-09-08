@@ -73,18 +73,19 @@ onMounted(folders.load)
 </script>
 
 <template>
-  <div class="flex h-full bg-wb-bg text-wb-ink">
-    <!-- 左：树 -->
-    <aside class="flex w-96 shrink-0 flex-col border-r border-wb-border bg-wb-surface/40 p-3">
-      <div class="mb-3 flex items-center justify-between gap-2 px-1">
+  <div class="wb-ui" style="display: flex; flex: 1; min-height: 0">
+    <!-- 左：树（原型 pane-l） -->
+    <aside class="pane-l" style="width: 380px">
+      <div class="flex-r mb10">
         <div>
-          <h2 class="font-display text-sm font-semibold text-wb-ink">{{ t('folder.title') }}</h2>
-          <p class="text-[11px] text-wb-muted">{{ t('folder.subtitle') }}</p>
+          <h2 style="font-size: 13.5px; font-weight: 600">{{ t('folder.title') }}</h2>
+          <p class="fs11 muted">{{ t('folder.subtitle') }}</p>
         </div>
-        <el-button type="primary" plain size="small" @click="showCreate = true">
-          <Plus class="h-3.5 w-3.5" />
+        <span class="sp" />
+        <button class="btn btn-sm btn-primary" @click="showCreate = true">
+          <Plus class="ic ic-sm" />
           <span>{{ t('folder.new') }}</span>
-        </el-button>
+        </button>
       </div>
       <div v-if="error" class="mb-2 rounded-md bg-wb-danger/15 px-2 py-1 text-xs text-wb-danger">
         {{ error }}
@@ -116,8 +117,8 @@ onMounted(folders.load)
       </div>
     </aside>
 
-    <!-- 右：详情 -->
-    <main class="min-w-0 flex-1 overflow-y-auto p-6">
+    <!-- 右：详情（原型 pane-r） -->
+    <main class="pane-r" style="flex: 1; overflow-y: auto; padding: 22px 24px">
       <div v-if="!selected" class="flex h-full items-center justify-center">
         <div class="text-center">
           <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-wb-primary/10 text-wb-primary">

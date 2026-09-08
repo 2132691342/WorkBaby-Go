@@ -14,15 +14,44 @@ import { apiPost } from '@/api/client'
 import { useSkillsStore } from '@/stores/skills'
 import { t } from '@/i18n'
 import { useToast } from '@/composables/useToast'
+import FormDialog from '@/components/common/FormDialog.vue'
+import Field from '@/components/common/Field.vue'
 import type { Skill, SkillScript } from '@/types/api'
 
 const skills = useSkillsStore()
-const { skills: list, loading, importingZip, error, info, editingID, editingSource, creating, form } = storeToRefs(skills)
+const { skills: list, loading, importingZip, error, info, editingID, editingSource, form } = storeToRefs(skills)
 const toast = useToast()
 
 onMounted(() => {
   skills.load()
 })
+
+// ===== 新建 / 编辑统一弹窗 =====
+const showForm = ref(false)
+const saving = ref(false)
+
+function openCreate(): void {
+  skills.startCreate()
+  showForm.value = true
+}
+function openEdit(s: Skill): void {
+  skills.startEdit(s)
+  showForm.value = true
+}
+function closeForm(): void {
+  if (saving.value) return
+  skills.cancel()
+  showForm.value = false
+}
+async function submitForm(): Promise<void> {
+  saving.value = true
+  try {
+    const saved = await skills.submit()
+    if (saved) showForm.value = false
+  } finally {
+    saving.value = false
+  }
+}
 
 /** 列表行内启停开关。 */
 async function toggleEnabled(s: Skill, enabled: boolean): Promise<void> {
@@ -88,123 +117,28 @@ function removeScript(i: number): void {
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-y-auto text-wb-ink">
-    <div class="mx-auto w-full max-w-4xl space-y-5 px-6 py-8">
-      <!-- Hero header -->
-      <header class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-wb-primary/10 text-wb-primary">
-          <Zap class="h-5 w-5" />
-        </div>
+  <div class="scroll wb-ui">
+    <div class="wrap wrap-md">
+      <!-- Hero header（原型 10 屏） -->
+      <header class="hero">
+        <div class="tile"><Zap class="ic" /></div>
         <div>
-          <h1 class="font-display text-lg font-semibold text-wb-ink">{{ t('skill.title') }}</h1>
-          <p class="text-xs text-wb-muted">{{ t('skill.subtitle') }}</p>
+          <h1>{{ t('skill.title') }}</h1>
+          <p>{{ t('skill.subtitle') }}</p>
         </div>
-        <div class="ml-auto flex items-center gap-2">
-          <el-button :loading="importingZip" @click="pickZipAndImport">
-            <Upload class="h-3.5 w-3.5" />
-            <span class="ml-1">{{ t('skill.importZip') }}</span>
-          </el-button>
-          <el-button type="primary" @click="skills.startCreate">{{ t('skill.new') }}</el-button>
-        </div>
+        <span class="sp" />
+        <button class="btn" :disabled="importingZip" @click="pickZipAndImport">
+          <Upload class="ic ic-sm" />
+          {{ t('skill.importZip') }}
+        </button>
+        <button class="btn btn-primary" @click="openCreate">
+          <Plus class="ic ic-sm" />
+          {{ t('skill.new') }}
+        </button>
       </header>
 
-      <div v-if="error" class="rounded-lg bg-wb-danger/15 px-3 py-2 text-sm text-wb-danger">{{ error }}</div>
-      <div v-if="info" class="rounded-lg bg-wb-success/15 px-3 py-2 text-sm text-wb-success">{{ info }}</div>
-
-      <!-- Skill 编辑（技能包：meta + body + scripts；creating = 列表非空时「新建」也要展示表单） -->
-      <section v-if="editingID || editingSource !== null || creating || list.length === 0" class="card p-5">
-        <h2 class="mb-3 font-display text-sm font-semibold text-wb-ink">
-          {{ editingID ? t('skill.edit') : t('skill.new') }}
-        </h2>
-        <el-alert
-          v-if="readOnly"
-          type="info"
-          :closable="false"
-          class="mb-3"
-          :title="t('skill.builtinReadonly')"
-        />
-        <el-form class="wb-el-form" label-position="top" @submit.prevent="skills.submit">
-          <div class="grid grid-cols-2 gap-3">
-            <el-form-item :label="t('skill.name')">
-              <el-input v-model="form.name" :disabled="readOnly" :placeholder="t('skill.name')" />
-            </el-form-item>
-            <el-form-item :label="t('skill.enabledLabel')">
-              <el-switch v-model="form.enabled" :disabled="readOnly" />
-            </el-form-item>
-          </div>
-          <el-form-item :label="t('skill.description')">
-            <el-input v-model="form.description" :disabled="readOnly" :placeholder="t('skill.descriptionHint')" />
-          </el-form-item>
-          <el-form-item :label="t('skill.whenToUse')">
-            <el-input
-              v-model="form.when_to_use"
-              :disabled="readOnly"
-              type="textarea"
-              :rows="2"
-              resize="none"
-              :placeholder="t('skill.whenToUseHint')"
-            />
-          </el-form-item>
-          <el-form-item :label="t('skill.content')">
-            <el-input v-model="form.body" :disabled="readOnly" type="textarea" :rows="10" class="font-mono" :placeholder="t('skill.contentHint')" />
-          </el-form-item>
-          <el-form-item :label="t('skill.allowedTools')">
-            <el-select
-              v-model="form.allowed_tools"
-              :disabled="readOnly"
-              multiple
-              filterable
-              allow-create
-              default-first-option
-              :reserve-keyword="false"
-              class="w-full"
-              :placeholder="t('skill.allowedToolsHint')"
-            >
-              <el-option v-for="tn in form.allowed_tools || []" :key="tn" :value="tn" :label="tn" />
-            </el-select>
-          </el-form-item>
-
-          <!-- 技能包 scripts（如 SKILL.md 包 scripts/ 目录；run_skill_script 执行） -->
-          <div class="mb-4 rounded-xl border border-wb-border bg-wb-surface/60 p-3">
-            <div class="mb-2 flex items-center justify-between">
-              <div class="flex items-center gap-1.5 text-xs font-medium text-wb-ink">
-                <FileText class="h-3.5 w-3.5 text-wb-mint" />
-                {{ t('skill.scripts') }}
-                <span class="rounded bg-wb-mint/10 px-1.5 text-[10px] text-wb-mint">{{ (form.scripts ?? []).length }}</span>
-              </div>
-              <el-button size="small" text type="primary" :disabled="readOnly" @click="openScriptCreate">
-                <Plus class="h-3.5 w-3.5" />
-                {{ t('skill.scriptAdd') }}
-              </el-button>
-            </div>
-            <div v-if="(form.scripts ?? []).length === 0" class="text-xs text-wb-muted">{{ t('skill.scriptsEmpty') }}</div>
-            <ul v-else class="space-y-1">
-              <li
-                v-for="(sc, i) in (form.scripts ?? [])"
-                :key="`${sc.name}-${i}`"
-                class="flex items-center gap-2 rounded-lg bg-wb-surface px-2 py-1.5 text-xs"
-              >
-                <span class="min-w-0 flex-1 truncate font-mono text-wb-ink">{{ sc.name || '(unnamed)' }}</span>
-                <span class="rounded bg-wb-primary/10 px-1.5 text-[10px] text-wb-primary-strong">{{ sc.language }}</span>
-                <span class="text-[10px] tabular-nums text-wb-muted">{{ (sc.code ?? '').length }}B</span>
-                <el-button link type="primary" size="small" :disabled="readOnly" @click="openScriptEdit(i)">{{ t('ui.btn.edit') }}</el-button>
-                <el-button link type="danger" size="small" :disabled="readOnly" @click="removeScript(i)">
-                  <Trash2 class="h-3.5 w-3.5" />
-                </el-button>
-              </li>
-            </ul>
-          </div>
-
-          <div class="flex items-center gap-3">
-            <span class="text-xs text-wb-muted">{{ t('skill.triggerHint') }}</span>
-            <div class="flex-1" />
-            <el-button v-if="editingID" @click="skills.cancel">{{ t('ui.btn.cancel') }}</el-button>
-            <el-button type="primary" native-type="submit" :disabled="readOnly">
-              {{ editingID ? t('ui.btn.save') : t('ui.btn.create') }}
-            </el-button>
-          </div>
-        </el-form>
-      </section>
+      <div v-if="error && !showForm" class="alert a-danger">{{ error }}</div>
+      <div v-if="info" class="alert a-success">{{ info }}</div>
 
       <!-- Skill 列表 -->
       <section class="card p-5">
@@ -246,7 +180,7 @@ function removeScript(i: number): void {
           </el-table-column>
           <el-table-column :label="t('memory.center.col.actions')" width="120" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" size="small" @click="skills.startEdit(row as Skill)">{{ t('ui.btn.edit') }}</el-button>
+              <el-button link type="primary" size="small" @click="openEdit(row as Skill)">{{ t('ui.btn.edit') }}</el-button>
               <el-button
                 v-if="(row as Skill).source_kind !== 'builtin'"
                 link
@@ -259,9 +193,100 @@ function removeScript(i: number): void {
             </template>
           </el-table-column>
         </el-table>
-        <el-empty v-else :description="t('skill.empty')" :image-size="80" class="py-6" />
+        <el-empty v-else :description="t('skill.empty')" :image-size="80" class="py-6">
+          <el-button type="primary" size="small" @click="openCreate">
+            <Plus class="h-3.5 w-3.5" />
+            {{ t('skill.new') }}
+          </el-button>
+        </el-empty>
       </section>
     </div>
+
+    <!-- 新建 / 编辑统一弹窗（技能包：meta + body + scripts） -->
+    <FormDialog
+      v-model="showForm"
+      :title="editingID ? t('skill.edit') : t('skill.new')"
+      :submitting="saving"
+      :confirm-disabled="readOnly"
+      :confirm-text="editingID ? t('ui.btn.save') : t('ui.btn.create')"
+      @confirm="submitForm"
+      @close="closeForm"
+    >
+      <el-alert v-if="readOnly" type="info" :closable="false" class="mb-3" :title="t('skill.builtinReadonly')" />
+      <div class="wb-fgrid">
+        <Field :label="t('skill.name')" required>
+          <input v-model="form.name" class="input" :disabled="readOnly" :placeholder="t('skill.name')" />
+        </Field>
+        <Field :label="t('skill.enabledLabel')">
+          <div class="flex items-center" style="height: 28px">
+            <span
+              class="switch"
+              :class="{ on: form.enabled }"
+              :style="{ cursor: readOnly ? 'not-allowed' : 'pointer', opacity: readOnly ? 0.5 : 1 }"
+              @click="!readOnly && (form.enabled = !form.enabled)"
+            />
+          </div>
+        </Field>
+        <Field :label="t('skill.description')" full>
+          <input v-model="form.description" class="input" :disabled="readOnly" :placeholder="t('skill.descriptionHint')" />
+        </Field>
+        <Field :label="t('skill.whenToUse')" full>
+          <textarea v-model="form.when_to_use" class="input" rows="2" :disabled="readOnly" :placeholder="t('skill.whenToUseHint')" />
+        </Field>
+        <Field :label="t('skill.content')" required full>
+          <textarea v-model="form.body" class="input mono" rows="10" :disabled="readOnly" :placeholder="t('skill.contentHint')" />
+        </Field>
+      </div>
+
+      <div class="wb-fsect mt4">
+        <p class="wb-fsect__title">{{ t('skill.allowedTools') }}</p>
+        <el-select
+          v-model="form.allowed_tools"
+          :disabled="readOnly"
+          multiple
+          filterable
+          allow-create
+          default-first-option
+          :reserve-keyword="false"
+          class="w-full"
+          :placeholder="t('skill.allowedToolsHint')"
+        >
+          <el-option v-for="tn in form.allowed_tools || []" :key="tn" :value="tn" :label="tn" />
+        </el-select>
+      </div>
+
+      <!-- 技能包 scripts（如 SKILL.md 包 scripts/ 目录；run_skill_script 执行） -->
+      <div class="mt4 rounded-xl border border-wb-border bg-wb-surface/60 p-3">
+        <div class="mb-2 flex items-center justify-between">
+          <div class="flex items-center gap-1.5 text-xs font-medium text-wb-ink">
+            <FileText class="h-3.5 w-3.5 text-wb-mint" />
+            {{ t('skill.scripts') }}
+            <span class="rounded bg-wb-mint/10 px-1.5 text-[10px] text-wb-mint">{{ (form.scripts ?? []).length }}</span>
+          </div>
+          <button class="btn btn-sm" :disabled="readOnly" @click="openScriptCreate">
+            <Plus class="ic ic-sm" />
+            {{ t('skill.scriptAdd') }}
+          </button>
+        </div>
+        <div v-if="(form.scripts ?? []).length === 0" class="text-xs text-wb-muted">{{ t('skill.scriptsEmpty') }}</div>
+        <ul v-else class="space-y-1">
+          <li
+            v-for="(sc, i) in (form.scripts ?? [])"
+            :key="`${sc.name}-${i}`"
+            class="flex items-center gap-2 rounded-lg bg-wb-surface px-2 py-1.5 text-xs"
+          >
+            <span class="min-w-0 flex-1 truncate font-mono text-wb-ink">{{ sc.name || '(unnamed)' }}</span>
+            <span class="rounded bg-wb-primary/10 px-1.5 text-[10px] text-wb-primary-strong">{{ sc.language }}</span>
+            <span class="text-[10px] tabular-nums text-wb-muted">{{ (sc.code ?? '').length }}B</span>
+            <button class="btn-icon" :disabled="readOnly" @click="openScriptEdit(i)">{{ t('ui.btn.edit') }}</button>
+            <button class="btn-icon" style="color: var(--wb-danger)" :disabled="readOnly" @click="removeScript(i)">
+              <Trash2 class="ic ic-sm" />
+            </button>
+          </li>
+        </ul>
+      </div>
+      <p class="fs11 muted" style="margin: 6px 0 0">{{ t('skill.triggerHint') }}</p>
+    </FormDialog>
 
     <!-- 脚本编辑对话框 -->
     <el-dialog

@@ -223,6 +223,9 @@ func (s *Server) registerRoutes() {
 		}
 		Fail(c, h.AnswerInput(c.Param("id"), req))
 	})
+	v1.POST("/chat/approval/:id/skip", func(c *gin.Context) {
+		Fail(c, h.SkipApproval(c.Param("id")))
+	})
 	v1.GET("/chat/approvals/pending", func(c *gin.Context) {
 		OK(c, h.ListPendingApprovals())
 	})

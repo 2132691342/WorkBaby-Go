@@ -569,9 +569,18 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 	if !normalStop && turnsRun == r.cfg.MaxTurns-startTurn && finalReason == ReasonEndTurn {
 		finalReason = ReasonMaxTurns
 	}
-	// 已消耗 token 即出账：用户取消 / 预算超限 / 停滞 等非 end_turn 终态同样回填用量
-	if r.usage.Total > 0 || r.usage.Input > 0 || r.usage.Output > 0 {
-		finalUsage = r.usage.Snapshot()
+	// 已消耗 token 即出账：用户取消 / 预算超限 / 停滞 等非 end_turn 终态同样回填用量。
+	//
+	// 关键：finalUsage 必须是「末轮 per-turn」而非「全程累加」。
+	//   - message.input_tokens 落库后被 ContextUsage.historyTokens() 当成「当前上下文占用」展示，
+	//     累加值会让一次 5 轮 run 显示成 5× input_tokens（前端 323% 的根因）。
+	//   - 每轮 per-turn 明细在 turnUsages 里，会单独写入 token_usage 表用于「总消耗」统计；
+	//     RunResult.Usage / RunDone 事件 / message.input_tokens 三个口径统一用末轮 per-turn。
+	if len(turnUsages) > 0 {
+		last := turnUsages[len(turnUsages)-1].Usage
+		if last.InputTokens > 0 || last.OutputTokens > 0 || last.TotalTokens > 0 {
+			finalUsage = last
+		}
 	}
 
 	// 统一出口：先错误事件后终态 RunDone——所有退出路径都从这里收束，事件流有始有终。

@@ -367,6 +367,9 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
 </script>
 
 <template>
+  <div class="chat wb-ui">
+    <!-- 消息主体（会话历史已归位到左侧栏 40% 区） -->
+    <div class="chat-main">
   <div class="flex h-full flex-col overflow-hidden text-wb-ink">
     <!-- 顶部 ChatHeader：mascot + session title + workspace chip + 模型徽标 + 操作 -->
     <header class="flex items-center justify-between gap-3 border-b border-wb-border bg-wb-surface px-5 py-2.5">
@@ -610,6 +613,8 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
         </el-button>
       </template>
     </el-dialog>
+  </div>
+    </div>
   </div>
 </template>
 

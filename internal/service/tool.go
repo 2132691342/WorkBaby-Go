@@ -33,15 +33,54 @@ func (s *ToolService) ListTools(ctx context.Context) ([]domain.ToolMeta, error) 
 		if err != nil {
 			enabled = true // 未配置默认启用
 		}
+		meta := tool.MetaOf(t)
 		out = append(out, domain.ToolMeta{
 			Name:        t.Name(),
 			Description: t.Description(),
 			RiskLevel:   string(t.RiskLevel()),
+			Group:       meta.Group,
+			ReadOnly:    meta.ReadOnly,
+			Destructive: meta.Destructive,
 			Enabled:     enabled,
+			Params:      parseParams(t.Schema().Parameters),
 			SchemaJSON:  string(t.Schema().Parameters),
 		})
 	}
 	return out, nil
+}
+
+// parseParams 从 JSON Schema 提取参数清单；解析失败返回空切片。
+func parseParams(raw json.RawMessage) []domain.ToolParamVO {
+	var schema struct {
+		Required   []string `json:"required"`
+		Properties map[string]struct {
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &schema) != nil || len(schema.Properties) == 0 {
+		return []domain.ToolParamVO{}
+	}
+	req := make(map[string]bool, len(schema.Required))
+	for _, r := range schema.Required {
+		req[r] = true
+	}
+	names := make([]string, 0, len(schema.Properties))
+	for n := range schema.Properties {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]domain.ToolParamVO, 0, len(names))
+	for _, n := range names {
+		p := schema.Properties[n]
+		out = append(out, domain.ToolParamVO{
+			Name:        n,
+			Type:        p.Type,
+			Required:    req[n],
+			Description: p.Description,
+		})
+	}
+	return out
 }
 
 // SetToolEnabled 持久化启停。

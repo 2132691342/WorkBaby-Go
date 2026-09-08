@@ -1,78 +1,46 @@
 <script setup lang="ts">
-import { computed as computed2, ref } from 'vue'
+import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Cpu } from '@/components/common/icons'
+import { Cpu, ChevronDown } from '@/components/common/icons'
 import { useDashboardStore } from '@/stores/dashboard'
 import { t } from '@/i18n'
 
 /**
- * 仪表盘 · 系统运行时折叠区。
+ * 仪表盘 · 系统运行时折叠区（原型 07 屏底部，遵循 wb-ui 设计系统）。
  */
 const dashboard = useDashboardStore()
 const { stats } = storeToRefs(dashboard)
 
-// el-collapse v-model 为激活项名数组
-const systemCollapse = ref<string[]>([])
-
-const system = computed2(() => stats.value?.system ?? null)
+const open = ref(false)
+function toggle(): void {
+  open.value = !open.value
+}
 </script>
 
 <template>
-  <section v-if="system" class="card overflow-hidden">
-    <el-collapse v-model="systemCollapse" class="dashboard-collapse">
-      <el-collapse-item name="runtime">
-        <template #title>
-          <div class="flex items-center gap-2 font-display text-sm font-semibold text-wb-ink">
-            <Cpu class="h-4 w-4 text-wb-info" />
-            {{ t('dashboard.runtimeInfo') }}
-            <el-tag size="small" type="info" effect="plain" class="ml-1">{{ t('dashboard.devOnly') }}</el-tag>
-          </div>
-        </template>
-        <div class="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <div class="space-y-0.5">
-            <div class="text-xs text-wb-muted">{{ t('dashboard.os') }}</div>
-            <div class="text-sm text-wb-ink">{{ system.os_name }} · {{ system.os_arch }}</div>
-            <div class="text-[10px] text-wb-muted">{{ t('dashboard.cpuCores', system.num_cpu) }}</div>
-          </div>
-          <div class="space-y-0.5">
-            <div class="text-xs text-wb-muted">{{ t('dashboard.go_version') }}</div>
-            <div class="text-sm text-wb-ink">{{ system.go_version }}</div>
-            <div class="text-[10px] text-wb-muted">{{ t('dashboard.goroutines', system.goroutines) }}</div>
-          </div>
-          <div class="space-y-0.5">
-            <div class="text-xs text-wb-muted">{{ t('dashboard.goHeap') }}</div>
-            <div class="text-sm text-wb-ink">
-              {{ system.heap_alloc_mb }} MB / {{ system.heap_sys_mb }} MB
-            </div>
-            <div class="text-[10px] text-wb-muted">{{ t('dashboard.heapHint') }}</div>
-          </div>
-          <div class="space-y-0.5">
-            <div class="text-xs text-wb-muted">{{ t('dashboard.user_home') }}</div>
-            <div class="truncate font-mono text-[11px] text-wb-ink" :title="system.user_home">{{ system.user_home }}</div>
-          </div>
-        </div>
-      </el-collapse-item>
-    </el-collapse>
+  <section v-if="stats?.system" class="card p-sm">
+    <div class="flex-r" style="cursor: pointer" @click="toggle">
+      <Cpu class="ic ic-sm muted" />
+      <h3 style="flex: 1">{{ t('dashboard.runtimeInfo') }}</h3>
+      <span class="badge b-success">{{ t('dashboard.devOnly') }}</span>
+      <ChevronDown class="ic ic-sm muted" :class="{ 'rotate-180': open }" />
+    </div>
+    <div v-if="open">
+      <div class="divider mt10 mb10" />
+      <dl class="kv">
+        <dt>{{ t('dashboard.os') }}</dt>
+        <dd>{{ stats.system.os_name }} · {{ stats.system.os_arch }}</dd>
+        <dt>{{ t('dashboard.cpuCores') }}</dt>
+        <dd>{{ stats.system.num_cpu }}</dd>
+        <dt>{{ t('dashboard.go_version') }}</dt>
+        <dd class="mono">{{ stats.system.go_version }}</dd>
+        <dt>{{ t('dashboard.goroutines') }}</dt>
+        <dd class="mono">{{ stats.system.goroutines }}</dd>
+        <dt>{{ t('dashboard.goHeap') }}</dt>
+        <dd class="mono">{{ stats.system.heap_alloc_mb }} MB / {{ stats.system.heap_sys_mb }} MB</dd>
+        <dt>{{ t('dashboard.user_home') }}</dt>
+        <dd class="mono">{{ stats.system.user_home }}</dd>
+      </dl>
+    </div>
   </section>
 </template>
-
-<style scoped>
-/* el-collapse 去默认边框，贴合 card */
-.dashboard-collapse {
-  border-top: none;
-  border-bottom: none;
-}
-.dashboard-collapse :deep(.el-collapse-item__header),
-.dashboard-collapse :deep(.el-collapse-item__wrap) {
-  background: transparent;
-  border-bottom: none;
-  color: var(--wb-ink);
-}
-.dashboard-collapse :deep(.el-collapse-item__header) {
-  padding-left: 20px;
-  padding-right: 20px;
-}
-.dashboard-collapse :deep(.el-collapse-item__content) {
-  padding: 0 20px 16px;
-}
-</style>

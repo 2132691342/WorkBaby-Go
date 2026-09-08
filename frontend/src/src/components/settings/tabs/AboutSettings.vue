@@ -19,9 +19,9 @@ const aboutCounts = computed(() => {
 </script>
 
 <template>
-  <div class="space-y-5">
-    <section class="card p-5">
-      <h2 class="mb-4 font-display text-sm font-semibold text-wb-ink">{{ t('admin.title') }}</h2>
+  <div class="space-y-4">
+    <section class="card p-4">
+      <h2 class="mb-3 font-display text-sm font-semibold text-wb-ink">{{ t('admin.title') }}</h2>
       <div v-if="overview" class="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
         <div class="rounded-xl bg-wb-primary/5 p-4">
           <div class="text-xs text-wb-muted">{{ t('admin.version') }}</div>

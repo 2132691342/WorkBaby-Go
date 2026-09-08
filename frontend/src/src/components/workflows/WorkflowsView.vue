@@ -146,60 +146,42 @@ onMounted(loadList)
 </script>
 
 <template>
-  <div class="flex h-full flex-col bg-wb-bg text-wb-ink">
-    <!-- 顶部 hero -->
-    <header class="flex items-center justify-between gap-3 border-b border-wb-border bg-wb-surface/40 px-6 py-4">
-      <div class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-wb-primary/10 text-wb-primary">
-          <GitBranch class="h-5 w-5" />
-        </div>
-        <div>
-          <h1 class="font-display text-base font-semibold text-wb-ink">{{ t('workflow.title') }}</h1>
-          <div class="flex items-center gap-2 text-xs text-wb-muted">
-            <span>{{ t('workflow.count', workflows.length) }}</span>
-            <span>·</span>
-            <span class="text-wb-success">{{ t('workflow.enabledCount', enabledCount) }}</span>
-          </div>
+  <div class="wb-ui flex h-full flex-col bg-wb-bg text-wb-ink">
+    <!-- 顶部 hero（原型 wf-hero） -->
+    <header class="wf-hero">
+      <div class="tile"><GitBranch class="ic" /></div>
+      <div>
+        <h1 style="font-size: 15px; font-weight: 600">{{ t('workflow.title') }}</h1>
+        <div class="flex-r fs11 muted" style="gap: 6px">
+          <span>{{ t('workflow.count', workflows.length) }}</span>
+          <span>·</span>
+          <span style="color: var(--wb-success)">{{ t('workflow.enabledCount', enabledCount) }}</span>
         </div>
       </div>
-      <el-button type="primary" @click="openCreate()">
-        <Plus class="h-4 w-4" />
+      <span class="sp" />
+      <button class="btn btn-primary" @click="openCreate()">
+        <Plus class="ic ic-sm" />
         <span>{{ t('workflow.new') }}</span>
-      </el-button>
+      </button>
     </header>
 
     <div class="flex min-h-0 flex-1">
-      <!-- 左侧：列表 -->
-      <aside class="w-72 shrink-0 overflow-y-auto border-r border-wb-border bg-wb-surface/40 p-3">
-        <div v-if="workflows.length === 0" class="rounded-lg border border-dashed border-wb-border p-6 text-center text-xs text-wb-muted">
-          {{ t('workflow.empty') }}
-        </div>
-        <ul class="space-y-2">
-          <li v-for="w in workflows" :key="w.id">
-            <button
-              class="group w-full rounded-xl border p-3 text-left transition-all"
-              :class="
-                selected?.id === w.id
-                  ? 'border-wb-primary/40 bg-wb-primary/10'
-                  : 'border-wb-border bg-wb-surface/40 hover:border-wb-primary/30 hover:bg-wb-surface/70'
-              "
-              @click="select(w)"
-            >
-              <div class="flex items-center gap-2">
-                <span
-                  class="inline-block h-2 w-2 shrink-0 rounded-full"
-                  :class="w.enabled ? 'bg-wb-success' : 'bg-wb-muted'"
-                />
-                <span class="flex-1 truncate text-sm font-medium text-wb-ink">{{ w.name }}</span>
-                <span v-if="w.enabled" class="badge-success shrink-0">{{ t('workflow.enabled') }}</span>
-                <span v-else class="badge-neutral shrink-0">{{ t('workflow.disabled') }}</span>
-              </div>
-              <div v-if="w.description" class="mt-1 truncate text-xs text-wb-muted">
-                {{ w.description }}
-              </div>
-            </button>
-          </li>
-        </ul>
+      <!-- 左侧：列表（原型 wf-list / wf-item） -->
+      <aside class="wf-list">
+        <div v-if="workflows.length === 0" class="empty">{{ t('workflow.empty') }}</div>
+        <button
+          v-for="w in workflows"
+          :key="w.id"
+          class="wf-item"
+          :class="{ on: selected?.id === w.id }"
+          @click="select(w)"
+        >
+          <div class="flex-r mb8">
+            <h4 style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{ w.name }}</h4>
+            <span class="led" :class="w.enabled ? 'g' : 'n'" />
+          </div>
+          <p v-if="w.description">{{ w.description }}</p>
+        </button>
       </aside>
 
       <!-- 右侧：编辑器 + 执行 -->

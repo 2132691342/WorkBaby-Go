@@ -8,7 +8,7 @@ type ApprovalRecordDO struct {
 	ID        string `gorm:"primaryKey;size:64"             json:"id"`
 	RunID     string `gorm:"size:64;index:idx_apr_run"      json:"run_id"`
 	SessionID string `gorm:"size:64;index:idx_apr_session"  json:"session_id"`
-	Kind      string `gorm:"size:16;index"                  json:"kind"`   // approval | input
+	Kind      string `gorm:"size:16;index"                  json:"kind"`    // approval | input
 	Command   string `gorm:"type:text"                      json:"command"` // 待审批命令 / 补充输入问题
 	Risk      string `gorm:"size:32"                        json:"risk"`
 	Status    string `gorm:"size:16;index:idx_apr_status"   json:"status"` // pending/approved/denied/timeout/cancelled/answered
@@ -29,6 +29,7 @@ const (
 	ApprovalStatusTimeout   = "timeout"
 	ApprovalStatusCancelled = "cancelled"
 	ApprovalStatusAnswered  = "answered"
+	ApprovalStatusSkipped   = "skipped"
 )
 
 // 审批记录类别。

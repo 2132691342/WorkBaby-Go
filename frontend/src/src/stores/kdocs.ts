@@ -116,6 +116,9 @@ export const useKnowledgeDocsStore = defineStore('kdocs', () => {
     editing,
     load,
     doSave,
+    /** createFolder 是 KnowledgeDocsView 等模板里的别名，避免上层误以为「点击无反应」。
+     *  新建/编辑共用 doSave：内部按 editing 是否走 update 还是 create。 */
+    createFolder: doSave,
     startEdit,
     doDelete
   }

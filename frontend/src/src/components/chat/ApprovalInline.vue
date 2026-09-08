@@ -140,8 +140,15 @@ async function approve(): Promise<void> {
   toast.success(t('chat.approvalApproved'))
 }
 
+/** 拒绝执行（安全审批语义）。 */
 async function deny(): Promise<void> {
   await chat.denyApproval()
+}
+
+/** 跳过补充输入：走后端 /skip；补充输入用 /decide 会因通道不匹配报 4003。 */
+async function skip(): Promise<void> {
+  await chat.skipApproval()
+  toast.success(t('chat.approvalSkipped'))
 }
 
 async function sendAnswer(): Promise<void> {
@@ -192,7 +199,7 @@ async function sendAnswer(): Promise<void> {
           <el-icon class="mr-1"><Send /></el-icon>
           {{ t('chat.inputSend') }}
         </el-button>
-        <el-button size="small" @click="deny">{{ t('chat.inputSkip') }}</el-button>
+        <el-button size="small" @click="skip">{{ t('chat.inputSkip') }}</el-button>
       </div>
       <p class="mt-1 text-[11px] text-wb-muted">{{ t('chat.inputHint') }}</p>
     </template>

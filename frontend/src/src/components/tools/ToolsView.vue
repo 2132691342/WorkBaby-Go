@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useToast } from '@/composables/useToast'
-import { apiGet } from '@/api/client'
-import { Wrench } from '@/components/common/icons'
+import { apiGet, apiPost } from '@/api/client'
+import { Wrench, File, Terminal, BookOpen, Brain, Cpu, Search, ChevronDown } from '@/components/common/icons'
 import { t } from '@/i18n'
+import type { Component } from 'vue'
 
 /**
- * 工具清单。
- *
- * <p>调 {@code GET /api/v1/tools} 反射 ToolRegistry @Tool 注解，前端按 group 分组渲染（el-table）。
- * 文案走 i18n 字典 {@code tool.group.*} / {@code tool.desc.*}，找不到则用 description 兜底。
+ * 工具清单（照 prd/WorkBaby-UI-Prototype.html 15 屏）：
+ * hero + 搜索 + 5 个工具分组（文件与目录 / 命令与网络 / 文档与知识 / 记忆·计划·委派 / 文本·数据·多媒体）。
+ * 调 GET /api/v1/tools；group / risk_level / read_only 由后端 tool.MetaOf 推导。
  */
 interface ToolParam {
   name: string
@@ -20,17 +20,21 @@ interface ToolParam {
 interface ToolItem {
   name: string
   description: string
+  risk_level: string
   group: string
-  strict: boolean
-  readOnly: boolean
-  holderClass: string
+  read_only: boolean
+  destructive: boolean
+  enabled: boolean
   params: ToolParam[]
+  schema_json: string
 }
 
 const toast = useToast()
 const tools = ref<ToolItem[]>([])
 const loading = ref(false)
 const search = ref('')
+const expanded = ref<Set<string>>(new Set())
+const toggling = ref<Set<string>>(new Set())
 
 async function load(): Promise<void> {
   loading.value = true
@@ -46,92 +50,195 @@ async function load(): Promise<void> {
 
 onMounted(load)
 
-/** 按 group 分组。 */
-const groups = computed(() => {
-  const map = new Map<string, ToolItem[]>()
-  for (const it of tools.value) {
-    if (!map.has(it.group)) map.set(it.group, [])
-    map.get(it.group)!.push(it)
-  }
-  return Array.from(map.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, items]) => ({ name, items }))
-})
+interface ToolGroup {
+  id: string
+  titleKey: string
+  icon: Component
+  items: ToolItem[]
+}
 
-const total = computed(() => tools.value.length)
+/** 固定 5 个分组（原型 15 屏），id 与后端 tool.GroupOf 返回值一一对应。 */
+const groupSpecs: { id: string; titleKey: string; icon: Component }[] = [
+  { id: 'file', titleKey: 'tools.group.file', icon: File },
+  { id: 'exec', titleKey: 'tools.group.exec', icon: Terminal },
+  { id: 'doc', titleKey: 'tools.group.doc', icon: BookOpen },
+  { id: 'agent', titleKey: 'tools.group.agent', icon: Brain },
+  { id: 'media', titleKey: 'tools.group.media', icon: Cpu }
+]
 
-function filtered(items: ToolItem[]): ToolItem[] {
-  const q = search.value.trim().toLowerCase()
-  if (!q) return items
-  return items.filter((it) =>
+function matchQuery(it: ToolItem, q: string): boolean {
+  return (
     it.name.toLowerCase().includes(q) ||
     (it.description ?? '').toLowerCase().includes(q) ||
-    (it.holderClass ?? '').toLowerCase().includes(q)
+    (it.params ?? []).some((p) => p.name.toLowerCase().includes(q))
   )
 }
 
-/** group 名 → i18n key，找不到用原始名。 */
-function groupLabel(name: string): string {
-  const key = `tool.group.${name}`
-  const v = t(key)
-  return v === key ? name : v
+const groups = computed<ToolGroup[]>(() =>
+  groupSpecs
+    .map((g) => ({
+      ...g,
+      items: tools.value.filter((it) => it.group === g.id && matchQuery(it, search.value.trim().toLowerCase()))
+    }))
+    .filter((g) => g.items.length > 0)
+)
+
+/** 有数据但全被搜索过滤掉时给出可恢复的提示，避免整页空白。 */
+const noMatch = computed(() => !loading.value && tools.value.length > 0 && groups.value.length === 0)
+
+const total = computed(() => tools.value.length)
+const enabledCount = computed(() => tools.value.filter((it) => it.enabled).length)
+
+const riskMeta: Record<string, { class: string; labelKey: string }> = {
+  readonly: { class: 'b-neutral', labelKey: 'tools.risk.readonly' },
+  write_local: { class: 'b-warning', labelKey: 'tools.risk.writeLocal' },
+  exec: { class: 'b-danger', labelKey: 'tools.risk.exec' },
+  network: { class: 'b-info', labelKey: 'tools.risk.network' },
+  destructive: { class: 'b-danger', labelKey: 'tools.risk.destructive' }
+}
+
+function riskBadge(item: ToolItem): { class: string; labelKey: string } {
+  return riskMeta[item.risk_level] ?? { class: 'b-neutral', labelKey: 'tools.risk.readonly' }
+}
+
+function toggleExpand(name: string): void {
+  const next = new Set(expanded.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  expanded.value = next
+}
+
+async function toggleEnabled(it: ToolItem): Promise<void> {
+  if (toggling.value.has(it.name)) return
+  const next = it.enabled
+  toggling.value = new Set(toggling.value).add(it.name)
+  try {
+    await apiPost(`/api/v1/tools/${it.name}/enabled`, { enabled: !next })
+    it.enabled = !next
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    const s = new Set(toggling.value)
+    s.delete(it.name)
+    toggling.value = s
+  }
 }
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-y-auto text-wb-ink">
-    <div class="mx-auto w-full max-w-4xl space-y-5 px-6 py-8">
-      <header class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-wb-primary/10 text-wb-primary">
-          <Wrench class="h-5 w-5" />
+  <div class="scroll wb-ui">
+    <div class="wrap wrap-md">
+      <!-- Hero -->
+      <header class="hero">
+        <div class="tile"><Wrench class="ic" /></div>
+        <div>
+          <h1>{{ t('tools.title') }}</h1>
+          <p>{{ t('tools.subtitle', total, enabledCount) }}</p>
         </div>
-        <div class="min-w-0">
-          <h1 class="font-display text-lg font-semibold text-wb-ink">{{ t('tools.title') }}</h1>
-          <p class="text-xs text-wb-muted">
-            {{ t('tools.subtitle', total) }}
-            <span v-if="search" class="ml-1 text-wb-primary">
-              · {{ t('tools.filteredCount', filtered(tools).length) }}
-            </span>
-          </p>
+        <span class="sp" />
+        <div class="field-wrap" style="width: 230px">
+          <Search class="ic ic-sm" />
+          <input v-model="search" class="input with-icon" :placeholder="t('tools.search')" />
         </div>
-        <el-input v-model="search" :placeholder="t('tools.search')" clearable class="ml-auto !w-64" />
       </header>
 
-      <div v-if="loading" class="text-sm text-wb-muted">{{ t('ui.status.loading') }}</div>
-      <el-empty v-else-if="tools.length === 0" :description="t('tools.empty')" :image-size="80" class="py-8" />
-      <section
-        v-for="g in groups"
-        v-else
-        :key="g.name"
-        class="card p-5"
-      >
-        <h2 class="mb-3 flex items-center gap-2 font-display text-sm font-semibold text-wb-ink">
-          {{ groupLabel(g.name) }}
-          <span class="text-xs font-normal tabular-nums text-wb-muted">
-            {{ filtered(g.items).length }} / {{ g.items.length }}
-          </span>
-        </h2>
-        <el-table v-if="filtered(g.items).length > 0" :data="filtered(g.items)" stripe class="wb-el-table">
-          <el-table-column :label="t('tools.name')" width="180">
-            <template #default="{ row }">
-              <code class="font-mono text-xs text-wb-success">{{ (row as ToolItem).name }}</code>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('tools.desc')" min-width="280" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span class="text-xs text-wb-muted">{{ (row as ToolItem).description || t('tools.noDesc') }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('tools.permission')" width="90">
-            <template #default="{ row }">
-              <el-tag size="small" :type="(row as ToolItem).readOnly ? 'info' : 'warning'" effect="plain">
-                {{ (row as ToolItem).readOnly ? 'R' : 'W' }}
-              </el-tag>
-            </template>
-          </el-table-column>
-        </el-table>
-      </section>
+      <div v-if="loading" class="empty">{{ t('ui.status.loading') }}</div>
+      <div v-else-if="tools.length === 0" class="empty">{{ t('tools.empty') }}</div>
+      <div v-else-if="noMatch" class="empty">{{ t('tools.noMatch') }}</div>
+
+      <template v-else>
+        <div v-for="g in groups" :key="g.id" class="tgroup mb10">
+          <h3>
+            <component :is="g.icon" class="ic ic-sm" />
+            {{ t(g.titleKey) }}
+            <span class="cnt">{{ g.items.length }}</span>
+          </h3>
+          <div v-for="it in g.items" :key="it.name" class="tcol">
+            <div class="titem clickable" @click="toggleExpand(it.name)">
+              <ChevronDown class="ic ic-sm chev" :class="{ open: expanded.has(it.name) }" />
+              <span class="nm">{{ it.name }}</span>
+              <span class="ds">{{ it.description || t('tools.noDesc') }}</span>
+              <span class="badge" :class="riskBadge(it).class">{{ t(riskBadge(it).labelKey) }}</span>
+              <span v-if="it.read_only" class="badge b-neutral">{{ t('tools.readOnly') }}</span>
+              <span class="sw">
+                <span
+                  class="switch"
+                  :class="{ on: it.enabled, busy: toggling.has(it.name) }"
+                  :title="it.enabled ? t('tools.enabled') : t('tools.disabled')"
+                  @click.stop="toggleEnabled(it)"
+                />
+              </span>
+            </div>
+            <div v-if="expanded.has(it.name)" class="tparams">
+              <div v-if="!it.params || it.params.length === 0" class="fs11 muted">{{ t('tools.noParams') }}</div>
+              <div v-for="p in it.params" :key="p.name" class="tparam">
+                <code>{{ p.name }}</code>
+                <span class="ty">{{ p.type || 'any' }}</span>
+                <span v-if="p.required" class="badge b-danger">{{ t('ui.status.required') }}</span>
+                <span class="pd">{{ p.description }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
 
+<style scoped>
+.tcol {
+  border-bottom: 1px solid var(--wb-border);
+}
+.tcol:last-child {
+  border-bottom: 0;
+}
+.titem.clickable {
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.titem.clickable:hover {
+  background: var(--wb-surface-hover);
+}
+.titem .chev {
+  flex: none;
+  color: var(--wb-muted);
+  transition: transform 0.16s;
+  transform: rotate(-90deg);
+}
+.titem .chev.open {
+  transform: rotate(0deg);
+}
+.tparams {
+  padding: 8px 12px 10px 34px;
+  background: var(--wb-surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tparam {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.tparam code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 110px;
+}
+.tparam .ty {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--wb-primary);
+}
+.tparam .pd {
+  color: var(--wb-muted);
+  flex: 1;
+  min-width: 0;
+}
+.switch.busy {
+  opacity: 0.55;
+  cursor: progress;
+}
+</style>

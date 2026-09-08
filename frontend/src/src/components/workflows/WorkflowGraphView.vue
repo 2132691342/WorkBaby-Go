@@ -406,8 +406,11 @@ watch(() => props.workflow_id, (id) => {
       <p class="mt-3 text-[10px] leading-relaxed text-wb-muted">{{ t('wfGraph.saveHint') }}</p>
     </aside>
 
-    <!-- 画布 -->
-    <div class="flex min-w-0 flex-1 flex-col bg-wb-bg">
+    <!-- 画布（原型 04 屏：点阵背景） -->
+    <div
+      class="flex min-w-0 flex-1 flex-col"
+      style="background-color: var(--wb-bg); background-image: radial-gradient(circle, var(--wb-border-strong) 1px, transparent 1px); background-size: 18px 18px"
+    >
       <div class="flex items-center justify-between border-b border-wb-border px-4 py-2">
         <span class="text-xs text-wb-muted">{{ t('wfGraph.dagHint') }}</span>
         <span class="font-mono text-[10px] text-wb-muted">{{ vfNodes.length }} nodes / {{ vfEdges.length }} edges</span>

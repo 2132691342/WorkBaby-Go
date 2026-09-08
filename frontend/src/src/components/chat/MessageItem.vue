@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useClipboard } from '@vueuse/core'
-import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, Brain } from '@/components/common/icons'
+import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, Brain, ChevronDown } from '@/components/common/icons'
 import type { Message } from '@/types/api'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
@@ -40,6 +40,8 @@ const { enabled: focusMode } = useFocusMode()
 const copiedID = ref(false)
 const editing = ref(false)
 const editingContent = ref('')
+/** 历史消息思考回看折叠态（默认折叠）。 */
+const thinkingOpen = ref(false)
 
 const isUser = computed(() => props.message.role === 'user')
 
@@ -200,9 +202,13 @@ async function forkFrom(): Promise<void> {
 </script>
 
 <template>
-  <div class="flex max-w-[80%] flex-col" :class="isUser ? 'items-end' : 'items-start'">
-    <!-- 顶部 meta：名字 + 时间 + 操作按钮 -->
-    <div class="mb-1 flex items-center gap-1 px-1 text-xs text-wb-muted">
+  <!-- 原型 .msg-a > .body{flex:1}：assistant 正文列占满（正文裸排无盒子），用户气泡限宽 76% -->
+  <div
+    class="flex flex-col"
+    :class="isUser ? 'max-w-[76%] items-end' : 'w-full min-w-0 items-start'"
+  >
+    <!-- 顶部 meta：名字 + 时间 + 操作按钮（原型密度：10.5px 弱化灰） -->
+    <div class="mb-1 flex items-center gap-1 px-1 text-[10.5px] text-wb-muted">
       <span v-if="!isUser" class="font-medium text-wb-ink">WorkBaby</span>
       <span v-if="fmtTime(message.created_at)">{{ fmtTime(message.created_at) }}</span>
 
@@ -250,11 +256,46 @@ async function forkFrom(): Promise<void> {
       </div>
     </div>
 
-    <!-- 气泡 / 编辑模式（用户纯色实底，assistant 白底细边） -->
+    <!-- 历史消息的思考过程回看（原型 .think 结构：圆角容器 + .hd 折叠按钮 + .bd 正文；
+         wb-ui.css 里 .think.open > .hd .chev 自动 rotate，.think.open > .bd 自动 display:block） -->
+    <div
+      v-if="!focusMode && !isUser && message.thinking && !editing"
+      class="think mt-1 w-full"
+      :class="{ open: thinkingOpen }"
+    >
+      <button
+        type="button"
+        class="hd w-full text-left"
+        style="background: transparent; border: 0"
+        @click="thinkingOpen = !thinkingOpen"
+      >
+        <Brain class="ic" />
+        <span>{{ t('chat.thoughtDone') }}</span>
+        <ChevronDown class="ic chev" />
+      </button>
+      <pre class="bd max-h-48 overflow-y-auto whitespace-pre-wrap font-sans">{{ message.thinking }}</pre>
+    </div>
+
+    <!-- 历史过程块复现：工具调用/结果落库，刷新/切会话后完整回放（原型 .tl 自带边框，不再双重包装）；
+         M2：末条 assistant 的失败工具可一键重试（转 resendFrom） -->
+    <div v-if="!isUser && historyTools.length > 0 && !editing" class="mt-2 w-full">
+      <TaskTimeline
+        :tools="historyTools"
+        :retryable="!streaming && isLast"
+        @retry="onToolRetry"
+      />
+    </div>
+
+    <!-- 气泡 / 编辑模式（原型 02 屏）：用户 = .msg-u 主色实底 + 14/14/3/14 圆角；
+         assistant = .bubble 正文裸排（不套盒子），工具时间线 / 变更 / 思考块各自自带边框 -->
     <div
       v-if="!editing"
-      class="rounded-lg px-4 py-3 text-sm leading-relaxed"
-      :class="isUser ? 'bg-wb-primary text-white' : 'border border-wb-border bg-wb-surface text-wb-ink'"
+      class="text-[13px]"
+      :class="
+        isUser
+          ? 'rounded-[14px] rounded-br-[3px] bg-wb-primary px-[15px] py-[11px] leading-[1.75] text-white shadow-[var(--wb-shadow)]'
+          : 'leading-[1.78] text-wb-ink'
+      "
     >
       <span v-if="isUser" class="whitespace-pre-wrap">{{ message.content }}</span>
       <MarkdownRenderer v-else-if="message.content?.trim()" :content="message.content" :streaming="false" />
@@ -281,19 +322,6 @@ async function forkFrom(): Promise<void> {
         <el-button size="small" @click="cancelEdit">{{ t('chat.cancel') }}</el-button>
         <span class="text-[10px] text-wb-muted">{{ t('chat.editHint') }}</span>
       </div>
-    </div>
-
-    <!-- 历史过程块复现：工具调用/结果落库，刷新/切会话后完整回放；
-         M2：末条 assistant 的失败工具可一键重试（转 resendFrom） -->
-    <div
-      v-if="!isUser && historyTools.length > 0 && !editing"
-      class="mt-1 w-full rounded-xl border border-wb-border bg-wb-primary/[0.03] p-3"
-    >
-      <TaskTimeline
-        :tools="historyTools"
-        :retryable="!streaming && isLast"
-        @retry="onToolRetry"
-      />
     </div>
 
     <!-- 本轮文件变更摘要（chat:file-change 按 run_id 关联，一眼看到改了什么文件） -->
@@ -324,18 +352,6 @@ async function forkFrom(): Promise<void> {
         </li>
       </ul>
     </div>
-
-    <!-- 历史消息的思考过程回看（默认折叠；焦点模式下隐藏） -->
-    <details
-      v-if="!focusMode && !isUser && message.thinking && !editing"
-      class="mt-1 max-w-[80%] rounded-lg border border-wb-lavender/20 bg-wb-lavender/[0.07] text-xs text-wb-muted"
-    >
-      <summary class="flex cursor-pointer select-none items-center gap-1.5 px-2.5 py-1.5">
-        <Brain class="h-3.5 w-3.5 text-wb-lavender" />
-        {{ t('chat.thoughtDone') }}
-      </summary>
-      <pre class="mx-2.5 mb-2 max-h-48 overflow-y-auto whitespace-pre-wrap font-sans text-[11px] leading-relaxed text-wb-muted/90">{{ message.thinking }}</pre>
-    </details>
 
     <!-- 用量元信息：悬浮看精确值；为空隐藏 -->
     <UsageBadge

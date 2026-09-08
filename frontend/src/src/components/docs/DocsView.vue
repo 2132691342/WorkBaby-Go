@@ -26,26 +26,25 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full overflow-y-auto text-wb-ink">
-    <div class="mx-auto w-full max-w-5xl space-y-5 px-6 py-8">
-      <header class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-wb-primary/10 text-wb-primary">
-          <ScrollText class="h-5 w-5" />
-        </div>
+  <div class="scroll wb-ui">
+    <div class="wrap" style="max-width: 1000px">
+      <!-- Hero（原型 19 屏） -->
+      <header class="hero">
+        <div class="tile"><ScrollText class="ic" /></div>
         <div>
-          <h1 class="font-display text-lg font-semibold text-wb-ink">{{ t('docs.title') }}</h1>
-          <p class="text-xs text-wb-muted">{{ t('docs.subtitle') }}</p>
+          <h1>{{ t('docs.title') }}</h1>
+          <p>{{ t('docs.subtitle') }}</p>
         </div>
       </header>
 
       <!-- 错误条（显眼 + 重试） -->
-      <el-alert v-if="error" type="error" :closable="false" show-icon>
-        <template #title>{{ error }}</template>
-        <el-button class="mt-2" size="small" @click="docStore.load()">
-          <el-icon class="mr-1"><RefreshCw /></el-icon>
+      <div v-if="error" class="alert a-danger">
+        <span>{{ error }}</span>
+        <button class="btn btn-sm" @click="docStore.load()">
+          <RefreshCw class="ic ic-sm" />
           {{ t('common.retry') }}
-        </el-button>
-      </el-alert>
+        </button>
+      </div>
 
       <div class="grid grid-cols-1 gap-5 lg:grid-cols-5">
         <!-- 左侧列表 -->

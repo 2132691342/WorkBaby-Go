@@ -10,6 +10,7 @@ import { useMcpStore } from '@/stores/mcp'
 import { useToast } from '@/composables/useToast'
 import { apiPost } from '@/api/client'
 import { t } from '@/i18n'
+import { Server, FolderOpen, RefreshCw } from '@/components/common/icons'
 import type { McpServer } from '@/types/api'
 
 const mcp = useMcpStore()
@@ -51,34 +52,28 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-y-auto text-wb-ink">
-    <div class="mx-auto w-full max-w-4xl space-y-5 px-6 py-8">
-      <header class="flex items-start justify-between gap-4">
-        <div class="flex items-center gap-3">
-          <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-wb-primary/10 text-wb-primary">
-            <span class="text-base">🧩</span>
-          </div>
-          <div>
-            <h1 class="font-display text-lg font-semibold text-wb-ink">{{ t('mcp.title') }}</h1>
-            <p class="text-xs text-wb-muted">{{ t('mcp.jsonSubtitle') }}</p>
-          </div>
+  <div class="scroll wb-ui">
+    <div class="wrap wrap-md">
+      <!-- Hero（原型 11 屏） -->
+      <header class="hero">
+        <div class="tile"><Server class="ic" /></div>
+        <div>
+          <h1>{{ t('mcp.title') }}</h1>
+          <p>{{ t('mcp.jsonSubtitle') }}</p>
         </div>
-        <div class="flex items-center gap-2">
-          <el-tooltip placement="bottom" :content="t('mcp.revealHint')" :show-after="200">
-            <el-button @click="revealFile">
-              <span class="mr-1">📂</span>
-              {{ t('mcp.reveal') }}
-            </el-button>
-          </el-tooltip>
-          <el-button type="success" plain @click="handleReload">
-            <span class="mr-1">🔄</span>
-            {{ t('mcp.reload') }}
-            <el-tag v-if="activeCount > 0" size="small" type="success" class="ml-1">{{ activeCount }}</el-tag>
-          </el-button>
-        </div>
+        <span class="sp" />
+        <button class="btn" :title="t('mcp.revealHint')" @click="revealFile">
+          <FolderOpen class="ic ic-sm" />
+          {{ t('mcp.reveal') }}
+        </button>
+        <button class="btn btn-primary" @click="handleReload">
+          <RefreshCw class="ic ic-sm" />
+          {{ t('mcp.reload') }}
+          <span v-if="activeCount > 0" class="badge b-success" style="margin-left: 4px">{{ activeCount }}</span>
+        </button>
       </header>
 
-      <div v-if="error" class="rounded-lg bg-wb-danger/15 px-3 py-2 text-sm text-wb-danger">{{ error }}</div>
+      <div v-if="error" class="alert a-danger">{{ error }}</div>
 
       <!-- JSON 编辑器（直接编辑 mcp.json） -->
       <section class="card p-5">

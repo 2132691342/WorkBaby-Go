@@ -80,7 +80,7 @@ onMounted(() => {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 10px;
+  border-radius: var(--wb-radius-sm, 6px); /* 原型 .av 同款小圆角 */
   overflow: visible;
   flex-shrink: 0;
 }
@@ -88,7 +88,7 @@ onMounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  border-radius: 10px;
+  border-radius: var(--wb-radius-sm, 6px);
   background: var(--wb-surface);
 }
 .wb-avatar-assistant {

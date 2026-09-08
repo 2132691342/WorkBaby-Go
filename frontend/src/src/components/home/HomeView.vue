@@ -1,59 +1,52 @@
 <script setup lang="ts">
-import { onMounted, ref, type Component } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
-import { BookOpen, LayoutTemplate, PawPrint, ArrowRight, Rocket, X, Sparkles } from '@/components/common/icons'
+import { Check, MessageSquare, BookOpen, Server, LayoutDashboard, Rocket, X, Sparkles } from '@/components/common/icons'
 import { useHomeStore } from '@/stores/home'
+import { useChatStore } from '@/stores/chat'
 import { t } from '@/i18n'
-import type { Session } from '@/types/api'
 import { formatDateTime } from '@/utils/time'
 
 /**
- * 首页（D.2.1 · WorkBaby HomePage 欢迎区 + Phase D 快速上手引导）。
- *
- * <p>布局（浅色、留白充足、居中欢迎）：
- * <ol>
- *   <li>欢迎区：WorkBaby mascot + 欢迎语 + 副标题</li>
- *   <li>快速上手引导卡（首次访问显示，可关闭，localStorage 记忆）</li>
- *   <li>3 个等宽圆角快捷卡片：能做什么 / 简历 / 领养桌宠</li>
- *   <li>最近会话列表（真实数据，来自 {@link useHomeStore}）</li>
- * </ol>
+ * 概览页（照 prd/WorkBaby-UI-Prototype.html 01 屏）：
+ * 欢迎区 + 四步快速上手（可点可关，localStorage 记忆）+ 快捷入口 + 最近会话 + 本地状态。
+ * 数据全部来自真实 store：最近会话 useHomeStore，模型 / 工作区 / 权限 useChatStore。
  */
 const home = useHomeStore()
 const { sessions, loading } = storeToRefs(home)
+const chat = useChatStore()
 const router = useRouter()
-
-interface QuickCard {
-  to: string
-  titleKey: string
-  descKey: string
-  icon: Component
-  tint: string
-}
-
-const quickCards: QuickCard[] = [
-  { to: '/chat', titleKey: 'home.card.what', descKey: 'home.card.what.desc', icon: BookOpen, tint: 'bg-wb-sky/15 text-wb-info' },
-  { to: '/chat', titleKey: 'home.card.genui', descKey: 'home.card.genui.desc', icon: LayoutTemplate, tint: 'bg-wb-lavender/15 text-wb-lavender' },
-  { to: '/pet', titleKey: 'home.card.pet', descKey: 'home.card.pet.desc', icon: PawPrint, tint: 'bg-wb-warning/15 text-wb-warning' }
-]
 
 function go(to: string): void {
   void router.push(to)
 }
 
-function fmt(iso: string | number | null): string {
-  return formatDateTime(iso)
+/** 新建会话并进入聊天。 */
+async function newSession(): Promise<void> {
+  const s = await chat.createSession(chat.selectedModelID)
+  void router.push(`/chat/${s.id}`)
 }
 
-// ===== 快速上手引导（Phase D · 首次访问显示） =====
+const quickCards = [
+  { icon: MessageSquare, titleKey: 'home.quick.newChat', descKey: 'home.quick.newChatDesc', action: () => void newSession() },
+  { icon: BookOpen, titleKey: 'home.quick.importDocs', descKey: 'home.quick.importDocsDesc', to: '/kdocs' },
+  { icon: Server, titleKey: 'home.quick.setupMcp', descKey: 'home.quick.setupMcpDesc', to: '/mcp' },
+  { icon: LayoutDashboard, titleKey: 'home.quick.viewUsage', descKey: 'home.quick.viewUsageDesc', to: '/dashboard' }
+] as const
+
+// ===== 快速上手引导（四步；「连接模型」以已接入模型自动判完成） =====
 const GUIDE_KEY = 'workbaby.guide.onboarded'
 const showGuide = ref(false)
 
 const guideSteps = [
-  { to: '/settings?tab=models', titleKey: 'home.guide.step1', descKey: 'home.guide.step1Desc' },
-  { to: '/chat', titleKey: 'home.guide.step2', descKey: 'home.guide.step2Desc' },
-  { to: '/chat', titleKey: 'home.guide.step3', descKey: 'home.guide.step3Desc' }
-]
+  { to: '/settings?tab=models', titleKey: 'home.guide.step1', descKey: 'home.guide.step1Desc', done: () => chat.models.length > 0 },
+  { to: '/folders', titleKey: 'home.guide.step2', descKey: 'home.guide.step2Desc', done: () => false },
+  { to: '/kdocs', titleKey: 'home.guide.step3', descKey: 'home.guide.step3Desc', done: () => false },
+  { to: '/cron', titleKey: 'home.guide.step4', descKey: 'home.guide.step4Desc', done: () => false }
+] as const
+
+const guideDone = computed(() => guideSteps.map((s) => s.done()))
 
 function dismissGuide(): void {
   showGuide.value = false
@@ -62,6 +55,27 @@ function dismissGuide(): void {
   } catch {
     // ignore
   }
+}
+
+// ===== 本地状态卡（真实值：工作区 / 默认模型 / 会话数） =====
+const localState = computed(() => [
+  {
+    labelKey: 'home.state.workspace',
+    value: sessions.value[0]?.workspace_path || t('chat.workspace.default'),
+    mono: true
+  },
+  { labelKey: 'home.state.model', value: currentModelName(), mono: true },
+  { labelKey: 'home.state.sessions', value: String(sessions.value.length) }
+])
+
+function currentModelName(): string {
+  if (!chat.selectedModelID) return t('chat.auto')
+  const m = chat.models.find((x) => x.id === chat.selectedModelID)
+  return m ? m.alias || m.model : t('chat.auto')
+}
+
+function fmt(iso: string | number | null): string {
+  return formatDateTime(iso)
 }
 
 onMounted(() => {
@@ -75,119 +89,95 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="h-full overflow-y-auto text-wb-ink">
-    <div class="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-6 py-12">
+  <div class="scroll wb-ui">
+    <div class="wrap" style="max-width: 880px">
       <!-- 欢迎区 -->
-      <header class="text-center">
-        <div class="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-xl bg-wb-primary/10 text-wb-primary">
-          <Sparkles class="h-8 w-8" />
+      <header class="center" style="padding: 18px 0 4px">
+        <div class="tile tile-xl flex items-center justify-center" style="margin: 0 auto 14px">
+          <Sparkles class="ic" />
         </div>
-        <h1 class="text-2xl font-bold text-wb-ink">{{ t('home.welcome') }}</h1>
-        <p class="mt-2 text-sm text-wb-muted">{{ t('home.subtitle') }}</p>
+        <h1 class="h-xl">{{ t('home.welcome') }}</h1>
+        <p class="muted fs13 mt6">{{ t('home.subtitle') }}</p>
       </header>
 
-      <!-- 快速上手引导（el-card + el-steps；首次访问显示，可关闭） -->
-      <el-card v-if="showGuide" class="mt-8 home-guide" shadow="never">
-        <template #header>
-          <div class="flex items-center justify-between">
-            <h2 class="flex items-center gap-2 text-sm font-semibold text-wb-ink">
-              <Rocket class="h-4 w-4 text-wb-primary-strong" />
-              {{ t('home.guide.title') }}
-            </h2>
-            <el-button link :title="t('home.guide.dismiss')" @click="dismissGuide">
-              <X class="h-4 w-4" />
-            </el-button>
+      <!-- 快速上手 -->
+      <div v-if="showGuide" class="card p-sm">
+        <div class="flex-r mb10">
+          <div class="mini-tile"><Rocket class="ic" /></div>
+          <div>
+            <h3>{{ t('home.guide.title') }}</h3>
+            <p class="fs11 muted">{{ t('home.guide.subtitle') }}</p>
           </div>
-        </template>
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <el-card
-            v-for="(g, i) in guideSteps"
-            :key="g.to + i"
-            shadow="never"
-            class="guide-step"
-            @click="go(g.to)"
-          >
-            <div class="flex items-start gap-3">
-              <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-wb-primary/10 text-xs font-semibold text-wb-primary">
-                {{ i + 1 }}
-              </span>
-              <span class="min-w-0">
-                <span class="block text-sm font-medium text-wb-ink">{{ t(g.titleKey) }}</span>
-                <span class="mt-0.5 block text-xs text-wb-muted">{{ t(g.descKey) }}</span>
-              </span>
-            </div>
-          </el-card>
+          <span class="sp" />
+          <button class="btn-icon" :title="t('home.guide.dismiss')" @click="dismissGuide">
+            <X class="ic ic-sm" />
+          </button>
         </div>
-      </el-card>
-
-      <!-- 3 个快捷卡片 -->
-      <div class="mt-10 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <button
-          v-for="c in quickCards"
-          :key="c.to"
-          type="button"
-          class="group card text-left transition-all hover:-translate-y-0.5 hover:border-wb-primary/40 hover:shadow-[var(--wb-shadow-lg)]"
-          @click="go(c.to)"
-        >
-          <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl" :class="c.tint">
-            <component :is="c.icon" class="h-5 w-5" />
+        <div class="steps">
+          <div v-for="(s, i) in guideSteps" :key="s.to" class="step" :class="{ done: guideDone[i] }" @click="go(s.to)">
+            <div class="num">
+              <Check v-if="guideDone[i]" class="h-3 w-3" />
+              <template v-else>{{ i + 1 }}</template>
+            </div>
+            <h5>{{ t(s.titleKey) }}</h5>
+            <p>{{ t(s.descKey) }}</p>
           </div>
-          <div class="text-sm font-semibold text-wb-ink">{{ t(c.titleKey) }}</div>
-          <div class="mt-1 text-xs text-wb-muted">{{ t(c.descKey) }}</div>
+        </div>
+      </div>
+
+      <!-- 快捷入口 -->
+      <div class="qgrid">
+        <button v-for="c in quickCards" :key="c.titleKey" class="qcard" @click="'to' in c ? go(c.to) : c.action()">
+          <div class="tile"><component :is="c.icon" class="ic" /></div>
+          <h5>{{ t(c.titleKey) }}</h5>
+          <p>{{ t(c.descKey) }}</p>
         </button>
       </div>
 
-      <!-- 最近会话 -->
-      <section class="mt-10">
-        <div class="mb-3 flex items-center justify-between">
-          <h2 class="text-sm font-semibold text-wb-ink">{{ t('home.recentSessions') }}</h2>
-          <el-button link type="primary" @click="go('/chat')">
-            {{ t('home.openChat') }}
-            <ArrowRight class="h-3.5 w-3.5" />
-          </el-button>
+      <div class="grid2">
+        <!-- 最近会话 -->
+        <div class="card p-sm">
+          <div class="flex-r mb8">
+            <h3>{{ t('home.recentSessions') }}</h3>
+            <span class="sp" />
+            <button class="btn btn-sm" @click="go('/chat')">{{ t('home.openChat') }}</button>
+          </div>
+          <div class="rowlist">
+            <div v-if="loading" class="empty">{{ t('ui.status.loading') }}</div>
+            <div v-else-if="sessions.length === 0" class="empty">{{ t('chat.noSessions') }}</div>
+            <template v-else>
+              <button
+                v-for="s in sessions.slice(0, 4)"
+                :key="s.id"
+                class="rli"
+                style="width: 100%; text-align: left"
+                @click="go(`/chat/${s.id}`)"
+              >
+              <div class="mini-tile" style="background: var(--wb-surface-hover); color: var(--wb-muted)">
+                <MessageSquare class="ic" />
+              </div>
+              <div class="grow">
+                <h5>{{ s.name || t('chat.unnamed') }}</h5>
+                <p>{{ t('chat.message_count', s.message_count ?? 0) }} · {{ fmt(s.last_message_at) }}</p>
+              </div>
+              </button>
+            </template>
+          </div>
         </div>
 
-        <div class="overflow-hidden rounded-2xl border border-wb-border bg-wb-surface/80">
-          <div v-if="loading" class="p-6 text-center text-sm text-wb-muted">{{ t('ui.status.loading') }}</div>
-          <el-empty v-else-if="sessions.length === 0" :description="t('chat.noSessions')" :image-size="80" />
-          <el-table
-            v-else
-            :data="sessions.slice(0, 6)"
-            class="wb-el-table"
-            @row-click="() => go('/chat')"
-          >
-            <el-table-column :label="t('home.recentSessions')" min-width="200">
-              <template #default="{ row }">
-                <span class="font-medium text-wb-ink">{{ (row as Session).name || t('task.unnamed') }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column :label="t('home.lastActive')" min-width="160">
-              <template #default="{ row }">
-                <span class="text-xs text-wb-muted">{{ fmt((row as Session).last_message_at) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="ID" width="90">
-              <template #default="{ row }">
-                <span class="font-mono text-xs text-wb-muted">{{ (row as Session).id.slice(0, 8) }}</span>
-              </template>
-            </el-table-column>
-          </el-table>
+        <!-- 本地状态 -->
+        <div class="card p-sm">
+          <div class="flex-r mb8"><h3>{{ t('home.localState') }}</h3></div>
+          <dl class="kv">
+            <template v-for="row in localState" :key="row.labelKey">
+              <dt>{{ t(row.labelKey) }}</dt>
+              <dd :class="row.mono ? 'mono' : ''" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                {{ row.value }}
+              </dd>
+            </template>
+          </dl>
         </div>
-      </section>
+      </div>
     </div>
   </div>
 </template>
-
-<style scoped>
-/* 引导卡：可点击 + hover 高亮 */
-.guide-step {
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-.guide-step:hover {
-  border-color: color-mix(in srgb, var(--wb-primary) 40%, transparent);
-}
-.home-guide :deep(.el-card__header) {
-  border-bottom: 1px solid var(--wb-border);
-}
-</style>

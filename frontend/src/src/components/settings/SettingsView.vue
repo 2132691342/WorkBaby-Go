@@ -59,19 +59,18 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="h-full overflow-y-auto text-wb-ink">
-    <div class="mx-auto w-full max-w-4xl space-y-5 px-6 py-8">
-      <header class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-wb-primary/10 text-wb-primary">
-          <SettingsIcon class="h-5 w-5" />
-        </div>
+  <div class="scroll wb-ui">
+    <div class="wrap wrap-md">
+      <!-- Hero（原型 20 屏） -->
+      <header class="hero">
+        <div class="tile"><SettingsIcon class="ic" /></div>
         <div>
-          <h1 class="font-display text-lg font-semibold text-wb-ink">{{ t('settings.title') }}</h1>
-          <p class="text-xs text-wb-muted">{{ t('settings.subtitle') }}</p>
+          <h1>{{ t('settings.title') }}</h1>
+          <p>{{ t('settings.subtitle') }}</p>
         </div>
       </header>
 
-      <div v-if="settings.error" class="rounded-md bg-wb-primary/10 px-3 py-2 text-sm text-wb-primary-strong">
+      <div v-if="settings.error" class="alert a-info">
         {{ settings.error }}
       </div>
 
@@ -106,17 +105,27 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-/* ElementPlus tabs 与 wb 主题融合 */
+/* ElementPlus tabs 与 wb 主题融合 + 密度收紧 */
 .settings-tabs :deep(.el-tabs__nav-wrap::after) {
   background-color: var(--wb-border);
 }
 .settings-tabs :deep(.el-tabs__item) {
   color: var(--wb-muted);
+  padding: 0 14px;
+  height: 38px;
+  line-height: 38px;
 }
 .settings-tabs :deep(.el-tabs__item.is-active) {
   color: var(--wb-primary);
 }
 .settings-tabs :deep(.el-tabs__active-bar) {
   background-color: var(--wb-primary);
+}
+/* 稀疏内容页（通道/搜索）不再被 tabs 默认留白撑高 */
+.settings-tabs :deep(.el-tabs__header) {
+  margin-bottom: 12px;
+}
+.settings-tabs :deep(.el-tabs__content) {
+  padding-top: 0;
 }
 </style>

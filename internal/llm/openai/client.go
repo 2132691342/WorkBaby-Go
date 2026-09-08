@@ -161,13 +161,17 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 				}
 			}
 			if s.Usage != nil {
-				u := llm.TokenUsage{
-					InputTokens:  s.Usage.PromptTokens,
-					OutputTokens: s.Usage.CompletionTokens,
-					TotalTokens:  s.Usage.TotalTokens,
-				}
+				cached := 0
 				if s.Usage.PromptTokensDetails != nil {
-					u.CacheReadTokens = s.Usage.PromptTokensDetails.CachedTokens
+					cached = s.Usage.PromptTokensDetails.CachedTokens
+				}
+				// 与 Anthropic 口径对齐：InputTokens = 完整 prompt（含缓存读），
+				// 缓存是输入的子维度。这样 dashboard 的「实际计费」= InputTokens - CacheReadTokens 在两家协议下同口径。
+				u := llm.TokenUsage{
+					InputTokens:     s.Usage.PromptTokens,
+					OutputTokens:    s.Usage.CompletionTokens,
+					TotalTokens:     s.Usage.TotalTokens,
+					CacheReadTokens: cached,
 				}
 				out <- llm.StreamChunk{FinalUsage: &u}
 			}
@@ -270,6 +274,8 @@ func (c *Client) toChatResponse(r *OpenAIResponse) (*llm.ChatResponse, error) {
 	if r.Usage != nil && r.Usage.PromptTokensDetails != nil {
 		usage.CacheReadTokens = r.Usage.PromptTokensDetails.CachedTokens
 	}
+	// OpenAI 兼容协议：prompt_tokens 已经包含 cached_tokens（与 Anthropic 语义不同），
+	// 这里保持 InputTokens = prompt_tokens 不变，确保 dashboard 实际计费口径与 Anthropic 一致。
 	return &llm.ChatResponse{
 		Message:    msg,
 		ToolCalls:  toolcall.FromOpenAI(ch.Message.ToolCalls),

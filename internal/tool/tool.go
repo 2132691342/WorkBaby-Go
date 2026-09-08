@@ -8,6 +8,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 // RiskLevel 工具风险分级（用于审批与前端展示）。
@@ -56,6 +57,49 @@ type ToolMeta struct {
 	TimeoutSec     int      // 建议单次执行超时；0 = 用 harness 默认
 	MaxResultChars int      // 结果回填 LLM 前的建议截断长度；0 = 用 harness 默认
 	UIHint         string   // 前端呈现提示（如 "editor" / "browser" / "diff"）；空 = 默认时间线样式
+	Group          string   // 展示分组：file / exec / doc / agent / media；空 = 由名称与风险推导
+}
+
+// 展示分组：与前端工具页分组顺序一致。
+const (
+	GroupFile  = "file"
+	GroupExec  = "exec"
+	GroupDoc   = "doc"
+	GroupAgent = "agent"
+	GroupMedia = "media"
+)
+
+// GroupOf 按工具名前缀推导展示分组，未命中再按风险等级兜底。
+// 新增工具无需声明：前缀规则覆盖不到时落到 media（文本·数据·多媒体）。
+func GroupOf(name string, risk RiskLevel) string {
+	switch {
+	case hasPrefix(name, "file_", "edit_", "patch_"):
+		return GroupFile
+	case hasPrefix(name, "exec", "skill_run", "run_workflow", "http_", "web_"):
+		return GroupExec
+	case hasPrefix(name, "doc_", "pdf_", "archive_", "knowledge_", "rag_"):
+		return GroupDoc
+	case hasPrefix(name, "delegate", "todo_", "request_input", "memory_", "plan_"):
+		return GroupAgent
+	}
+	switch risk {
+	case RiskExec, RiskNetwork:
+		return GroupExec
+	case RiskWriteLocal, RiskDestructive:
+		return GroupFile
+	case RiskReadOnly:
+		return GroupDoc
+	}
+	return GroupMedia
+}
+
+func hasPrefix(name string, prefixes ...string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // MetaProvider 可选接口：实现它的工具可提供声明式元信息（未实现走零值兜底）。
@@ -67,7 +111,11 @@ type MetaProvider interface {
 // MetaOf 读取工具元信息：实现了 MetaProvider 用声明值，否则按 RiskLevel 兜底推导。
 func MetaOf(t Tool) ToolMeta {
 	if mp, ok := t.(MetaProvider); ok {
-		return mp.Meta()
+		m := mp.Meta()
+		if m.Group == "" {
+			m.Group = GroupOf(t.Name(), t.RiskLevel())
+		}
+		return m
 	}
 	m := ToolMeta{TimeoutSec: 0, MaxResultChars: 0}
 	switch t.RiskLevel() {
@@ -76,5 +124,6 @@ func MetaOf(t Tool) ToolMeta {
 	case RiskDestructive:
 		m.Destructive = true
 	}
+	m.Group = GroupOf(t.Name(), t.RiskLevel())
 	return m
 }

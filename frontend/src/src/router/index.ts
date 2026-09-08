@@ -29,7 +29,6 @@ const routes: RouteRecordRaw[] = [
   { path: '/folders', name: 'folders', component: () => import('@/components/folders/FoldersView.vue') },
   { path: '/kdocs', name: 'kdocs', component: () => import('@/components/knowledge/KnowledgeDocsView.vue') },
   { path: '/memory', name: 'memory', component: () => import('@/components/memory/MemoryCenterView.vue') },
-  { path: '/more', name: 'more', component: () => import('@/components/more/MoreView.vue') },
 
   // 设置组
   { path: '/cron', name: 'cron', component: () => import('@/components/cron/CronView.vue') },

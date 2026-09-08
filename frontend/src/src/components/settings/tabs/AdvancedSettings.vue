@@ -74,12 +74,12 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="card p-5">
+  <section class="card p-4">
     <!-- 系统行为：托盘常驻 -->
     <h2 class="mb-1 font-display text-sm font-semibold text-wb-ink">
       {{ t('settings.section.system') }}
     </h2>
-    <div class="mb-6 mt-3 flex items-center justify-between rounded-xl border border-wb-border bg-wb-surface-2 p-4">
+    <div class="mb-5 mt-2 flex items-center justify-between rounded-lg border border-wb-border bg-wb-surface-2 p-3">
       <div>
         <div class="text-sm font-medium text-wb-ink">{{ t('settings.closeToTray') }}</div>
         <div class="mt-0.5 text-xs text-wb-muted">{{ t('settings.closeToTrayHint') }}</div>
@@ -90,7 +90,7 @@ onMounted(async () => {
     <h2 class="mb-1 font-display text-sm font-semibold text-wb-ink">
       {{ t('settings.memoryTitle') }}
     </h2>
-    <div class="mb-6 mt-3 flex items-center justify-between rounded-xl border border-wb-border bg-wb-surface-2 p-4">
+    <div class="mb-5 mt-2 flex items-center justify-between rounded-lg border border-wb-border bg-wb-surface-2 p-3">
       <div>
         <div class="text-sm font-medium text-wb-ink">{{ t('settings.memoryEnabled') }}</div>
         <div class="mt-0.5 max-w-lg text-xs text-wb-muted">{{ t('settings.memoryEnabledHint') }}</div>
@@ -102,10 +102,10 @@ onMounted(async () => {
     <h2 class="mb-1 font-display text-sm font-semibold text-wb-ink">
       {{ t('settings.execWhitelist') }}
     </h2>
-    <p class="mb-4 text-xs text-wb-muted">{{ t('settings.execWhitelistHint') }}</p>
+    <p class="mb-3 text-xs text-wb-muted">{{ t('settings.execWhitelistHint') }}</p>
 
     <h3 class="wb-form-section__title">{{ t('settings.section.security') }}</h3>
-    <div class="mb-4 rounded-xl border border-wb-border bg-wb-surface-2 p-4">
+    <div class="mb-3 rounded-lg border border-wb-border bg-wb-surface-2 p-3">
       <div class="mb-2 flex items-center justify-between">
         <span class="text-xs text-wb-muted">
           {{ t('settings.execWhitelistCount', execWhitelist.length) }}

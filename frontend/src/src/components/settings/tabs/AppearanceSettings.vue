@@ -51,11 +51,11 @@ async function onThemeChange(val: string): Promise<void> {
 </script>
 
 <template>
-  <section class="card p-5">
-    <h2 class="mb-4 font-display text-sm font-semibold text-wb-ink">
+  <section class="card p-4">
+    <h2 class="mb-3 font-display text-sm font-semibold text-wb-ink">
       {{ t('settings.tab.appearance') }}
     </h2>
-    <div class="space-y-6">
+    <div class="space-y-4">
       <div class="wb-form-section">
         <h3 class="wb-form-section__title">{{ t('settings.section.locale') }}</h3>
         <el-form class="wb-el-form wb-form-grid" label-position="top">

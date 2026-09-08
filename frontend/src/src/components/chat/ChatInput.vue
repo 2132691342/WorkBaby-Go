@@ -16,11 +16,8 @@ import {
   Upload,
   Send,
   Plus,
-  FolderOpen,
   Shield,
-  Cpu,
-  Link2,
-  RotateCcw,
+  Zap,
   Sparkles,
   ChevronDown
 } from '@/components/common/icons'
@@ -169,21 +166,6 @@ const canSend = computed(() => {
 
 const isEnqueueMode = computed(() => props.streaming === true)
 
-// ===== 顶部 chip 显示辅助 =====
-const workspaceDisplay = computed(() => {
-  const wp = props.workspacePath
-  if (!wp) return t('chat.workspace.default')
-  // 取最后两级路径（如 D:\projects\my-app → projects/my-app）
-  const parts = wp.replace(/\\/g, '/').split('/').filter(Boolean)
-  if (parts.length <= 2) return wp
-  return parts.slice(-2).join('/')
-})
-
-const workspaceFull = computed(() => {
-  const wp = props.workspacePath
-  return wp ? wp : t('chat.workspace.defaultFull')
-})
-
 const permissionLevel = computed<PermissionLevel>(() => props.permission ?? 'auto')
 
 /** 权限档位：值/标签/说明与风险色（下拉菜单消费；full 需要用户看清后果）。 */
@@ -224,6 +206,23 @@ function removeSkillMention(name: string): void {
 function pickFile(): void {
   if (props.disabled || props.streaming) return
   void uploadFile()
+}
+
+/** 技能 mini：在光标处插入 @ 并唤起提及选择器（与手输 @ 走同一条解析路径）。 */
+function openSkills(): void {
+  if (props.disabled || props.streaming) return
+  const ta = textareaRef.value
+  if (!ta) return
+  const start = ta.selectionStart ?? draft.value.length
+  const end = ta.selectionEnd ?? start
+  draft.value = draft.value.slice(0, start) + '@' + draft.value.slice(end)
+  void nextTick(() => {
+    ta.focus()
+    const pos = start + 1
+    ta.setSelectionRange(pos, pos)
+    onInput()
+    autoResize()
+  })
 }
 
 async function uploadFile(_file?: File): Promise<void> {
@@ -700,7 +699,7 @@ defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
 
 <template>
   <div
-    class="composer-card relative border-t border-wb-border bg-wb-surface"
+    class="composer relative"
     @dragenter="onDragEnter"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
@@ -716,7 +715,7 @@ defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
     >
       <div
         v-if="isDragging"
-        class="absolute inset-0 z-50 flex items-center justify-center rounded-xl border-2 border-dashed border-wb-primary bg-wb-primary/10 pointer-events-none"
+        class="absolute inset-0 z-50 flex items-center justify-center border-2 border-dashed border-wb-primary bg-wb-primary/10"
       >
         <div class="flex flex-col items-center gap-2 text-wb-primary">
           <Upload class="h-8 w-8" />
@@ -725,10 +724,67 @@ defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
       </div>
     </Transition>
 
-    <div class="mx-auto flex max-w-3xl flex-col gap-3 p-4">
-      <!-- 顶部 chip 行：模型 / 工作区 / 权限 / 采样参数。
-           视觉层级：次要控制项，统一紧凑 chip 样式（.chip-btn），不抢输入框焦点。 -->
-      <div class="flex flex-wrap items-center gap-1.5 px-1">
+    <!-- 输入容器（原型 .composer-in）：聚焦时主色描边 + 光晕。队列 / 技能提及 / 附件
+         条带都收进容器内，视觉上属于「这一条消息」的一部分 -->
+    <div class="composer-in">
+      <MidTurnQueue class="comp-strip" :queue="queue" @remove="removeQueueItem" @flush="flushQueue" />
+
+      <div v-if="activeSkillMentions.length > 0" class="skill-mention-strip">
+        <span
+          v-for="sk in activeSkillMentions"
+          :key="sk.name"
+          class="skill-mention-chip"
+          :title="sk.description ?? ''"
+        >
+          <el-icon :size="11"><Sparkles /></el-icon>
+          <span class="max-w-[200px] truncate">{{ t('chat.skillMentionLabel', sk.name) }}</span>
+          <button
+            type="button"
+            class="ml-0.5 cursor-pointer opacity-70 hover:opacity-100"
+            :aria-label="t('common.delete')"
+            @click="removeSkillMention(sk.name)"
+          >×</button>
+        </span>
+      </div>
+
+      <AttachmentStrip class="comp-strip" :attachments="attachments" @remove="removeAttachment" />
+
+      <div class="relative">
+        <textarea
+          ref="textareaRef"
+          v-model="draft"
+          rows="1"
+          :placeholder="t('chat.placeholder')"
+          :disabled="disabled || streaming"
+          @input="onInput(); autoResize()"
+          @keydown="onKeydown"
+          @paste="onPaste"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
+        />
+
+        <SlashCommandPalette
+          ref="slashPaletteRef"
+          :visible="slashOpen"
+          :query="slashQuery"
+          :backend-commands="chat.commands"
+          @pick="pickSlash"
+          @close="slashOpen = false"
+        />
+
+        <MentionPicker
+          :visible="mentionOpen"
+          :query="mentionQuery"
+          :items="mentionItems"
+          :active-index="mentionActiveIndex"
+          @pick="pickMention"
+          @update-active="mentionActiveIndex = $event"
+          @close="mentionOpen = false"
+        />
+      </div>
+
+      <!-- 工具行（原型 .composer-bar）：胶囊 mini 控件 + 上下文计数 + 发送键 -->
+      <div class="composer-bar">
         <ModelSelector
           ref="modelSelectorRef"
           :models="props.models ?? []"
@@ -737,27 +793,17 @@ defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
           @select-model="selectModel"
         />
 
-        <el-tooltip :content="workspaceFull" placement="top">
-          <button type="button" class="chip-btn" @click="emit('pick-workspace')">
-            <el-icon :size="12" color="var(--wb-primary)"><FolderOpen /></el-icon>
-            <span class="max-w-[140px] truncate">{{ workspaceDisplay }}</span>
-            <!-- 已绑定态用 Link2 图标内联表达，不再单独占一个文本节点 -->
-            <el-icon v-if="props.workspacePath" :size="11" class="text-wb-mint"><Link2 /></el-icon>
-            <span v-else class="text-wb-muted/70">{{ t('chat.workspace.chip') }}</span>
-          </button>
-        </el-tooltip>
-
-        <!-- 权限 chip：下拉选择权限档位。trigger 必须是单个原生元素，el-tooltip 改放内层避免嵌套导致点击失效 -->
+        <!-- 权限 mini：下拉选择权限档位。trigger 必须是单个原生元素，el-dropdown 直接挂 -->
         <el-dropdown trigger="click" @command="(v: PermissionLevel) => emit('change-permission', v)">
           <button
             type="button"
-            class="chip-btn"
+            class="mini"
             :title="t(permissionDesc)"
-            :class="{ 'chip-btn--active': permissionLevel !== 'auto', 'chip-btn--danger': permissionDanger }"
+            :class="{ 'mini--active': permissionLevel !== 'auto', 'mini--danger': permissionDanger }"
           >
-            <el-icon :size="12"><Shield /></el-icon>
+            <Shield class="mic" />
             {{ t(permissionLabel) }}
-            <el-icon :size="10" class="ml-0.5 text-wb-muted/60"><ChevronDown /></el-icon>
+            <ChevronDown class="mic mic-chev" />
           </button>
           <template #dropdown>
             <el-dropdown-menu class="wb-perm-menu">
@@ -782,205 +828,159 @@ defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
           </template>
         </el-dropdown>
 
-        <!-- 采样参数 chip：展示生效值 + 可覆盖（与设置页同一数据源） -->
+        <!-- 采样参数 mini：展示生效值 + 可覆盖（与设置页同一数据源） -->
         <ParamsPopover ref="paramsRef" :effective="props.effectiveParams" />
-      </div>
 
-      <!-- 中间输入区：队列 + 附件 + textarea + popovers -->
-      <div class="rounded-lg border border-wb-border bg-wb-surface transition-all focus-within:border-wb-primary">
-        <MidTurnQueue :queue="queue" @remove="removeQueueItem" @flush="flushQueue" />
-        <div v-if="activeSkillMentions.length > 0" class="skill-mention-strip px-4 pt-2">
-          <span
-            v-for="sk in activeSkillMentions"
-            :key="sk.name"
-            class="skill-mention-chip"
-            :title="sk.description ?? ''"
-          >
-            <el-icon :size="11"><Sparkles /></el-icon>
-            <span class="max-w-[200px] truncate">{{ t('chat.skillMentionLabel', sk.name) }}</span>
-            <button
-              type="button"
-              class="ml-0.5 cursor-pointer opacity-70 hover:opacity-100"
-              :aria-label="t('common.delete')"
-              @click="removeSkillMention(sk.name)"
-            >×</button>
-          </span>
-        </div>
-        <AttachmentStrip :attachments="attachments" @remove="removeAttachment" />
+        <!-- 技能 mini：光标处插入 @ 唤起技能提及选择器 -->
+        <button
+          type="button"
+          class="mini"
+          :title="t('nav.skills')"
+          :disabled="disabled || streaming"
+          @click="openSkills"
+        >
+          <Zap class="mic" />
+          {{ t('nav.skills') }}
+        </button>
 
-        <div class="relative flex flex-1 flex-col gap-1 px-4 pb-3 pt-2">
-          <textarea
-            ref="textareaRef"
-            v-model="draft"
-            rows="2"
-            :placeholder="t('chat.placeholder')"
-            class="max-h-60 min-h-[3.5rem] w-full resize-y border-0 bg-transparent text-sm leading-relaxed text-wb-ink outline-none placeholder:text-wb-muted/70 disabled:opacity-50"
-            :disabled="disabled || streaming"
-            @input="onInput(); autoResize()"
-            @keydown="onKeydown"
-            @paste="onPaste"
-            @compositionstart="onCompositionStart"
-            @compositionend="onCompositionEnd"
-          />
+        <!-- 附件 mini -->
+        <button
+          type="button"
+          class="mini"
+          :title="t('chat.attachment')"
+          :disabled="disabled || streaming || uploading"
+          @click="pickFile"
+        >
+          <Paperclip class="mic" />
+          {{ t('chat.attachment') }}
+        </button>
 
-          <SlashCommandPalette
-            ref="slashPaletteRef"
-            :visible="slashOpen"
-            :query="slashQuery"
-            :backend-commands="chat.commands"
-            @pick="pickSlash"
-            @close="slashOpen = false"
-          />
+        <!-- 流式中入队：不打断当前回合，排队等待 flush -->
+        <button
+          v-if="streaming && draft.trim()"
+          type="button"
+          class="mini"
+          :title="t('queue.enqueue')"
+          @click="addToQueue"
+        >
+          <Plus class="mic" />
+          {{ t('queue.enqueue') }}
+        </button>
 
-          <MentionPicker
-            :visible="mentionOpen"
-            :query="mentionQuery"
-            :items="mentionItems"
-            :active-index="mentionActiveIndex"
-            @pick="pickMention"
-            @update-active="mentionActiveIndex = $event"
-            @close="mentionOpen = false"
-          />
-        </div>
-
-        <!-- 底部行：左 = 附件 / 入队 / 上下文占用 / 字符数（次要信息聚合）
-     | 右 = 圆形发送（主操作，唯一强调色） -->
-        <div class="flex items-center justify-between gap-2 border-t border-wb-border/50 px-3 py-2">
-          <div class="flex min-w-0 items-center gap-2">
-            <el-tooltip :content="t('chat.attachment')" placement="top">
-              <span class="inline-flex">
-                <el-button
-                  text
-                  circle
-                  :loading="uploading"
-                  :disabled="disabled || streaming"
-                  @click="pickFile"
-                >
-                  <el-icon><Paperclip /></el-icon>
-                </el-button>
-              </span>
-            </el-tooltip>
-            <el-tooltip v-if="streaming && draft.trim()" :content="t('queue.enqueue')" placement="top">
-              <el-button text circle @click="addToQueue">
-                <el-icon><Plus /></el-icon>
-              </el-button>
-            </el-tooltip>
-
-            <!-- 上下文占用：与字符数同处一区，用竖线分隔，压缩纵向空间 -->
-            <span v-if="draft.length > 0" class="h-3 w-px shrink-0 bg-wb-border" />
-            <span v-if="draft.length > 0" class="shrink-0 text-[10px] tabular-nums" :class="draft.length > maxInputChars ? 'text-wb-danger' : 'text-wb-muted'">
-              {{ draft.length }} / {{ maxInputChars }}
-            </span>
-            <span class="h-3 w-px shrink-0 bg-wb-border" />
-            <ContextUsagePopover :used="ctxUsed ?? 0" :max="ctxMax ?? 128000" />
-          </div>
-
-          <div class="flex shrink-0 items-center gap-2">
-            <el-button
-              v-if="!streaming"
-              type="primary"
-              circle
-              :disabled="!canSend"
-              :aria-label="t('ui.btn.send')"
-              @click="submit"
-            >
-              <el-icon><Send /></el-icon>
-            </el-button>
-            <el-button v-else type="danger" circle class="wb-stop-breathe" :aria-label="t('chat.stop')" @click="stop">
-              <el-icon><Square class="fill-current" /></el-icon>
-            </el-button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 底部提示行：仅在有内容可提示时出现，避免空转占高度 -->
-      <div v-if="!streaming && !draft.trim()" class="px-1 text-[10px] text-wb-muted/80">
-        <span class="flex items-center gap-1">
-          <el-icon :size="11"><Cpu /></el-icon>
-          {{ t('chat.sendHint') }}
+        <span class="sp" />
+        <span v-if="draft.length > 0" class="ctx-num" :class="{ over: draft.length > maxInputChars }">
+          {{ draft.length }} / {{ maxInputChars }}
         </span>
-      </div>
-      <div v-else-if="streaming && queue.length > 0" class="px-1 text-[10px] text-wb-primary">
-        <span class="flex items-center gap-1">
-          <el-icon :size="11"><RotateCcw /></el-icon>
-          {{ t('queue.queued', queue.length) }}
-        </span>
-      </div>
-      <div v-else-if="draft.trim()" class="px-1 text-[10px] text-wb-muted/80">
-        <span class="flex items-center gap-1">
-          <kbd class="rounded border border-wb-border bg-wb-surface px-1 font-mono text-[9px]">Enter</kbd>
-          {{ t('chat.sendHintKbd') }}
-        </span>
+        <ContextUsagePopover :used="ctxUsed ?? 0" :max="ctxMax ?? 128000" />
+
+        <button
+          v-if="!streaming"
+          type="button"
+          class="send"
+          :disabled="!canSend"
+          :aria-label="t('ui.btn.send')"
+          @click="submit"
+        >
+          <Send />
+        </button>
+        <button v-else type="button" class="send send--stop" :aria-label="t('chat.stop')" @click="stop">
+          <Square class="fill-current" />
+        </button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* 输入区在 focus-within 时外层光晕（与 textarea focus 联动） */
-.composer-card :focus-within > .rounded-2xl {
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--wb-primary) 18%, transparent),
-    var(--wb-shadow-lg);
+/* ===== 原型 composer：全局 wb-ui.css 已提供 .composer / .composer-in / .mini / .send
+   基础样式，这里只做组件级微调（ModelSelector / ParamsPopover 触发器统一成 mini 胶囊） ===== */
+
+/* 两个 popover 触发器（.chip-btn）与手写 .mini 对齐：同高同字号，视觉成一个胶囊组 */
+.composer :deep(.chip-btn) {
+  height: 26px;
+  gap: 5px;
+  padding: 0 9px;
+  font-size: 11.5px;
 }
 
-.composer-card .tabular-nums,
-.composer-card .font-mono {
-  font-variant-numeric: tabular-nums;
+.mini:disabled,
+.composer :deep(.chip-btn:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-/* 顶部次要控制项 chip：统一紧凑外观，视觉权重低于输入框与发送按钮。
-   比 el-button small 更矮（h-6）更窄，一行能放下 4 个不换行。 */
-.chip-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  max-width: 220px;
-  padding: 0 8px;
-  border: 1px solid var(--wb-border);
-  border-radius: 9999px;
-  background: var(--wb-surface);
-  color: var(--wb-muted);
-  font-size: 11px;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    border-color 0.15s ease,
-    color 0.15s ease,
-    background-color 0.15s ease;
+/* mini 内联图标：统一 12.5px，chevron 更小更淡 */
+.mini :deep(svg.mic) {
+  width: 12.5px;
+  height: 12.5px;
+  flex: none;
 }
-.chip-btn:hover {
-  border-color: color-mix(in srgb, var(--wb-primary) 45%, transparent);
-  color: var(--wb-primary-strong);
+.mini :deep(svg.mic-chev) {
+  width: 10px;
+  height: 10px;
+  opacity: 0.7;
 }
-.chip-btn:focus-visible {
-  outline: none;
-  border-color: var(--wb-primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-primary) 14%, transparent);
-}
-/* 非默认态（如权限切到 confirm/restricted）需要被看见 */
-.chip-btn--active {
+
+/* 非默认权限态需要被看见（warning=受限/需确认，danger=完全访问） */
+.mini--active {
   border-color: color-mix(in srgb, var(--wb-warning) 55%, transparent);
   color: var(--wb-warning);
   background: color-mix(in srgb, var(--wb-warning) 8%, transparent);
 }
-/* 完全访问：危险语义色，与 warning 态区分 */
-.chip-btn--danger {
+.mini--danger {
   border-color: color-mix(in srgb, var(--wb-danger) 60%, transparent);
   color: var(--wb-danger);
   background: color-mix(in srgb, var(--wb-danger) 10%, transparent);
 }
-/* 权限下拉：危险档提示 */
-.wb-perm-menu :deep(.el-dropdown-menu__item.is-danger) {
+
+/* 草稿字符计数：mono 数字，超限标红 */
+.ctx-num {
+  flex: none;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--wb-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ctx-num.over {
   color: var(--wb-danger);
 }
-/* 激活的 @skill 提及 chip：与附件条同级，视觉上明确「这条消息带着技能上下文」 */
+
+/* 发送键：禁用弱化；停止键 danger 底 + 呼吸动画 */
+.send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.send--stop {
+  background: var(--wb-danger);
+  animation: stop-breathe 1.6s ease-in-out infinite;
+}
+@keyframes stop-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.72;
+  }
+}
+
+/* textarea 占位符：与原型一致的弱化提示 */
+.composer-in textarea::placeholder {
+  color: color-mix(in srgb, var(--wb-muted) 75%, transparent);
+}
+
+/* 队列 / 附件条带：内边距对齐 textarea（13px），与输入文本视觉同列 */
+.comp-strip {
+  padding: 10px 13px 0;
+}
+
+/* 激活的 @skill 提及 chip：与附件条同级，视觉上明确「这条消息带着技能上下文」；
+   内边距对齐 textarea（13px） */
 .skill-mention-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  padding: 10px 13px 0;
 }
 .skill-mention-chip {
   display: inline-flex;
@@ -996,5 +996,10 @@ defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
   font-size: 11px;
   line-height: 1;
   white-space: nowrap;
+}
+
+/* 权限下拉：危险档提示 */
+.wb-perm-menu :deep(.el-dropdown-menu__item.is-danger) {
+  color: var(--wb-danger);
 }
 </style>

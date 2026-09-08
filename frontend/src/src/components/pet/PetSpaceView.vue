@@ -89,23 +89,20 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="flex h-full overflow-y-auto bg-wb-bg text-wb-ink">
-    <div class="mx-auto w-full max-w-7xl space-y-6 px-6 py-8">
-      <!-- Hero header -->
-      <header class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-wb-primary/10 text-wb-primary">
-          <PawPrint class="h-5 w-5" />
-        </div>
+  <div class="scroll wb-ui">
+    <div class="wrap wrap-lg">
+      <!-- Hero header（原型 17 屏） -->
+      <header class="hero">
+        <div class="tile"><PawPrint class="ic" /></div>
         <div>
-          <h1 class="font-display text-lg font-semibold text-wb-ink">{{ t('pet.title') }}</h1>
-          <p class="text-xs text-wb-muted">{{ t('pet.subtitle') }}</p>
+          <h1>{{ t('pet.title') }}</h1>
+          <p>{{ t('pet.subtitle') }}</p>
         </div>
-        <span class="ml-auto badge-neutral">
-          {{ t('pet.spritesCount', sprites.length) }}
-        </span>
+        <span class="sp" />
+        <span class="badge b-neutral">{{ t('pet.spritesCount', sprites.length) }}</span>
       </header>
 
-      <div v-if="error" class="rounded-lg bg-wb-danger/15 px-3 py-2 text-sm text-wb-danger">
+      <div v-if="error" class="alert a-danger">
         {{ error }}
       </div>
       <div v-if="info" class="rounded-lg bg-wb-success/15 px-3 py-2 text-sm text-wb-success">

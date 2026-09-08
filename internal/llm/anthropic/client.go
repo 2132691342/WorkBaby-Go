@@ -246,12 +246,18 @@ func (c *Client) headers() map[string]string {
 }
 
 func (c *Client) buildBody(req *llm.ChatRequest, stream bool) map[string]any {
-	// system 单独提取（Anthropic Messages API 顶层 system 字段）
+	// system 单独提取（Anthropic Messages API 顶层 system 字段）。
+	// 每段 system 都加 cache_control.ephemeral（Anthropic 允许 4 个 cache_control 断点）：
+	// 多段合并成 1 段一次性 cache；  system 的最后一段独立 cache（与多段合并前缀一致时也命中）。
 	systemParts := []map[string]any{}
 	convo := []map[string]any{}
 	for _, m := range req.Messages {
 		if m.Role == llm.RoleSystem {
-			systemParts = append(systemParts, map[string]any{"type": "text", "text": m.Content})
+			systemParts = append(systemParts, map[string]any{
+				"type":          "text",
+				"text":          m.Content,
+				"cache_control": map[string]any{"type": "ephemeral"},
+			})
 			continue
 		}
 		switch m.Role {
@@ -319,7 +325,20 @@ func (c *Client) buildBody(req *llm.ChatRequest, stream bool) map[string]any {
 		body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget}
 	}
 	if len(req.Tools) > 0 {
-		body["tools"] = toAnthropicTools(req.Tools)
+		// 工具定义末尾打 cache_control：tools 跨轮稳定（不重排、不改名），前缀命中
+		tools := toAnthropicTools(req.Tools)
+		if len(tools) > 0 {
+			tools[len(tools)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+		}
+		body["tools"] = tools
+	}
+	// 最近一条 message 打 cache_control：让 messages 历史前缀（含所有 tool 轮次）稳定命中
+	// 这是 Anthropic prompt caching 的关键策略（参见 https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching）
+	if len(convo) > 0 {
+		last := convo[len(convo)-1]
+		if content, ok := last["content"].([]map[string]any); ok && len(content) > 0 {
+			content[len(content)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+		}
 	}
 	for k, v := range req.ExtraBody {
 		body[k] = v

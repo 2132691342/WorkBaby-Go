@@ -85,6 +85,9 @@ import {
   Type,
   ZapOff,
   MoreHorizontal,
+  Terminal,
+  Webhook,
+  Mail,
 } from './custom'
 
 /**
@@ -189,4 +192,7 @@ export {
   Table,
   Type,
   ZapOff,
+  Terminal,
+  Webhook,
+  Mail,
 }

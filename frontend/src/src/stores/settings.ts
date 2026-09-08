@@ -213,24 +213,29 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  /** 新增模型配置。 */
+  /** 新增模型配置（沿用组件表单的载荷）。 */
   async function addProvider(): Promise<boolean> {
+    return addProviderWith(form.value)
+  }
+
+  /** 新增模型配置（指定载荷；新增/编辑统一弹窗共用，校验与提示同 addProvider）。 */
+  async function addProviderWith(data: AiProviderReq): Promise<boolean> {
     error.value = null
-    if (!form.value.name.trim() || !form.value.model.trim()) {
+    if (!data.name?.trim() || !data.model?.trim()) {
       error.value = t('settings.errNameModel')
       toast.warning(t('settings.errNameModel'))
       return false
     }
     // 额外提醒：本地协议（OpenAI 兼容 / Anthropic / Gemini / Ollama）通常需要 base_url 与 api_key，
     // 没填的话能创建成功但实际无法联通；不阻断但 toast.info 提醒，避免「点了没反应」。
-    if (!form.value.base_url?.trim()) {
+    if (!data.base_url?.trim()) {
       toast.info(t('settings.baseUrlMissingHint'))
     }
-    if (!form.value.api_key?.trim() && form.value.kind !== 'ollama') {
+    if (!data.api_key?.trim() && data.kind !== 'ollama') {
       toast.info(t('settings.apiKeyMissingHint'))
     }
     try {
-      await apiPost<AiProvider>('/api/v1/ai-provider', form.value)
+      await apiPost<AiProvider>('/api/v1/ai-provider', data)
       form.value = emptyProviderForm()
       await load()
       toast.success(t('settings.providerAdded'))
@@ -497,6 +502,7 @@ export const useSettingsStore = defineStore('settings', () => {
     form,
     load,
     addProvider,
+    addProviderWith,
     updateProvider,
     removeProvider,
     testProvider,

@@ -25,6 +25,22 @@ export const MoreHorizontal = createIcon('MoreHorizontal', [
   ['circle', { cx: '5', cy: '12', r: '1', fill: 'currentColor' }],
 ])
 
+export const Terminal = createIcon('Terminal', [
+  ['polyline', { points: '4 17 10 11 4 5' }],
+  ['line', { x1: '12', x2: '20', y1: '19', y2: '19' }],
+])
+
+export const Webhook = createIcon('Webhook', [
+  ['path', { d: 'M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2' }],
+  ['path', { d: 'm6 17 3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06' }],
+  ['path', { d: 'm12 6 3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8' }],
+])
+
+export const Mail = createIcon('Mail', [
+  ['rect', { width: '20', height: '16', x: '2', y: '4', rx: '2' }],
+  ['path', { d: 'm22 7-10 6L2 7' }],
+])
+
 export const AtSign = createIcon('AtSign', [
   ['circle', { cx: '12', cy: '12', r: '4' }],
   ['path', { d: 'M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8' }],

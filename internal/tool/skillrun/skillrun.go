@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"WorkBaby/internal/pkg"
+	"WorkBaby/internal/runtime"
 	"WorkBaby/internal/tool"
 )
 
@@ -29,6 +30,19 @@ const (
 
 // ScriptResolver 按 (skill, script) 解析脚本内容与语言；service 层注入（skills 表唯一真相源）。
 type ScriptResolver func(skillName, scriptName string) (code, language string, err error)
+
+// skillScratchDir 过程脚本落点：工作区沙箱 <workspace>/.workbaby/tmp（按需创建），
+// 未绑定工作区或沙箱不可写时回落系统临时目录。
+func skillScratchDir(root string) (string, error) {
+	if base := runtime.SandboxFile(root, runtime.SubTmp); base != "" {
+		if err := os.MkdirAll(base, 0o755); err == nil {
+			if d, err := os.MkdirTemp(base, "wb-skill-*"); err == nil {
+				return d, nil
+			}
+		}
+	}
+	return os.MkdirTemp("", "wb-skill-*")
+}
 
 // interpreter 语言 → (解释器, 脚本扩展名)。固定映射，绝不拼 shell。
 func interpreter(lang string) (string, string, bool) {
@@ -161,8 +175,9 @@ func (t *SkillRunTool) Execute(ctx context.Context, raw json.RawMessage) tool.To
 		}
 	}
 
-	// 脚本落临时文件（用完即删）
-	dir, err := os.MkdirTemp("", "wb-skill-*")
+	// 脚本落临时文件（用完即删）：优先落在工作区沙箱 .workbaby/tmp，
+	// 让「本次执行用了什么脚本」留在工作区内可追溯；未绑定工作区时回落系统临时目录。
+	dir, err := skillScratchDir(t.rootOf(ctx))
 	if err != nil {
 		return tool.ToolResult{Err: pkg.Wrap(1002, "mktemp failed", err)}
 	}

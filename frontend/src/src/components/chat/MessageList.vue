@@ -122,22 +122,26 @@ watch(
   }
 )
 
-// 内容变化时，仅当用户停留在底部才自动滚底
-// 滚动改 rAF 节流 + behavior:'auto'（流式高频触发时 smooth 会堆积动画帧导致抖动）
+// 内容变化时，仅当用户停留在底部才自动滚底。
+// 关键：双 rAF —— 第一次 rAF 等到 batcher flush + streamingContent ref 写完，
+// 第二次 rAF 强制等到 DOM 完成 layout（MarkdownRenderer 100ms 节流刚更新过的高度），再 scrollTo。
+// 否则单 rAF 时 scrollHeight 仍是上次 layout 的旧值，滚不到底。
 let scrollRafID: number | null = null
-watch(
-  () => [props.messages.length, chat.streamingContent.length, props.streaming, chat.streamingTools.length],
-  () => {
-    if (scrollRafID != null) return // 已有 pending 帧，跳过（rAF 天然节流）
-    scrollRafID = requestAnimationFrame(() => {
+function scheduleScrollToBottom(): void {
+  if (scrollRafID != null) return
+  scrollRafID = requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
       scrollRafID = null
       const el = scrollEl.value
       if (el && pinned.value) {
-        // behavior:'auto' 瞬时贴底——流式时 smooth 的动画队列会与下一帧滚动竞争，产生抖动
         el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
       }
     })
-  }
+  })
+}
+watch(
+  () => [props.messages.length, chat.streamingContent.length, props.streaming, chat.streamingTools.length],
+  scheduleScrollToBottom
 )
 
 /**
@@ -154,7 +158,7 @@ function isNearCurrent(i: number): boolean {
 </script>
 
 <template>
-  <div ref="scrollEl" class="flex-1 overflow-y-auto px-6 py-6" @scroll="onScroll">
+  <div ref="scrollEl" class="min-h-0 flex-1 overflow-y-auto px-6 py-6 relative" @scroll="onScroll">
     <!-- 空状态：克制卡片（实底 + 细边框，无渐变扫光）+ 4 个一键示例 prompt。 -->
     <div v-if="messages.length === 0 && !streaming" class="flex h-full items-center justify-center px-4">
       <div class="w-full max-w-xl">
@@ -196,7 +200,7 @@ function isNearCurrent(i: number): boolean {
       </div>
     </div>
 
-    <div class="mx-auto max-w-3xl space-y-5">
+    <div class="mx-auto max-w-[800px] space-y-6">
       <div
         v-for="(m, i) in messages"
         :key="m.id"
@@ -216,15 +220,12 @@ function isNearCurrent(i: number): boolean {
           :streaming="streaming"
           :hovered="hoveredID === m.id"
         />
-
-        <!-- 用户头像：与 assistant 头像对称，平衡消息两侧视觉 -->
-        <AssistantAvatar v-if="m.role === 'user'" role="user" class="ml-3" />
       </div>
 
       <!-- 流式中的 assistant 气泡 -->
       <div v-if="streaming" class="flex justify-start">
         <AssistantAvatar class="mr-3" speaking />
-        <div class="max-w-[80%]">
+        <div class="w-full min-w-0">
           <div class="mb-1 flex items-center gap-2 px-1 text-xs text-wb-muted">
             <span class="font-medium text-wb-ink">WorkBaby</span>
           </div>
@@ -235,7 +236,7 @@ function isNearCurrent(i: number): boolean {
       <!-- 审批内联：从页面顶部下移至此，贴近当前运行消息，
            与触发审批的工具调用保持空间上下文（红色=不可逆，警告=可恢复） -->
       <div v-if="pendingApproval" class="flex justify-start">
-        <div class="w-full max-w-[80%]">
+        <div class="w-full min-w-0">
           <ApprovalInline />
         </div>
       </div>
@@ -252,12 +253,12 @@ function isNearCurrent(i: number): boolean {
       />
     </div>
 
-    <!-- 滚动到底部按钮（用户上翻阅读历史时出现） -->
+    <!-- 滚动到底部按钮：fixed 定位确保不被 overflow 容器裁剪，bottom-24 抬到 composer 上方（不重叠） -->
     <el-button
       v-if="!pinned"
       size="small"
       round
-      class="absolute bottom-6 left-1/2 z-10 -translate-x-1/2 shadow-[var(--wb-shadow-lg)]"
+      class="fixed bottom-24 left-1/2 z-30 -translate-x-1/2 shadow-[var(--wb-shadow-lg)]"
       @click="scrollToBottom"
     >
       <el-icon class="mr-1"><ChevronDown /></el-icon>

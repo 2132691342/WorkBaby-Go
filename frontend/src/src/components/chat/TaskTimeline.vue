@@ -4,6 +4,7 @@ import type { Component } from 'vue'
 import { useClipboard } from '@vueuse/core'
 import {
   Clock,
+  ListTree,
   Type,
   Braces,
   Table,
@@ -176,13 +177,6 @@ function toolIcon(name: string): Component {
   return Sparkles
 }
 
-/** 状态图标配色：running 柠檬黄、success 薄荷绿、error 红。 */
-function stateIconClass(state?: string): string {
-  if (state === 'success') return 'bg-wb-mint/15 text-wb-mint'
-  if (state === 'error') return 'bg-wb-danger/15 text-wb-danger'
-  return 'bg-wb-lemon/20 text-wb-lemon'
-}
-
 /**
  * running 态的实时计时。
  *
@@ -232,152 +226,123 @@ function fmtDuration(ms?: number): string {
 </script>
 
 <template>
-  <div>
-    <!-- 头部：过程标题 + 计数 + 展开全部/收起全部 -->
-    <div
-      v-if="props.tools.length > 0"
-      class="mb-1.5 flex items-center gap-2 text-[11px] font-medium text-wb-muted"
-    >
+  <!-- 原型 .tl / .tool 折叠列表：标题栏 + 工具行（点击展开 args/result）。
+       保留现有能力：状态图标 / 工具图标 / 行内 arg 摘要 / 实时计时 / 复制 / 重试 / 子 Agent 委派卡片 -->
+  <div v-if="props.tools.length > 0" class="tl">
+    <div class="tl-hd">
+      <ListTree class="ic" style="width: 13px; height: 13px" />
       <span>{{ t('chat.processTitle') }}</span>
-      <span class="rounded-full bg-wb-primary/10 px-1.5 py-px text-[10px] tabular-nums text-wb-primary-strong">
-        {{ props.tools.length }}
-      </span>
-      <span v-if="props.tools.length > 1" class="ml-auto flex items-center gap-2 text-[11px] font-normal">
-        <button type="button" class="transition-colors hover:text-wb-primary" @click="setAll(true)">
-          {{ t('chat.expandAll') }}
-        </button>
-        <span class="text-wb-border">|</span>
-        <button type="button" class="transition-colors hover:text-wb-primary" @click="setAll(false)">
-          {{ t('chat.collapseAll') }}
-        </button>
-      </span>
+      <span class="cnt">{{ props.tools.length }}</span>
+      <button v-if="props.tools.length > 1" type="button" @click="setAll(true)">{{ t('chat.expandAll') }}</button>
+      <button v-if="props.tools.length > 1" type="button" @click="setAll(false)">{{ t('chat.collapseAll') }}</button>
     </div>
 
-    <!-- 紧凑卡片流：单行摘要 + 点击展开详情 -->
-    <ol class="space-y-1">
-      <li
-        v-for="tc in props.tools"
-        :key="tc.id"
-        class="wb-tool-card rounded-lg transition-colors"
-        :class="tc.state === 'error' ? 'wb-tool-card-error' : ''"
+    <div
+      v-for="tc in props.tools"
+      :key="tc.id"
+      class="tool"
+      :class="{ open: isExpanded(tc) || tc.state === 'error', err: tc.state === 'error' }"
+    >
+      <button
+        type="button"
+        class="tool-hd"
+        :style="!hasDetail(tc) ? 'cursor: default' : ''"
+        @click="hasDetail(tc) && toggle(tc)"
       >
-        <!-- 摘要行：状态 + 图标 + 工具名 + 参数摘要 + 耗时 + 操作 -->
-        <div
-          class="group flex min-w-0 items-center gap-2 px-2 py-1.5"
-          :class="hasDetail(tc) ? 'cursor-pointer select-none' : ''"
-          @click="hasDetail(tc) && toggle(tc)"
+        <!-- 状态图标 -->
+        <span class="st">
+          <Loader2 v-if="tc.state === 'running'" class="run animate-spin" />
+          <Check v-else-if="tc.state === 'success'" class="ok" />
+          <X v-else-if="tc.state === 'error'" class="fail" />
+          <Clock v-else class="pend" />
+        </span>
+
+        <!-- 工具图标（子 Agent 委派用 Bot） -->
+        <component
+          :is="isDelegate(tc) ? Bot : toolIcon(tc.name)"
+          class="ic"
+          :class="isDelegate(tc) ? 'text-wb-lavender' : 'text-wb-primary-strong'"
+        />
+
+        <!-- 名称 -->
+        <span v-if="isDelegate(tc)" class="nm" style="font-family: inherit">
+          {{ t('chat.subAgent') }} · {{ delegateMeta(tc).agent }}
+        </span>
+        <span v-else class="nm">{{ tc.name }}</span>
+
+        <!-- 子 Agent 来源徽标 -->
+        <span
+          v-if="tc.agent && !isDelegate(tc)"
+          class="shrink-0 rounded bg-wb-lavender/15 px-1 text-[10px] text-wb-lavender"
         >
-          <span
-            class="flex h-5 w-5 shrink-0 items-center justify-center rounded-md"
-            :class="stateIconClass(tc.state)"
-          >
-            <Loader2 v-if="tc.state === 'running'" class="h-3 w-3 animate-spin" />
-            <Check v-else-if="tc.state === 'success'" class="h-3 w-3" />
-            <X v-else-if="tc.state === 'error'" class="h-3 w-3" />
-            <Sparkles v-else class="h-3 w-3" />
-          </span>
+          {{ tc.agent }}
+        </span>
 
-          <component
-            :is="isDelegate(tc) ? Bot : toolIcon(tc.name)"
-            class="h-3.5 w-3.5 shrink-0"
-            :class="isDelegate(tc) ? 'text-wb-lavender' : 'text-wb-primary-strong'"
-          />
+        <!-- 行内 arg 摘要 -->
+        <span
+          v-if="argSummary(tc) || (isDelegate(tc) && delegateMeta(tc).task)"
+          class="arg"
+          :title="isDelegate(tc) ? delegateMeta(tc).task : argSummary(tc)"
+        >
+          {{ isDelegate(tc) ? delegateMeta(tc).task : argSummary(tc) }}
+        </span>
 
-          <span v-if="isDelegate(tc)" class="shrink-0 text-xs font-medium text-wb-ink">
-            {{ t('chat.subAgent') }} · {{ delegateMeta(tc).agent }}
-          </span>
-          <span v-else class="shrink-0 font-mono text-xs font-medium text-wb-ink">{{ tc.name }}</span>
+        <!-- 耗时 -->
+        <span v-if="elapsedMs(tc) != null" class="ms">{{ fmtDuration(elapsedMs(tc)) }}</span>
 
-          <span
-            v-if="tc.agent && !isDelegate(tc)"
-            class="shrink-0 rounded bg-wb-lavender/15 px-1 text-[10px] text-wb-lavender"
-          >
-            {{ tc.agent }}
-          </span>
+        <!-- hover 操作 -->
+        <button
+          v-if="hasDetail(tc)"
+          type="button"
+          class="shrink-0 text-wb-muted transition-colors hover:text-wb-primary"
+          :title="t('chat.copy')"
+          @click.stop="copyTool(tc)"
+        >
+          <component :is="copiedID === tc.id ? Check : Copy" style="width: 12px; height: 12px" />
+        </button>
+        <button
+          v-if="props.retryable && tc.state === 'error'"
+          type="button"
+          class="shrink-0 text-[11px] text-wb-danger transition-colors hover:text-wb-primary"
+          @click.stop="emit('retry', tc)"
+        >
+          {{ t('chat.retryTool') }}
+        </button>
 
-          <!-- 行内参数摘要：一眼看到这一步做了什么 -->
-          <span
-            v-if="argSummary(tc) || (isDelegate(tc) && delegateMeta(tc).task)"
-            class="min-w-0 flex-1 truncate font-mono text-[11px] text-wb-muted"
-            :title="isDelegate(tc) ? delegateMeta(tc).task : argSummary(tc)"
-          >
-            {{ isDelegate(tc) ? delegateMeta(tc).task : argSummary(tc) }}
-          </span>
-          <span v-else class="min-w-0 flex-1" />
+        <ChevronDown v-if="hasDetail(tc)" class="chev" />
+      </button>
 
-          <span
-            v-if="elapsedMs(tc) != null"
-            class="shrink-0 font-mono text-[10px] tabular-nums text-wb-muted"
-          >
-            {{ fmtDuration(elapsedMs(tc)) }}
-          </span>
-          <span v-if="tc.state === 'error'" class="shrink-0 text-[11px] text-wb-danger">
-            {{ t('chat.failed') }}
-          </span>
-
-          <!-- hover 操作：复制 / 重试 -->
-          <button
-            type="button"
-            class="hidden shrink-0 text-wb-muted transition-colors hover:text-wb-primary group-hover:block"
-            :title="t('chat.copy')"
-            @click.stop="copyTool(tc)"
-          >
-            <component :is="copiedID === tc.id ? Check : Copy" class="h-3 w-3" />
-          </button>
-          <button
-            v-if="props.retryable && tc.state === 'error'"
-            type="button"
-            class="hidden shrink-0 text-[11px] text-wb-danger transition-colors hover:text-wb-primary group-hover:block"
-            @click.stop="emit('retry', tc)"
-          >
-            {{ t('chat.retryTool') }}
-          </button>
-
-          <ChevronDown
-            v-if="hasDetail(tc)"
-            class="h-3 w-3 shrink-0 text-wb-muted transition-transform duration-200"
-            :class="isExpanded(tc) ? 'rotate-180' : ''"
-          />
-        </div>
-
-        <!-- 详情：参数 + 结果（diff 高亮渲染） -->
-        <div v-if="isExpanded(tc)" class="wb-tool-detail space-y-1.5 px-2 pb-2 pl-9">
-          <pre
-            v-if="tc.args && !isDelegate(tc)"
-            class="overflow-x-auto whitespace-pre-wrap rounded-md border border-wb-border/50 bg-wb-surface-2/60 p-2 font-mono text-[11px] leading-relaxed text-wb-ink"
-          >{{ tc.args }}</pre>
-          <div
-            v-if="tc.result && looksLikeDiff(tc.result)"
-            class="max-h-64 overflow-auto rounded-md border border-wb-border/50 bg-wb-surface-2/60 p-2 font-mono text-[11px] leading-relaxed"
-          >
-            <div v-for="(ln, li) in parseDiffLines(tc.result)" :key="li" :class="diffLineClass(ln.type)" class="whitespace-pre-wrap">
-              {{ ln.text }}
-            </div>
-          </div>
-          <pre
-            v-else-if="tc.result"
-            class="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-wb-border/50 p-2 font-mono text-[11px] leading-relaxed"
-            :class="tc.state === 'error' ? 'bg-wb-danger/10 text-wb-danger' : 'bg-wb-surface-2/60 text-wb-ink'"
-          >{{ tc.result }}</pre>
-        </div>
-      </li>
-    </ol>
+      <div v-if="isExpanded(tc) || tc.state === 'error'" class="tool-bd">
+        <template v-if="isDelegate(tc)">
+          <p class="lb">task</p>
+          <pre>{{ delegateMeta(tc).task || '—' }}</pre>
+        </template>
+        <template v-else-if="tc.args">
+          <p class="lb">args</p>
+          <pre>{{ tc.args }}</pre>
+        </template>
+        <template v-if="tc.result && looksLikeDiff(tc.result)">
+          <p class="lb">result</p>
+          <pre class="diff"><span
+            v-for="(ln, li) in parseDiffLines(tc.result)"
+            :key="li"
+            :class="diffLineClass(ln.type)"
+          >{{ ln.text }}
+</span></pre>
+        </template>
+        <template v-else-if="tc.result">
+          <p class="lb">result</p>
+          <pre :class="tc.state === 'error' ? 'diff' : ''">{{ tc.result }}</pre>
+        </template>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-/* 工具卡：默认透明融入消息，hover 浮现边界；错误卡常显红调左缘 */
-.wb-tool-card {
-  border-left: 2px solid transparent;
-}
-.wb-tool-card:hover {
-  background: var(--wb-surface-2);
-}
-.wb-tool-card-error {
-  border-left-color: var(--wb-danger);
-  background: color-mix(in srgb, var(--wb-danger) 4%, transparent);
-}
-.wb-tool-detail {
+/* 原型 .tool / .tool-bd 的全局样式已在 wb-ui.css 里定义；这里只做
+   展开动效（与 .approve / .tl 行展开保持一致感）。 */
+.tool-bd {
   animation: wb-tool-in 0.18s ease-out both;
 }
 @keyframes wb-tool-in {

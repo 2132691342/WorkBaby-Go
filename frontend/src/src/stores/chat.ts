@@ -740,40 +740,62 @@ export const useChatStore = defineStore('chat', () => {
     stopReason.value = null
   }
 
+  /**
+   * 决策回填：成功才清卡片，失败保留卡片供重试。
+   *
+   * <p>旧实现在 await 之前就清空 pendingApproval，一次网络/状态异常即让卡片消失，
+   * 而后端仍在等待（表现为 run 卡住 + 后续回复出现「请求不存在或已过期」）。
+   */
+  async function settleApproval(
+    a: ApprovalRequest,
+    call: () => Promise<unknown>
+  ): Promise<void> {
+    try {
+      await call()
+      if (pendingApproval.value?.id === a.id) pendingApproval.value = null
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+      pendingApproval.value = a
+    }
+  }
+
   /** 批准待审批的危险命令。 */
   async function approveApproval(): Promise<void> {
     const a = pendingApproval.value
     if (!a) return
-    pendingApproval.value = null
-    try {
-      await apiPost(`/api/v1/chat/approval/${a.id}/decide`, { approved: true })
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
-    }
+    await settleApproval(a, () =>
+      apiPost(`/api/v1/chat/approval/${a.id}/decide`, { approved: true })
+    )
   }
 
   /** 回复补充输入请求（request_input 工具，risk=input_required）。 */
   async function answerApproval(text: string): Promise<void> {
     const a = pendingApproval.value
     if (!a) return
-    pendingApproval.value = null
-    try {
-      await apiPost(`/api/v1/chat/approval/${a.id}/answer`, { answer: text })
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
-    }
+    await settleApproval(a, () =>
+      apiPost(`/api/v1/chat/approval/${a.id}/answer`, { answer: text })
+    )
   }
 
   /** 拒绝待审批的危险命令。 */
   async function denyApproval(): Promise<void> {
     const a = pendingApproval.value
     if (!a) return
-    pendingApproval.value = null
-    try {
-      await apiPost(`/api/v1/chat/approval/${a.id}/decide`, { approved: false })
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
-    }
+    await settleApproval(a, () =>
+      apiPost(`/api/v1/chat/approval/${a.id}/decide`, { approved: false })
+    )
+  }
+
+  /**
+   * 跳过：审批按拒绝处理，补充输入按「未回复」处理。
+   *
+   * <p>两类请求共用后端 /skip：此前补充输入也走 /decide，而它只认审批通道，
+   * 于是每次跳过都报 4003「approval request not found or expired」。
+   */
+  async function skipApproval(): Promise<void> {
+    const a = pendingApproval.value
+    if (!a) return
+    await settleApproval(a, () => apiPost(`/api/v1/chat/approval/${a.id}/skip`))
   }
 
   const batcher = new StreamEventBatcher((updates: StreamEventUpdate[]) => {
@@ -963,6 +985,7 @@ export const useChatStore = defineStore('chat', () => {
     approveApproval,
     answerApproval,
     denyApproval,
+    skipApproval,
     updateSessionWorkspace,
     loadEffectiveParams,
     setPermissionLevel

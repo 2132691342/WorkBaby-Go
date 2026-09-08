@@ -13,6 +13,11 @@ func (h *Handler) AnswerInput(id string, req domain.AnswerInputREQ) error {
 	return h.approvalSvc.Answer(id, req.Answer)
 }
 
+// SkipApproval 用户跳过：审批按拒绝处理，补充输入按未回复处理（模型自行假设继续）。
+func (h *Handler) SkipApproval(id string) error {
+	return h.approvalSvc.Skip(id)
+}
+
 // ListPendingApprovals 返回当前未决审批（前端刷新/重连后恢复审批用）。
 func (h *Handler) ListPendingApprovals() []domain.ApprovalPendingRESP {
 	return h.approvalSvc.Pending()

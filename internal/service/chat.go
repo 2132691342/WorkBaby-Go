@@ -19,6 +19,7 @@ import (
 	"WorkBaby/internal/memory"
 	"WorkBaby/internal/pkg"
 	"WorkBaby/internal/repo"
+	"WorkBaby/internal/runtime"
 	"WorkBaby/internal/tool"
 )
 
@@ -135,7 +136,9 @@ func (s *ChatService) MemoryEnabled(ctx context.Context) bool { return s.memoryE
 //	  memory   → {dataHome}/memory/{sessionID}/MEMORY.md
 //	  snapshot → {dataHome}/snapshots/{sessionID}
 //
-// dataHome 未注入时回落默认会话根（仅测试兜底）。
+// 会话记忆与写前快照是与该工作区强绑定的「过程数据」，跟工作区走（如同 .git）；
+// 系统级数据（知识库 / 日志 / 全局记忆）不受影响，始终在用户数据目录。
+// 目录按需创建（只有真正写记忆 / 快照时才建），绑定工作区不预建空目录树。
 func (s *ChatService) SessionDataDirs(ctx context.Context, sessionID string) (memoryFile, snapshotDir string) {
 	home := s.dataHome
 	if home == "" {
@@ -151,9 +154,9 @@ func (s *ChatService) SessionDataDirs(ctx context.Context, sessionID string) (me
 		return
 	}
 	if wp := strings.TrimSpace(row.WorkspacePath); wp != "" {
-		dot := filepath.Join(wp, ".workbaby")
-		memoryFile = filepath.Join(dot, "memory", sessionID, "MEMORY.md")
-		snapshotDir = filepath.Join(dot, "snapshots", sessionID)
+		sb := runtime.SandboxOf(wp)
+		memoryFile = filepath.Join(sb.Memory, sessionID, "MEMORY.md")
+		snapshotDir = filepath.Join(sb.Snapshots, sessionID)
 	}
 	return
 }

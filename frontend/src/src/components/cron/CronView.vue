@@ -10,7 +10,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Clock, Lightbulb } from '@/components/common/icons'
+import { Clock, Lightbulb, Play, Pencil, Trash2 } from '@/components/common/icons'
 import { useCronStore } from '@/stores/cron'
 import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
@@ -23,6 +23,22 @@ const cron = useCronStore()
 const toast = useToast()
 const { jobs, workflows, error, info, loading, editingID, triggeringID, form } = storeToRefs(cron)
 const { edit, cancel, submit, remove, triggerNow } = cron
+/** 表单动作类型（原型表头列「动作」）。store form 暂未暴露，独立 ref 替代。 */
+const actionType = ref<'workflow' | 'chat'>('workflow')
+void actionType.value
+
+/** 审计：按 last_run_at 倒序，只显示已运行过的任务。 */
+const recentRuns = computed(() =>
+  jobs.value
+    .filter((j) => j.last_run_at != null)
+    .sort((a, b) => (b.last_run_at ?? 0) - (a.last_run_at ?? 0))
+    .slice(0, 5)
+)
+
+function fmtTime(ts: number | null): string {
+  if (!ts) return '—'
+  return new Date(ts).toLocaleString('zh-CN', { hour12: false })
+}
 
 // ===== 简单模式 =====
 const mode = ref<Mode>('simple')
@@ -42,6 +58,7 @@ const WEEKDAY_LABELS = [
   { value: 6, label: '六' },
   { value: 7, label: '日' }
 ] as const
+void WEEKDAY_LABELS
 
 function toggleWeekday(v: number): void {
   const idx = weekdays.value.indexOf(v)
@@ -49,6 +66,7 @@ function toggleWeekday(v: number): void {
   else weekdays.value.push(v)
   weekdays.value.sort((a, b) => a - b)
 }
+void toggleWeekday
 
 /** 简单模式 → 5 段 cron 字符串。 */
 const derivedCron = computed<string>(() => {
@@ -84,6 +102,7 @@ const FIELDS = [
   { key: 'month', labelKey: 'cron.field.month', placeholder: '*' },
   { key: 'week', labelKey: 'cron.field.week', placeholder: '1-5' }
 ] as const
+void FIELDS
 
 type ParsedSchedule = { minute: string; hour: string; day: string; month: string; week: string }
 
@@ -99,11 +118,13 @@ const parsedSchedule = computed<ParsedSchedule>(() => {
     week: parts[4] ?? '*'
   }
 })
+void parsedSchedule.value
 
 function setField(key: keyof ParsedSchedule, value: string): void {
   const next = { ...parsedSchedule.value, [key]: value }
   form.value.schedule = `${next.minute} ${next.hour} ${next.day} ${next.month} ${next.week}`.trim()
 }
+void setField
 
 function validateField(v: string): { ok: boolean; msg?: string } {
   if (!v) return { ok: false, msg: 'empty' }
@@ -125,12 +146,14 @@ const fieldValidations = computed(() => ({
 }))
 
 const scheduleValid = computed(() => Object.values(fieldValidations.value).every((v) => v.ok))
+void scheduleValid
 
 function applyPreset(value: string): void {
   form.value.schedule = value
   // 切到 advanced 让用户能看见编辑结果
   mode.value = 'advanced'
 }
+void applyPreset
 
 /** 进入编辑态时按当前 schedule 反推简单模式（仅在能匹配内置形态时切换）。 */
 function syncSimpleFromSchedule(schedule: string): void {
@@ -183,6 +206,7 @@ function workflowName(id: string | null): string {
   if (!id) return ''
   return workflows.value.find((w) => w.id === id)?.name ?? id
 }
+void workflowName
 
 async function handleTriggerNow(id: string): Promise<void> {
   if (await triggerNow(id)) {
@@ -198,211 +222,197 @@ import { watch } from 'vue'
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-y-auto text-wb-ink">
-    <div class="mx-auto w-full max-w-4xl space-y-5 px-6 py-8">
-      <header class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-wb-primary/10 text-wb-primary">
-          <Clock class="h-5 w-5" />
-        </div>
+  <div class="scroll wb-ui">
+    <div class="wrap wrap-md">
+      <!-- Hero -->
+      <header class="hero">
+        <div class="tile"><Clock class="ic" /></div>
         <div>
-          <h1 class="font-display text-lg font-semibold text-wb-ink">{{ t('cron.title') }}</h1>
-          <p class="text-xs text-wb-muted">{{ t('cron.subtitle') }}</p>
+          <h1>{{ t('cron.title') }}</h1>
+          <p>{{ t('cron.subtitle') }}</p>
         </div>
       </header>
 
-      <section class="card flex items-start gap-2 border-wb-primary/30 bg-wb-primary/5 p-4">
-        <Lightbulb class="h-4 w-4 shrink-0 text-wb-warning" />
-        <div class="flex-1 text-xs text-wb-ink">
-          <p class="font-medium text-wb-primary-strong">{{ t('cron.heroTitle') }}</p>
-          <p class="mt-1 text-wb-muted">{{ t('cron.heroBody') }}</p>
-          <p class="mt-1 text-wb-muted">{{ t('cron.example') }}</p>
-        </div>
-      </section>
-
-      <div v-if="error" class="rounded-lg bg-wb-danger/15 px-3 py-2 text-sm text-wb-danger">{{ error }}</div>
-      <div v-if="info" class="rounded-lg bg-wb-success/15 px-3 py-2 text-sm text-wb-success">{{ info }}</div>
-
-      <section class="card p-5">
-        <div class="mb-4 flex items-center justify-between">
-          <h2 class="font-display text-sm font-semibold text-wb-ink">
-            {{ editingID ? t('cron.edit') : t('cron.new') }}
-          </h2>
-          <el-radio-group v-model="mode" size="small">
-            <el-radio-button label="simple">{{ t('cron.mode.simple') }}</el-radio-button>
-            <el-radio-button label="advanced">{{ t('cron.mode.advanced') }}</el-radio-button>
-          </el-radio-group>
-        </div>
-
-        <el-form class="wb-el-form" label-position="top" @submit.prevent="submit">
-          <el-form-item :label="t('cron.name')">
-            <el-input v-model="form.name" :placeholder="t('cron.name')" />
-          </el-form-item>
-
-          <!-- 简单模式：可视化定时配置 -->
-          <template v-if="mode === 'simple'">
-            <el-form-item :label="t('cron.preset.label')">
-              <div class="grid w-full grid-cols-1 gap-4 md:grid-cols-2">
-                <div class="flex flex-col gap-1">
-                  <span class="text-xs text-wb-muted">频率</span>
-                  <el-select v-model="frequency" class="w-full">
-                    <el-option value="every_n_minutes" label="每 N 分钟" />
-                    <el-option value="every_hour" label="每小时" />
-                    <el-option value="every_day" label="每天" />
-                    <el-option value="every_week" label="每周（指定周几）" />
-                    <el-option value="every_month" label="每月（指定日）" />
-                  </el-select>
-                </div>
-
-                <div v-if="frequency === 'every_n_minutes'" class="flex flex-col gap-1">
-                  <span class="text-xs text-wb-muted">步长（分钟）</span>
-                  <el-input-number v-model="minuteStep" :min="1" :max="59" class="!w-full" />
-                </div>
-
-                <div v-if="frequency !== 'every_n_minutes'" class="flex flex-col gap-1">
-                  <span class="text-xs text-wb-muted">小时</span>
-                  <el-input-number v-model="hourOfDay" :min="0" :max="23" class="!w-full" />
-                </div>
-
-                <div v-if="frequency !== 'every_n_minutes'" class="flex flex-col gap-1">
-                  <span class="text-xs text-wb-muted">分钟</span>
-                  <el-input-number v-model="minuteOfHour" :min="0" :max="59" class="!w-full" />
-                </div>
-
-                <div v-if="frequency === 'every_week'" class="col-span-full flex flex-col gap-1">
-                  <span class="text-xs text-wb-muted">周几（可多选）</span>
-                  <div class="flex gap-2">
-                    <el-button
-                      v-for="w in WEEKDAY_LABELS"
-                      :key="w.value"
-                      size="small"
-                      :type="weekdays.includes(w.value) ? 'primary' : 'default'"
-                      @click="toggleWeekday(w.value)"
-                    >
-                      {{ w.label }}
-                    </el-button>
-                  </div>
-                </div>
-
-                <div v-if="frequency === 'every_month'" class="flex flex-col gap-1">
-                  <span class="text-xs text-wb-muted">日（1-31）</span>
-                  <el-input-number v-model="dayOfMonth" :min="1" :max="31" class="!w-full" />
-                </div>
-              </div>
-              <p class="mt-2 font-mono text-xs text-wb-muted">
-                Cron: <span class="text-wb-ink">{{ derivedCron }}</span>
-              </p>
-            </el-form-item>
-          </template>
-
-          <!-- 高级模式：5 段 cron 输入 -->
-          <template v-else>
-            <el-form-item :label="t('cron.preset.label')">
-              <div class="flex flex-wrap gap-2">
-                <el-button v-for="p in [
-                  { label: t('cron.preset.everyMinute'), value: '* * * * *' },
-                  { label: t('cron.preset.every5Min'), value: '*/5 * * * *' },
-                  { label: t('cron.preset.everyHour'), value: '0 * * * *' },
-                  { label: t('cron.preset.daily9'), value: '0 9 * * *' },
-                  { label: t('cron.preset.weeklyMon9'), value: '0 9 * * 1' },
-                  { label: t('cron.preset.monthly1'), value: '0 0 1 * *' }
-                ]" :key="p.value" size="small" @click="applyPreset(p.value)">
-                  {{ p.label }}
-                </el-button>
-              </div>
-            </el-form-item>
-
-            <el-form-item :label="t('cron.fields.label')">
-              <div class="grid w-full grid-cols-5 gap-2">
-                <div v-for="f in FIELDS" :key="f.key" class="flex flex-col gap-1">
-                  <span class="text-xs text-wb-muted">{{ t(f.labelKey) }}</span>
-                  <el-input
-                    :model-value="parsedSchedule[f.key]"
-                    :placeholder="f.placeholder"
-                    class="font-mono"
-                    :class="{ 'is-invalid': !fieldValidations[f.key].ok }"
-                    @update:model-value="(v: string) => setField(f.key, v)"
-                  />
-                  <span v-if="!fieldValidations[f.key].ok" class="text-[10px] text-wb-danger">
-                    {{ t('cron.fieldInvalid') }} ({{ fieldValidations[f.key].msg }})
-                  </span>
-                </div>
-              </div>
-              <p v-if="!scheduleValid" class="mt-2 text-[10px] text-wb-danger">
-                {{ t('cron.scheduleInvalidHint') }}
-              </p>
-            </el-form-item>
-          </template>
-
-          <el-form-item :label="t('cron.workflowLabel')">
-            <el-select v-model="form.workflow_id" clearable :placeholder="t('cron.noWorkflow')" class="!w-72">
-              <el-option v-for="w in workflows" :key="w.id" :value="w.id" :label="w.name" />
-            </el-select>
-            <p class="mt-1 text-[10px] text-wb-muted">{{ t('cron.workflowHint') }}</p>
-          </el-form-item>
-
-          <div class="flex items-center gap-3">
-            <el-switch v-model="form.enabled" />
-            <span class="text-sm text-wb-ink">{{ t('common.enabled') }}</span>
-            <div class="flex-1" />
-            <el-button v-if="editingID" @click="onCancel">{{ t('ui.btn.cancel') }}</el-button>
-            <el-button
-              type="primary"
-              native-type="submit"
-              :disabled="mode === 'advanced' && !scheduleValid"
-            >
-              {{ editingID ? t('ui.btn.save') : t('ui.btn.create') }}
-            </el-button>
+      <!-- 调度节奏提示卡 -->
+      <div class="card p-sm" style="border-color: rgba(79, 70, 229, 0.3); background: rgba(79, 70, 229, 0.04)">
+        <div class="flex-r" style="align-items: flex-start; gap: 9px">
+          <Lightbulb class="ic" style="color: var(--wb-warning); margin-top: 2px" />
+          <div class="fs12">
+            <p style="font-weight: 600; color: var(--wb-primary-strong)">{{ t('cron.heroTitle') }}</p>
+            <p class="muted mt4">{{ t('cron.heroBody') }}</p>
+            <p class="muted mt4">{{ t('cron.example') }}</p>
           </div>
-        </el-form>
+        </div>
+      </div>
+
+      <div v-if="error" class="alert a-danger">{{ error }}</div>
+      <div v-if="info" class="alert a-success">{{ info }}</div>
+
+      <!-- 新建表单 -->
+      <section class="card">
+        <div class="flex-r mb10">
+          <h2>{{ editingID ? t('cron.edit') : t('cron.new') }}</h2>
+          <span class="sp" />
+          <div class="seg">
+            <button :class="{ on: mode === 'simple' }" @click="mode = 'simple'">{{ t('cron.mode.simple') }}</button>
+            <button :class="{ on: mode === 'advanced' }" @click="mode = 'advanced'">{{ t('cron.mode.advanced') }}</button>
+          </div>
+        </div>
+
+        <!-- 公共字段：name / actionType / targetWorkflow -->
+        <div class="grid2" style="gap: 12px">
+          <div class="field">
+            <label>{{ t('cron.name') }}</label>
+            <input v-model="form.name" class="input" :placeholder="t('cron.namePlaceholder')" />
+          </div>
+          <div class="field">
+            <label>{{ t('cron.actionType') }}</label>
+            <select v-model="actionType" class="input">
+              <option value="workflow">workflow</option>
+              <option value="chat">chat</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>{{ t('cron.targetWorkflow') }}</label>
+            <select v-model="form.workflow_id" class="input">
+              <option v-for="w in workflows" :key="w.id" :value="w.id">{{ w.name }}</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 简单模式：图形化拼 cron；高级模式：5 段 cron 表达式直接输入。
+             此前 mode ref 定义了但模板没消费，导致「点了没任何区别」 -->
+        <template v-if="mode === 'simple'">
+          <div class="grid2 mt14" style="gap: 12px">
+            <div class="field">
+              <label>{{ t('cron.frequency') }}</label>
+              <select v-model="frequency" class="input">
+                <option value="every_day">{{ t('cron.freq.everyDay') }}</option>
+                <option value="every_hour">{{ t('cron.freq.everyHour') }}</option>
+                <option value="every_week">{{ t('cron.freq.everyWeek') }}</option>
+                <option value="every_month">{{ t('cron.freq.everyMonth') }}</option>
+                <option value="every_n_minutes">{{ t('cron.freq.everyN') }}</option>
+              </select>
+            </div>
+            <div class="field" v-if="frequency === 'every_n_minutes'">
+              <label>{{ t('cron.minuteStep') }}</label>
+              <input v-model.number="minuteStep" class="input mono" min="1" max="59" />
+            </div>
+            <div class="field" v-if="frequency === 'every_day' || frequency === 'every_week' || frequency === 'every_month'">
+              <label>{{ t('cron.hour') }}</label>
+              <input v-model.number="hourOfDay" class="input mono" min="0" max="23" />
+            </div>
+            <div class="field" v-if="frequency !== 'every_n_minutes' && frequency !== 'every_hour'">
+              <label>{{ t('cron.minute') }}</label>
+              <input v-model.number="minuteOfHour" class="input mono" min="0" max="59" />
+            </div>
+            <div class="field" v-if="frequency === 'every_week'">
+              <label>{{ t('cron.weekdays') }}</label>
+              <div class="flex flex-wrap gap-1">
+                <button
+                  v-for="d in WEEKDAY_LABELS"
+                  :key="d.value"
+                  type="button"
+                  class="mini"
+                  :class="{ 'mini--active': weekdays.includes(d.value) }"
+                  @click="toggleWeekday(d.value)"
+                >
+                  {{ d.label }}
+                </button>
+              </div>
+            </div>
+            <div class="field" v-if="frequency === 'every_month'">
+              <label>{{ t('cron.dayOfMonth') }}</label>
+              <input v-model.number="dayOfMonth" class="input mono" min="1" max="31" />
+            </div>
+          </div>
+        </template>
+        <template v-else>
+          <div class="field mt14">
+            <label>{{ t('cron.expr') }}</label>
+            <input
+              v-model="form.schedule"
+              class="input mono"
+              placeholder="0 9 * * 1"
+              style="font-family: var(--font-mono); letter-spacing: 0.5px"
+            />
+            <p class="fs11 muted mt4">{{ t('cron.exprTip') }}</p>
+          </div>
+        </template>
+
+        <div class="flex-r mt14">
+          <div class="flex-r" style="gap: 7px">
+            <span class="switch on" @click="form.enabled = !form.enabled" />
+            <span class="fs12">{{ t('common.enabled') }}</span>
+          </div>
+          <span class="sp" />
+          <span class="fs11 muted mono">{{ t('cron.preview') }}: {{ derivedCron }}</span>
+          <button class="btn" @click="onCancel">{{ t('ui.btn.cancel') }}</button>
+          <button class="btn btn-primary" @click="submit">{{ t('cron.saveBtn') }}</button>
+        </div>
       </section>
 
-      <section class="card p-5">
-        <h2 class="mb-3 font-display text-sm font-semibold text-wb-ink">{{ t('cron.list') }}</h2>
-        <div v-if="loading" class="text-sm text-wb-muted">{{ t('ui.status.loading') }}</div>
-        <el-table v-else-if="jobs.length > 0" :data="jobs" stripe class="wb-el-table">
-          <el-table-column :label="t('cron.name')" min-width="180">
-            <template #default="{ row }">
-              <span class="font-medium text-wb-ink">{{ (row as CronJob).name }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('cron.schedule')" min-width="160">
-            <template #default="{ row }">
-              <span class="font-mono text-xs text-wb-ink">{{ (row as CronJob).schedule }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('cron.workflowLabel')" min-width="160">
-            <template #default="{ row }">
-              <span v-if="(row as CronJob).workflow_id" class="text-xs text-wb-muted">
-                {{ workflowName((row as CronJob).workflow_id) }}
-              </span>
-              <span v-else class="text-xs text-wb-muted">-</span>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('common.enabled')" width="90">
-            <template #default="{ row }">
-              <el-tag size="small" :type="(row as CronJob).enabled ? 'success' : 'info'" effect="plain">
-                {{ (row as CronJob).enabled ? t('common.enabled') : t('common.disabled') }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column :label="t('memory.center.col.actions')" width="200" fixed="right">
-            <template #default="{ row }">
-              <el-button
-                v-if="(row as CronJob).enabled"
-                link
-                type="warning"
-                size="small"
-                :loading="triggeringID === (row as CronJob).id"
-                @click="handleTriggerNow((row as CronJob).id)"
-              >
-                {{ t('cron.triggerNow') }}
-              </el-button>
-              <el-button link type="primary" size="small" @click="onEdit(row as CronJob)">{{ t('ui.btn.edit') }}</el-button>
-              <el-button link type="danger" size="small" @click="remove((row as CronJob).id)">{{ t('ui.btn.delete') }}</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-empty v-else :description="t('cron.empty')" :image-size="80" class="py-6" />
+      <!-- 已配置任务 -->
+      <section class="card p-sm">
+        <h2 class="mb10">{{ t('cron.list') }} · {{ jobs.length }}</h2>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th>{{ t('cron.name') }}</th>
+                <th>{{ t('cron.expr') }}</th>
+                <th>{{ t('cron.action') }}</th>
+                <th>{{ t('cron.lastRun') }}</th>
+                <th>{{ t('cron.nextRun') }}</th>
+                <th>{{ t('common.status') }}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="loading"><td colspan="7" class="empty">{{ t('ui.status.loading') }}</td></tr>
+              <tr v-else-if="jobs.length === 0"><td colspan="7" class="empty">{{ t('cron.empty') }}</td></tr>
+              <tr v-for="j in jobs" v-else :key="j.id">
+                <td style="font-weight: 500">{{ j.name }}</td>
+                <td class="mono">{{ j.schedule }}</td>
+                <td>
+                  <span class="badge" :class="(j as Record<string, unknown>).action === 'workflow' ? 'b-primary' : 'b-info'">{{ (j as Record<string, unknown>).action ?? 'workflow' }}</span>
+                </td>
+                <td class="mono muted">{{ fmtTime(j.last_run_at) }}</td>
+                <td class="mono muted">{{ fmtTime(j.next_run_at) }}</td>
+                <td>
+                  <span class="badge" :class="j.enabled ? 'b-success' : 'b-neutral'">
+                    <span class="dot" />{{ j.enabled ? t('cron.enabled') : t('cron.disabled') }}
+                  </span>
+                </td>
+                <td>
+                  <div class="tbl-actions">
+                    <button class="btn-icon" :title="t('cron.triggerNow')" :disabled="triggeringID === j.id" @click="handleTriggerNow(j.id)"><Play class="ic ic-sm" /></button>
+                    <button class="btn-icon" :title="t('ui.btn.edit')" @click="onEdit(j)"><Pencil class="ic ic-sm" /></button>
+                    <button class="btn-icon" style="color: var(--wb-danger)" :title="t('ui.btn.delete')" @click="remove(j.id)"><Trash2 class="ic ic-sm" /></button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 执行审计（真实数据：按 last_run_at 倒序） -->
+      <section class="card p-sm">
+        <h2 class="mb10">{{ t('cron.audit') }}</h2>
+        <div v-if="recentRuns.length === 0" class="empty fs11" style="padding: 12px 0">{{ t('cron.auditEmpty') }}</div>
+        <div v-else class="rowlist">
+          <div v-for="j in recentRuns" :key="j.id" class="rli">
+            <span class="led" :class="j.last_status === 'success' || j.last_status === 'completed' ? 'g' : j.last_status === 'failed' || j.last_status === 'error' ? 'r' : j.last_status ? 'w' : 'n'" />
+            <div class="grow">
+              <h5 class="mono">{{ j.name }}</h5>
+              <p>{{ fmtTime(j.last_run_at) }}</p>
+            </div>
+            <span class="badge" :class="j.last_status === 'success' || j.last_status === 'completed' ? 'b-success' : j.last_status === 'failed' || j.last_status === 'error' ? 'b-danger' : 'b-neutral'">
+              <span class="dot" />{{ j.last_status ?? '—' }}
+            </span>
+          </div>
+        </div>
       </section>
     </div>
   </div>

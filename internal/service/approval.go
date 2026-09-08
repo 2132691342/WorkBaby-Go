@@ -16,6 +16,9 @@ import (
 // 审批等待用户决策的超时；超时视为拒绝（LLM 收到拒绝结果会改道，run 不会永久挂起）。
 const approvalWaitTimeout = 2 * time.Minute
 
+// inputReason 补充输入请求的统一说明文案。
+const inputReason = "我需要你补充一点信息才能继续"
+
 // ApprovalService 工具审批门：
 //   - Approve：发布 chat:approval 事件给前端 → 阻塞等待 Decide 回填；
 //   - needs_approval 类命令批准过一次后本进程内免审（单用户桌面应用，无会话隔离诉求）；
@@ -30,7 +33,8 @@ type ApprovalService struct {
 	records  *repo.ApprovalRecordRepo
 	mu       sync.Mutex
 	pending  map[string]*pendingApproval
-	inputs   map[string]chan string
+	inputs   map[string]chan inputAnswer
+	inflight map[string]*pendingInput
 	approved map[string]bool // 已批准的命令（needs_approval 免审表；进程内存，重启清空更安全）
 }
 
@@ -45,12 +49,27 @@ type pendingApproval struct {
 	expiresAt int64
 }
 
+// pendingInput 单条未决补充输入（Pending 快照用）。
+type pendingInput struct {
+	question  string
+	runID     string
+	sessionID string
+	expiresAt int64
+}
+
+// inputAnswer 补充输入的回填值；ok=false 表示用户跳过。
+type inputAnswer struct {
+	text string
+	ok   bool
+}
+
 // NewApprovalService 构造审批服务。
 func NewApprovalService(bus *event.Bus) *ApprovalService {
 	return &ApprovalService{
-		bus:     bus,
-		pending: map[string]*pendingApproval{},
-		inputs:  map[string]chan string{},
+		bus:      bus,
+		pending:  map[string]*pendingApproval{},
+		inputs:   map[string]chan inputAnswer{},
+		inflight: map[string]*pendingInput{},
 		approved: map[string]bool{},
 	}
 }
@@ -172,13 +191,20 @@ func (s *ApprovalService) settleRecord(id, status, answer string) {
 func (s *ApprovalService) RequestInput(ctx context.Context, question string) (string, bool) {
 	id := pkg.NewID("INP")
 	now := time.Now()
-	ch := make(chan string, 1)
+	ch := make(chan inputAnswer, 1)
 	s.mu.Lock()
 	s.inputs[id] = ch
+	s.inflight[id] = &pendingInput{
+		question:  question,
+		runID:     harness.RunIDFromCtx(ctx),
+		sessionID: harness.SessionIDFromCtx(ctx),
+		expiresAt: now.Add(approvalWaitTimeout).UnixMilli(),
+	}
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
 		delete(s.inputs, id)
+		delete(s.inflight, id)
 		s.mu.Unlock()
 	}()
 	s.persistPending(ctx, id, domain.ApprovalKindInput, question, "input_required", now.Add(approvalWaitTimeout).UnixMilli())
@@ -186,15 +212,20 @@ func (s *ApprovalService) RequestInput(ctx context.Context, question string) (st
 	s.emit(ctx, "chat:approval", map[string]any{
 		"id":      id,
 		"command": question,
-		"reason":  "我需要你补充一点信息才能继续",
-		"risk":    "input_required",
+		"reason":  inputReason,
+		"risk":    tool.RiskApprovalInput,
 	})
 
 	select {
-	case text := <-ch:
-		s.settleRecord(id, domain.ApprovalStatusAnswered, text)
+	case ans := <-ch:
+		if !ans.ok {
+			s.settleRecord(id, domain.ApprovalStatusSkipped, "")
+			s.emitDecided(ctx, id, question, "skipped")
+			return "", false
+		}
+		s.settleRecord(id, domain.ApprovalStatusAnswered, ans.text)
 		s.emitDecided(ctx, id, question, "answered")
-		return text, true
+		return ans.text, true
 	case <-time.After(approvalWaitTimeout):
 		s.settleRecord(id, domain.ApprovalStatusTimeout, "")
 		s.emitDecided(ctx, id, question, "timeout")
@@ -212,12 +243,13 @@ func (s *ApprovalService) Answer(id, text string) error {
 	ch, ok := s.inputs[id]
 	if ok {
 		delete(s.inputs, id)
+		delete(s.inflight, id)
 	}
 	s.mu.Unlock()
 	if !ok {
-		return pkg.New(4003, "input request not found or expired", id)
+		return pkg.New(4003, "补充输入请求不存在或已过期", id)
 	}
-	ch <- text
+	ch <- inputAnswer{text: text, ok: true}
 	return nil
 }
 
@@ -251,10 +283,39 @@ func (s *ApprovalService) Decide(id string, approved bool) error {
 	}
 	s.mu.Unlock()
 	if !ok {
-		return pkg.New(4003, "approval request not found or expired", id)
+		if _, isInput := s.inputs[id]; isInput {
+			return pkg.New(4003, "这是补充输入请求，请用 skip 或 answer 处理", id)
+		}
+		return pkg.New(4003, "审批请求不存在或已过期", id)
 	}
 	item.ch <- approved
 	return nil
+}
+
+// Skip 用户跳过：审批按拒绝处理，补充输入按「未回复」处理（模型据此自行假设并继续）。
+// 两类请求共用同一入口，前端无需按 risk 分流打不同端点——分流正是 4003 的根因。
+func (s *ApprovalService) Skip(id string) error {
+	s.mu.Lock()
+	item, isApproval := s.pending[id]
+	if isApproval {
+		delete(s.pending, id)
+	}
+	ch, isInput := s.inputs[id]
+	if isInput {
+		delete(s.inputs, id)
+		delete(s.inflight, id)
+	}
+	s.mu.Unlock()
+	switch {
+	case isApproval:
+		item.ch <- false
+		return nil
+	case isInput:
+		ch <- inputAnswer{ok: false}
+		return nil
+	default:
+		return pkg.New(4003, "审批请求不存在或已过期", id)
+	}
 }
 
 // Pending 返回未决审批快照（供前端刷新后恢复； 审批恢复）。
@@ -262,7 +323,7 @@ func (s *ApprovalService) Decide(id string, approved bool) error {
 func (s *ApprovalService) Pending() []domain.ApprovalPendingRESP {
 	now := time.Now().UnixMilli()
 	s.mu.Lock()
-	out := make([]domain.ApprovalPendingRESP, 0, len(s.pending))
+	out := make([]domain.ApprovalPendingRESP, 0, len(s.pending)+len(s.inflight))
 	for id, it := range s.pending {
 		if now >= it.expiresAt {
 			delete(s.pending, id)
@@ -275,6 +336,23 @@ func (s *ApprovalService) Pending() []domain.ApprovalPendingRESP {
 			Command:   it.command,
 			Reason:    approvalReason(it.risk),
 			Risk:      it.risk,
+			ExpiresAt: it.expiresAt,
+		})
+	}
+	// 补充输入与审批同属「暂停等用户」，必须一并回传，否则刷新后提问卡片永久丢失
+	for id, it := range s.inflight {
+		if now >= it.expiresAt {
+			delete(s.inputs, id)
+			delete(s.inflight, id)
+			continue
+		}
+		out = append(out, domain.ApprovalPendingRESP{
+			ID:        id,
+			RunID:     it.runID,
+			SessionID: it.sessionID,
+			Command:   it.question,
+			Reason:    inputReason,
+			Risk:      tool.RiskApprovalInput,
 			ExpiresAt: it.expiresAt,
 		})
 	}

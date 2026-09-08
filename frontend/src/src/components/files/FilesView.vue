@@ -1,20 +1,22 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { FileText } from '@/components/common/icons'
+import { File, Image, Database, Search, Upload, Trash2 } from '@/components/common/icons'
 import { useFilesStore } from '@/stores/files'
 import { t } from '@/i18n'
 import type { FileInfo } from '@/types/api'
 import { formatDate } from '@/utils/time'
+import type { Component } from 'vue'
 
 /**
- * 文件管理视图。
- *
- * <p>el-upload 上传 + el-table 列表；MIME 类型用 el-tag 染色。
+ * 文件管理（照 prd/WorkBaby-UI-Prototype.html 13 屏）：
+ * hero + 统计条（总数/大小/搜索/上传）+ 文件卡网格（fcard）。
  */
 const filesStore = useFilesStore()
 const { files, error, loading, uploading } = storeToRefs(filesStore)
 const { load, upload, remove } = filesStore
+
+const search = ref('')
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -22,13 +24,20 @@ function fmtSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-/** MIME → tag 类型（前端快速分类）。 */
-function typeTag(type: string): 'success' | 'warning' | 'danger' | 'info' | 'primary' {
-  if (type?.startsWith('image/')) return 'success'
-  if (type?.startsWith('video/') || type?.startsWith('audio/')) return 'warning'
-  if (type?.includes('pdf') || type?.includes('word') || type?.includes('excel')) return 'danger'
-  if (type?.includes('json') || type?.includes('xml') || type?.includes('text')) return 'info'
-  return 'primary'
+const totalSize = computed(() => files.value.reduce((a, f) => a + (f.size ?? 0), 0))
+
+const filtered = computed<FileInfo[]>(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return files.value
+  return files.value.filter((f) => (f.original_name ?? '').toLowerCase().includes(q))
+})
+
+/** 文件类型 → 缩略图图标。 */
+function thumbIcon(f: FileInfo): Component {
+  const ft = (f.file_type ?? '').toLowerCase()
+  if (ft.includes('image') || /\.(png|jpg|jpeg|gif|svg|webp)$/.test(ft)) return Image
+  if (ft.includes('json') || ft.includes('xml') || ft.includes('csv') || ft.includes('excel')) return Database
+  return File
 }
 
 function onFileChange(file: { raw?: File }): void {
@@ -43,73 +52,57 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-y-auto text-wb-ink">
-    <div class="mx-auto w-full max-w-3xl space-y-5 px-6 py-8">
-      <!-- Hero header -->
-      <header class="flex items-center gap-3">
-        <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-wb-primary/10 text-wb-primary">
-          <FileText class="h-5 w-5" />
-        </div>
+  <div class="scroll wb-ui">
+    <div class="wrap" style="max-width: 860px">
+      <!-- Hero -->
+      <header class="hero">
+        <div class="tile"><File class="ic" /></div>
         <div>
-          <h1 class="font-display text-lg font-semibold text-wb-ink">{{ t('file.title') }}</h1>
-          <p class="text-xs text-wb-muted">{{ t('file.subtitle') }}</p>
+          <h1>{{ t('file.title') }}</h1>
+          <p>{{ t('file.subtitle') }}</p>
         </div>
       </header>
 
-      <!-- 顶部操作栏 -->
-      <section class="card flex items-center justify-between p-4">
-        <div class="text-sm text-wb-muted">
-          {{ files.length }} {{ t('file.items') }}
+      <!-- 统计 + 操作条 -->
+      <div class="card p-sm">
+        <div class="flex-r">
+          <span class="fs12 muted">{{ files.length }} {{ t('file.items') }} · {{ fmtSize(totalSize) }}</span>
+          <span class="sp" />
+          <div class="field-wrap" style="width: 220px">
+            <Search class="ic ic-sm" />
+            <input v-model="search" class="input with-icon" :placeholder="t('file.searchPlaceholder')" />
+          </div>
+          <el-upload :show-file-list="false" :auto-upload="false" :disabled="uploading" @change="onFileChange">
+            <button class="btn btn-primary">
+              <Upload class="ic ic-sm" />
+              {{ uploading ? t('file.uploading') : t('file.upload') }}
+            </button>
+          </el-upload>
         </div>
-        <el-upload
-          :show-file-list="false"
-          :auto-upload="false"
-          :disabled="uploading"
-          @change="onFileChange"
-        >
-          <el-button type="primary" :loading="uploading">
-            {{ uploading ? t('file.uploading') : t('file.upload') }}
-          </el-button>
-        </el-upload>
-      </section>
-
-      <div v-if="error" class="rounded-lg bg-wb-danger/15 px-3 py-2 text-sm text-wb-danger">
-        {{ error }}
       </div>
 
-      <!-- 列表（el-table） -->
-      <div v-if="loading" class="text-sm text-wb-muted">{{ t('ui.status.loading') }}</div>
-      <el-table v-else-if="files.length > 0" :data="files" stripe class="wb-el-table">
-        <el-table-column :label="t('file.name')" min-width="240">
-          <template #default="{ row }">
-            <span class="font-medium text-wb-ink">{{ (row as FileInfo).original_name }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('file.type')" width="110">
-          <template #default="{ row }">
-            <el-tag size="small" :type="typeTag((row as FileInfo).file_type)" effect="plain">
-              {{ (row as FileInfo).file_type || 'unknown' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('file.size')" width="90">
-          <template #default="{ row }">
-            <span class="text-xs text-wb-muted">{{ fmtSize((row as FileInfo).size) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('memory.center.col.time')" width="110">
-          <template #default="{ row }">
-            <span class="text-xs text-wb-muted">{{ formatDate((row as FileInfo).created_at) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="t('memory.center.col.actions')" width="70" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="danger" size="small" @click="remove((row as FileInfo).id)">{{ t('ui.btn.delete') }}</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <el-empty v-else :description="t('file.empty')" :image-size="80" class="py-8" />
+      <div v-if="error" class="alert a-danger">{{ error }}</div>
+
+      <!-- 文件卡网格 -->
+      <div v-if="loading" class="empty">{{ t('ui.status.loading') }}</div>
+      <div v-else-if="filtered.length === 0" class="empty">{{ t('file.empty') }}</div>
+      <div v-else class="fgrid">
+        <div v-for="f in filtered" :key="f.id" class="fcard" style="position: relative">
+          <button
+            class="btn-icon"
+            style="position: absolute; right: 6px; top: 6px; opacity: 0.6"
+            :title="t('ui.btn.delete')"
+            @click="remove(f.id)"
+          >
+            <Trash2 class="ic ic-sm" style="color: var(--wb-danger)" />
+          </button>
+          <div class="thumb">
+            <component :is="thumbIcon(f)" class="ic" />
+          </div>
+          <h5>{{ f.original_name }}</h5>
+          <p>{{ fmtSize(f.size ?? 0) }} · {{ formatDate(f.created_at) }}</p>
+        </div>
+      </div>
     </div>
   </div>
 </template>
-

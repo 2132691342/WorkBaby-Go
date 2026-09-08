@@ -56,7 +56,8 @@ function onThinkingToggle(e: Event): void {
 </script>
 
 <template>
-  <div class="rounded-lg border border-wb-border bg-wb-surface px-4 py-3 text-sm leading-relaxed text-wb-ink">
+  <!-- 原型 .bubble：正文裸排，块级内容（思考 / 时间线 / 卡片）各自自带边框 -->
+  <div class="text-[13px] leading-[1.78] text-wb-ink">
     <!-- 建流瞬时错误自动重试提示（限流/5xx；正文恢复自动消失） -->
     <div
       v-if="streamingRetry"
@@ -68,14 +69,14 @@ function onThinkingToggle(e: Event): void {
     <!-- 流式思考面板：思考中自动展开，正文开始产出后自动折叠；展开期间流式自动滚底 -->
     <details
       v-if="!focusMode && hasThinking"
-      class="group mb-2 rounded-lg border border-wb-lavender/20 bg-wb-lavender/[0.07]"
+      class="group mb-2 overflow-hidden rounded-lg border border-wb-border bg-wb-surface-2"
       :open="thinkingOpen"
       @toggle="onThinkingToggle"
     >
-      <summary class="flex cursor-pointer select-none items-center gap-1.5 px-2.5 py-1.5 text-xs text-wb-muted">
-        <Brain class="h-3.5 w-3.5 text-wb-lavender" />
+      <summary class="flex cursor-pointer select-none items-center gap-1.5 px-2.5 py-1.5 text-[11.5px] text-wb-muted">
+        <Brain class="h-3.5 w-3.5" />
         <span>{{ thinkingOpen ? t('chat.thinking') : t('chat.thoughtDone') }}</span>
-        <Loader2 v-if="!streamingContent" class="h-3 w-3 animate-spin text-wb-lavender" />
+        <Loader2 v-if="!streamingContent" class="h-3 w-3 animate-spin" />
         <ChevronDown
           class="ml-auto h-3 w-3 transition-transform duration-200"
           :class="thinkingOpen ? 'rotate-180' : ''"
@@ -83,12 +84,13 @@ function onThinkingToggle(e: Event): void {
       </summary>
       <pre
         ref="thinkingBody"
-        class="mx-2.5 mb-2 max-h-48 overflow-y-auto whitespace-pre-wrap font-sans text-[11px] leading-relaxed text-wb-muted/90"
+        class="mx-2.5 mb-2 max-h-48 overflow-y-auto whitespace-pre-wrap border-t border-dashed border-wb-border pt-2 font-sans text-[11px] leading-[1.75] text-wb-muted/90"
       >{{ streamingThinking }}</pre>
     </details>
 
-    <!-- 任务步骤时间线（工具调用可视化）；焦点模式下隐藏（与 Claude Code focus 一致） -->
-    <div v-if="!focusMode && tools.length > 0" class="mb-3 rounded-xl border border-wb-border bg-wb-primary/[0.03] p-3">
+    <!-- 任务步骤时间线（工具调用可视化）；焦点模式下隐藏（与 Claude Code focus 一致）。
+         原型 .tl 自带边框与底色，这里不再套染色包装（消除双重边框） -->
+    <div v-if="!focusMode && tools.length > 0" class="mb-3">
       <TaskTimeline :tools="tools" />
     </div>
 

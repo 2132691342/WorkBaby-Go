@@ -71,10 +71,10 @@ function labelFor(item: MentionItem): string {
 
 <template>
   <transition
-    enter-active-class="transition-all duration-150 ease-out"
+    enter-active-class="transition-all duration-150 ease-out origin-bottom"
     enter-from-class="scale-95 opacity-0"
     enter-to-class="scale-100 opacity-100"
-    leave-active-class="transition-all duration-100 ease-in"
+    leave-active-class="transition-all duration-100 ease-in origin-bottom"
     leave-from-class="scale-100 opacity-100"
     leave-to-class="scale-95 opacity-0"
   >
@@ -82,7 +82,9 @@ function labelFor(item: MentionItem): string {
       v-if="props.visible"
       class="wb-glass absolute z-50 w-72 rounded-2xl border border-wb-border bg-wb-surface/95 p-2 shadow-[var(--wb-shadow-lg)] backdrop-blur"
       :style="{
-        bottom: props.position?.bottom ?? 'auto',
+        /* 默认朝上展开：composer 位于页面底部，向下弹会被视口截断
+           （与 SlashCommandPalette / ModelSelector 的 bottom-full 对齐） */
+        bottom: props.position?.bottom ?? '100%',
         top: props.position?.top ?? 'auto',
         left: props.position?.left ?? '0',
         right: props.position?.right ?? 'auto',

@@ -11,6 +11,8 @@ const (
 	RiskApprovalNeeds = "needs_approval"
 	// RiskApprovalIrrev 命中危险正则（不可逆操作）：每次都问，永不免审。
 	RiskApprovalIrrev = "irreversible"
+	// RiskApprovalInput 补充输入：模型向用户提问（非安全审批），跳过即让用户自行假设。
+	RiskApprovalInput = "input_required"
 )
 
 // Approver 高风险命令审批门：阻塞等待用户决策后放行/拒绝。

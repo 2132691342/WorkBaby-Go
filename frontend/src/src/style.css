@@ -15,6 +15,19 @@
  */
 @import 'tailwindcss';
 @import './themes.css';
+/* 原型同款组件设计系统（prd/WorkBaby-UI-Prototype.html）：card/btn/badge/tbl/tile… */
+@import './wb-ui.css';
+
+/* ===== 表单密度 token（全局唯一基线）=====
+ * 原生 .input 与 Element Plus 控件共用同一套高度 / 字号，
+ * 消除「同一个设置页里 28px 与 32px 混排、12px 与 14px 混排」的问题。 */
+:root {
+  --wb-ctl-h: 28px;
+  --wb-fs-ctl: 12px;
+  --wb-fs-label: 11px;
+  --wb-fs-hint: 11px;
+  --wb-radius-ctl: 8px;
+}
 
 /* ===== 离线字体（精简：Inter 4 weight + 3 款等宽 Regular）=====
  * 用户决策（2026）：精简为 7 个文件。
@@ -142,25 +155,9 @@
     font-size: 12px;
   }
 
-  /* === 输入框 === */
-  .input {
-    width: 100%;
-    border-radius: var(--wb-radius);
-    border: 1px solid var(--wb-border-strong);
-    background: var(--wb-surface-solid);
-    padding: 0.5rem 0.75rem;
-    font-size: 0.875rem;
-    color: var(--wb-ink);
-    outline: none;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-  }
-  .input::placeholder {
-    color: var(--wb-muted);
-  }
-  .input:focus {
-    border-color: var(--wb-primary);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-primary) 16%, transparent);
-  }
+  /* === 输入框 ===
+   * .input 由 wb-ui.css 统一定义（--wb-ctl-h / --wb-fs-ctl），此处不再重复声明，
+   * 避免两份字号（12px 与 14px）在设置页混排。 */
   .input-xs {
     width: 100%;
     border-radius: var(--wb-radius-sm);
@@ -308,6 +305,44 @@ pre,
   font-family: var(--font-mono) !important;
 }
 
+/* ===== Element Plus 控件：与 wb-ui 原生控件同高同字号（全局密度基线）=====
+ * EP 默认 32px / 14px，wb-ui 原生 .input 是 28px / 12px，两套混排导致
+ * 设置页「编辑模型弹窗好看、其余表单难看」。此处统一收敛到 --wb-ctl-h / --wb-fs-ctl。 */
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper,
+.el-input-number,
+.el-input-number .el-input__wrapper,
+.el-date-editor.el-input__wrapper,
+.el-cascader .el-input__wrapper {
+  min-height: var(--wb-ctl-h) !important;
+}
+.el-input__inner,
+.el-textarea__inner,
+.el-select__placeholder,
+.el-select__selected-item,
+.el-input-number .el-input__inner {
+  font-size: var(--wb-fs-ctl) !important;
+}
+.el-select__wrapper,
+.el-input__wrapper {
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+.el-select__prefix,
+.el-select__suffix,
+.el-input__prefix,
+.el-input__suffix {
+  height: var(--wb-ctl-h);
+}
+.el-button--small {
+  min-height: var(--wb-ctl-h);
+  font-size: var(--wb-fs-ctl);
+}
+.el-form-item__label {
+  font-size: var(--wb-fs-label) !important;
+}
+
 /* ===== Element Plus 表单：统一对齐（设置页歪七扭八根因之二）===== */
 .el-form-item {
   margin-bottom: 14px !important;
@@ -324,7 +359,13 @@ pre,
 }
 /* 同一表单内左右对齐：label 在右侧时给固定宽度让左右列对齐 */
 .el-form--label-top .el-form-item__label {
-  padding-bottom: 6px;
+  padding-bottom: 4px;
+}
+
+/* 密度收紧：wb-form-grid 的 gap 已统一管理纵向间距，
+   EP 默认的 el-form-item margin-bottom: 22px 会让稀疏表单（如通道/搜索）撑满整页 */
+.wb-el-form .el-form-item {
+  margin-bottom: 0;
 }
 
 /* ===== wb-form-grid：Studio 通用栅格表单（修复设置页歪七扭八的根因） =====
@@ -335,12 +376,12 @@ pre,
 .wb-form-grid {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 14px;
 }
 .wb-form-section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 .wb-form-section__title {
   font-size: 11px;
@@ -835,6 +876,39 @@ button:active:not(:disabled) {
 }
 .el-dialog__footer {
   padding: 12px 20px 16px;
+}
+
+/* ===== 统一表单弹窗（components/common/FormDialog.vue）=====
+ * 高表单内部滚动、矮表单自然高度，避免长表单溢出视口。 */
+.wb-form-dialog .el-dialog__body {
+  max-height: 66vh;
+  overflow: auto;
+}
+
+/* ===== 统一表单栅格（与 FormDialog / Field 配套）===== */
+.wb-fgrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+  align-items: start;
+}
+.wb-fgrid--1 {
+  grid-template-columns: minmax(0, 1fr);
+}
+.wb-fgrid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.wb-fsect {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wb-fsect__title {
+  margin: 0;
+  font-size: var(--wb-fs-label, 11px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--wb-muted);
 }
 
 /* 抽屉：精细描边 */

@@ -22,20 +22,18 @@ async function handleSaveSmtp(): Promise<void> {
 </script>
 
 <template>
-  <section class="card p-5">
-    <h2 class="mb-4 font-display text-sm font-semibold text-wb-ink">
+  <section class="card p-4">
+    <h2 class="mb-3 font-display text-sm font-semibold text-wb-ink">
       {{ t('settings.smtp') }}
     </h2>
     <el-form class="wb-el-form wb-form-grid" label-position="top">
-      <div class="wb-form-section">
-        <h3 class="wb-form-section__title">{{ t('settings.section.status') }}</h3>
-        <div class="flex items-center gap-3 rounded-lg border border-wb-border bg-wb-surface-2 px-3 py-2.5">
-          <el-switch
-            :model-value="smtpConfig.enabled === 'true'"
-            @update:model-value="(v: string | number | boolean) => (smtpConfig.enabled = String(v))"
-          />
-          <span class="text-sm text-wb-ink">{{ t('settings.smtpEnabled') }}</span>
-        </div>
+      <!-- 单行开关不值得一个 section 标题，直接平铺 -->
+      <div class="flex items-center gap-3 rounded-lg border border-wb-border bg-wb-surface-2 px-3 py-2">
+        <el-switch
+          :model-value="smtpConfig.enabled === 'true'"
+          @update:model-value="(v: string | number | boolean) => (smtpConfig.enabled = String(v))"
+        />
+        <span class="text-sm text-wb-ink">{{ t('settings.smtpEnabled') }}</span>
       </div>
 
       <div class="wb-form-section">

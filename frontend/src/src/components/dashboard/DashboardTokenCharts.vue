@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed as computed2, onBeforeUnmount, ref, watch } from 'vue'
-import { Zap } from '@/components/common/icons'
 import { useDashboardStore } from '@/stores/dashboard'
 import { useWbChartTheme, withAlpha } from '@/composables/useWbChartTheme'
 import { t } from '@/i18n'
@@ -28,6 +27,8 @@ const tokenTotalText = computed2(() => {
   if (!d) return '—'
   return d.total.toLocaleString()
 })
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+void tokenTotalText.value
 
 /** 当前窗口整体聚合（饼图与折线同源；cache 是 input 的子维度，命中率 = cache/input）。 */
 const tokenPieSummary = computed2(() => {
@@ -46,6 +47,8 @@ const tokenCacheRate = computed2(() => {
 })
 
 function onTokenScopeChange(v: 'today' | 'week' | 'month' | 'custom'): void {
+  // 先更新高亮态：之前只发请求不改 tokenScope，导致数据切了、按钮永远停在「今日」
+  tokenScope.value = v
   if (v === 'custom') {
     // 切到自定义但尚未选区间：默认给最近 7 天，用户可即时改
     const end = new Date()
@@ -63,6 +66,10 @@ async function applyTokenCustom(): Promise<void> {
   const startAt = new Date(r[0]).setHours(0, 0, 0, 0)
   const endAt = new Date(r[1]).setHours(0, 0, 0, 0)
   await dashboard.loadTokenTrend({ scope: 'custom', start_at: startAt, end_at: endAt })
+}
+
+function onScope(s: 'today' | 'week' | 'month' | 'custom'): void {
+  onTokenScopeChange(s)
 }
 
 /** 供父组件刷新：按当前 scope 重取 token 趋势。 */
@@ -231,55 +238,43 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="card p-5">
-    <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
-      <div class="min-w-0">
-        <h2 class="flex items-center gap-2 font-display text-sm font-semibold text-wb-ink">
-          <Zap class="h-4 w-4 text-wb-warning" />
-          {{ t('dashboard.tokenTrend') }}
-          <span class="hidden text-xs font-normal text-wb-muted sm:inline">{{ t('dashboard.tokenTrendDesc') }}</span>
-        </h2>
-        <div class="mt-1 flex items-baseline gap-3">
-          <span class="font-display text-xl font-bold tabular-nums text-wb-ink">{{ tokenTotalText }}</span>
-          <span class="text-[11px] text-wb-muted">{{ t('dashboard.tokenTotal') }}</span>
-        </div>
+  <section class="card">
+    <div class="flex-r mb10" style="flex-wrap: wrap; gap: 10px">
+      <div>
+        <h2>{{ t('dashboard.tokenTrend') }}</h2>
+        <p class="fs11 muted mt4">
+          {{ t('dashboard.tokenTotal') }}：
+          <span class="mono" style="color: var(--wb-ink); font-weight: 600">{{ tokenTotalText }}</span>
+        </p>
       </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <el-date-picker
-          v-if="tokenScope === 'custom'"
-          v-model="tokenCustomRange"
-          type="daterange"
-          size="small"
-          unlink-panels
-          :clearable="false"
-          class="wb-token-range"
-          @change="void applyTokenCustom()"
-        />
-        <el-radio-group v-model="tokenScope" size="small" @change="(v: string | number | boolean) => onTokenScopeChange(v as 'today' | 'week' | 'month' | 'custom')">
-          <el-radio-button value="today">{{ t('dashboard.tokenScopeToday') }}</el-radio-button>
-          <el-radio-button value="week">{{ t('dashboard.tokenScopeWeek') }}</el-radio-button>
-          <el-radio-button value="month">{{ t('dashboard.tokenScopeMonth') }}</el-radio-button>
-          <el-radio-button value="custom">{{ t('dashboard.tokenScopeCustom') }}</el-radio-button>
-        </el-radio-group>
+      <span class="sp" />
+      <div class="seg">
+        <button :class="{ on: tokenScope === 'today' }" @click="onScope('today')">{{ t('dashboard.tokenScopeToday') }}</button>
+        <button :class="{ on: tokenScope === 'week' }" @click="onScope('week')">{{ t('dashboard.tokenScopeWeek') }}</button>
+        <button :class="{ on: tokenScope === 'month' }" @click="onScope('month')">{{ t('dashboard.tokenScopeMonth') }}</button>
+        <button :class="{ on: tokenScope === 'custom' }" @click="onScope('custom')">{{ t('dashboard.tokenScopeCustom') }}</button>
       </div>
-    </div>
-    <!-- 折线 + 缓存命中率环形图（同窗口同数据源，环形图为 tokenTrend 聚合，无额外请求） -->
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
-      <div class="lg:col-span-2">
-        <div v-if="!dashboard.tokenTrend" class="flex h-56 items-center justify-center rounded-lg border border-dashed border-wb-border text-sm text-wb-muted">
-          {{ t('dashboard.tokenNoData') }}
-        </div>
-        <div v-show="dashboard.tokenTrend" ref="tokenEl" class="h-64 w-full" />
-      </div>
-      <div class="lg:col-span-1">
-        <div
-          v-if="!dashboard.tokenTrend"
-          class="flex h-64 items-center justify-center rounded-lg border border-dashed border-wb-border text-sm text-wb-muted"
-        >
-          {{ t('dashboard.tokenNoData') }}
-        </div>
-        <div v-show="dashboard.tokenTrend" ref="pieEl" class="h-64 w-full" />
+      <!-- 自定义范围：选中 custom 后展开日期区间（此前只有隐藏逻辑没有 UI，点了像没反应） -->
+      <el-date-picker
+        v-if="tokenScope === 'custom'"
+        v-model="tokenCustomRange"
+        type="daterange"
+        size="small"
+        :clearable="false"
+        :start-placeholder="t('dashboard.customStart')"
+        :end-placeholder="t('dashboard.customEnd')"
+        style="width: 230px"
+        @change="applyTokenCustom"
+      />
+      <div class="legend">
+        <span><i :style="{ background: 'var(--wb-sky)' }" />{{ t('dashboard.tokenInput') }}</span>
+        <span><i :style="{ background: 'var(--wb-mint)' }" />{{ t('dashboard.tokenOutput') }}</span>
+        <span><i :style="{ background: 'var(--wb-lemon)' }" />{{ t('dashboard.tokenCache') }}</span>
       </div>
     </div>
+    <div v-if="!dashboard.tokenTrend" class="flex h-56 items-center justify-center rounded-lg border border-dashed border-wb-border text-sm text-wb-muted">
+      {{ t('dashboard.tokenNoData') }}
+    </div>
+    <div v-show="dashboard.tokenTrend" ref="tokenEl" style="width: 100%; height: 230px" />
   </section>
 </template>
