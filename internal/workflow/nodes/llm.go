@@ -21,6 +21,7 @@ type ReactRequest struct {
 	Tools        []string // 工具名白名单；空 = 不带工具
 	MaxTurns     int      // <=0 = 执行方默认
 	Temperature  *float64
+	ExecutionID  string // 所属工作流执行 ID（计量落库关联用；可为空）
 }
 
 // ReactResult 一次「带工具的 LLM 执行」结果。
@@ -44,9 +45,14 @@ type ReactFunc func(ctx context.Context, req ReactRequest) (ReactResult, error)
 // 未配置或装配方未提供 ReactFunc 时退化为单次补全。
 // 用户提示词优先 upstream.userPrompt，其次 cfg.userPromptTemplate。
 type LLMNode struct {
-	reg   *registry.Registry
-	react ReactFunc
+	reg       *registry.Registry
+	react     ReactFunc
+	usageSink UsageSink
 }
+
+// UsageSink 记录一次 LLM 调用的用量（计量通道）；nil = 不记录。
+// 补全路径直接回调；ReAct 路径由执行器（WorkflowReactor）按 turn 明细自行落库。
+type UsageSink func(executionID, providerID, model string, usage llm.TokenUsage)
 
 // NewLLMNode 构造；注入 *registry.Registry；自动注册 schema。
 func NewLLMNode(reg *registry.Registry) *LLMNode {
@@ -59,6 +65,14 @@ func NewLLMNode(reg *registry.Registry) *LLMNode {
 func (n *LLMNode) WithReactor(f ReactFunc) *LLMNode {
 	if f != nil {
 		n.react = f
+	}
+	return n
+}
+
+// WithUsageSink 注入计量回调；未注入时 LLM 调用不落 token_usages（总消耗统计会偏低）。
+func (n *LLMNode) WithUsageSink(s UsageSink) *LLMNode {
+	if s != nil {
+		n.usageSink = s
 	}
 	return n
 }
@@ -100,6 +114,7 @@ func (n *LLMNode) Execute(ctx context.Context, inputs map[string]any, cfg map[st
 	}
 
 	// 配了 tools 且装配方提供了执行器 → 走 ReAct（模型可多轮调用工具）
+	executionID, _ := inputs["__executionId__"].(string)
 	if toolNames := pickStrings(cfg, "tools"); len(toolNames) > 0 && n.react != nil {
 		var temp *float64
 		if t, ok := cfg["temperature"].(float64); ok {
@@ -113,6 +128,7 @@ func (n *LLMNode) Execute(ctx context.Context, inputs map[string]any, cfg map[st
 			Tools:        toolNames,
 			MaxTurns:     pickInt(cfg, "maxTurns"),
 			Temperature:  temp,
+			ExecutionID:  executionID,
 		})
 		if rerr != nil {
 			return nil, pkg.Wrap(9105, "LLM 节点 ReAct 执行失败", rerr)
@@ -163,6 +179,10 @@ func (n *LLMNode) Execute(ctx context.Context, inputs map[string]any, cfg map[st
 		}
 	}
 	out := map[string]any{"text": text.String(), "usage": usage, "providerID": providerID}
+	// 补全路径同样计量：不落库的话工作流 LLM 节点的 token 消耗会完全不可见
+	if n.usageSink != nil {
+		n.usageSink(executionID, providerID, model, usage)
+	}
 	return out, nil
 }
 

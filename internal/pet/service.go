@@ -80,6 +80,15 @@ func (s *Service) UpdateConfig(ctx context.Context, req domain.PetConfigREQ) (do
 	if req.BubbleDurationMs != nil {
 		row.BubbleDurationMs = *req.BubbleDurationMs
 	}
+	if req.ChatBackground != nil {
+		row.ChatBackground = *req.ChatBackground
+	}
+	if req.BackgroundOpacity != nil {
+		row.BackgroundOpacity = *req.BackgroundOpacity
+	}
+	if req.BackgroundBlurPx != nil {
+		row.BackgroundBlurPx = *req.BackgroundBlurPx
+	}
 	if err := s.cfgRepo.Upsert(ctx, row); err != nil {
 		return domain.PetConfigRESP{}, err
 	}
@@ -226,7 +235,8 @@ func toConfigRESP(d *domain.PetConfigDO) domain.PetConfigRESP {
 		UserID: d.UserID, Enabled: d.Enabled, Mode: d.Mode, SpriteID: d.SpriteID,
 		PositionX: d.PositionX, PositionY: d.PositionY, Scale: d.Scale,
 		BubbleEnabled: d.BubbleEnabled, BubbleDurationMs: d.BubbleDurationMs,
-		UpdatedAt: d.UpdatedAt,
+		ChatBackground: d.ChatBackground, BackgroundOpacity: d.BackgroundOpacity,
+		BackgroundBlurPx: d.BackgroundBlurPx, UpdatedAt: d.UpdatedAt,
 	}
 }
 

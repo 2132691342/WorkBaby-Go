@@ -34,6 +34,9 @@ type AutoCompressor struct {
 	fallback MicroCompressor
 	// Notify 压缩完成回调（可选）：service 层发可见事件/日志。
 	Notify func(removed int, summary string)
+	// OnUsage 压缩摘要调用的用量回调（可选）：摘要消耗真实 token，
+	// 不上报会让「总消耗」统计低于实际。service 层据此落 token_usages。
+	OnUsage func(usage llm.TokenUsage)
 
 	mu               sync.Mutex
 	cachedSummary    string
@@ -153,6 +156,10 @@ func (a *AutoCompressor) summarize(ctx context.Context, prev string, head []*llm
 	})
 	if err != nil {
 		return "", err
+	}
+	// 压缩摘要消耗真实 token：不计量会让总消耗统计系统性偏低
+	if a.OnUsage != nil {
+		a.OnUsage(resp.Usage)
 	}
 	return resp.Message.Content, nil
 }

@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import {
   MessageSquare, LayoutGrid, LayoutDashboard, GitBranch, Clock, Brain, BookOpen,
   Folder, Server, Zap, Radio, ScrollText, Settings, FileText, Layers,
-  Cat, Sparkles, Eraser, RefreshCw, Crosshair, Shield, Wrench
+  Cat, Sparkles, Eraser, RefreshCw, Crosshair, Shield, Wrench, Activity
 } from '@/components/common/icons'
 import { t } from '@/i18n'
 import { apiGet, apiPost } from '@/api/client'
@@ -54,6 +54,7 @@ const NAV_ITEMS = [
   { to: '/chat', labelKey: 'nav.chat', icon: MessageSquare },
   { to: '/home', labelKey: 'nav.overview', icon: LayoutGrid },
   { to: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard },
+  { to: '/runs', labelKey: 'nav.runs', icon: Activity },
   { to: '/workflows', labelKey: 'nav.workflows', icon: GitBranch },
   { to: '/cron', labelKey: 'nav.cron', icon: Clock },
   { to: '/memory', labelKey: 'nav.memory', icon: Brain },

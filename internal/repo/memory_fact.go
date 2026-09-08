@@ -126,8 +126,22 @@ func (r *MemoryFactRepo) SearchFTS(ctx context.Context, query string, topK int) 
 	if topK <= 0 || topK > 100 {
 		topK = 20
 	}
-	q := strings.ReplaceAll(query, `"`, `""`)
-	match := fmt.Sprintf(`subject:"%s" OR key:"%s" OR value:"%s"`, q, q, q)
+	// 按词 × 按列 OR 检索（与知识库同一口径）：整串 phrase 要求逐字出现在
+	// subject/key/value 里，换述即零命中，语义记忆的跨会话召回因此基本失效。
+	toks := pkg.MatchTokens(query)
+	if len(toks) == 0 {
+		// 上层 semantic.go 已有子串扫描回退，这里直接交给它
+		return nil, nil
+	}
+	join := func(col string) string {
+		parts := make([]string, 0, len(toks))
+		for _, t := range toks {
+			// token 由 MatchTokens 保证只含字母数字，无双引号注入面
+			parts = append(parts, fmt.Sprintf(`%s:"%s"`, col, t))
+		}
+		return "(" + strings.Join(parts, " OR ") + ")"
+	}
+	match := join("subject") + " OR " + join("key") + " OR " + join("value")
 	var rows []domain.MemoryFactDO
 	if err := r.db.WithContext(ctx).Raw(`
 		SELECT mf.* FROM memory_facts mf

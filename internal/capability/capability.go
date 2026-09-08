@@ -55,14 +55,16 @@ type CaptureCtx struct {
 	Def        harness.Definition
 }
 
-// 注入顺序：人格 → 工作区 → 记忆 → 知识库 → Skill → 工作流。
+// 注入顺序：人格 → 环境 → 工作区 → 计划 → 记忆 → 知识库 → Skill → 工作流。
 const (
-	OrderPersona    = 10
-	OrderWorkspace  = 20
-	OrderMemory     = 30
-	OrderKnowledge  = 40
-	OrderSkill      = 50
-	OrderWorkflow   = 60
+	OrderPersona      = 10
+	OrderEnvironment  = 15
+	OrderWorkspace    = 20
+	OrderTodo         = 25
+	OrderMemory       = 30
+	OrderKnowledge    = 40
+	OrderSkill        = 50
+	OrderWorkflow     = 60
 )
 
 type entry struct {

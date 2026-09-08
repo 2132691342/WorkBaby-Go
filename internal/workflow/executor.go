@@ -175,7 +175,11 @@ func (e *Executor) runLayer(
 		if nd == nil {
 			continue
 		}
-		if !NodeRunnable(nd, conditionOutputs, skipped) {
+		// 分支跳过判定也读 conditionOutputs / skipped，与兄弟 goroutine 写同一组 map——持锁。
+		mu.Lock()
+		runnable := NodeRunnable(nd, conditionOutputs, skipped)
+		mu.Unlock()
+		if !runnable {
 			e.recordSkipped(execID, nd)
 			mu.Lock()
 			skipped[nd.ID] = true
@@ -187,7 +191,22 @@ func (e *Executor) runLayer(
 		go func(nodeDef *NodeDef) {
 			defer wg.Done()
 
+			// 读 outputs / conditionOutputs 必须持锁：层内兄弟 goroutine 并发写。
+			mu.Lock()
 			upstream := ResolveUpstream(nodeDef, outputs)
+			renderedCfg := RenderConfigMap(nodeDef.Config, outputs)
+			mu.Unlock()
+
+			// 给节点注入执行上下文：HumanInput 节点据此拼 waiter key（识别 execution/node）。
+			// 上游覆盖在「执行上下文」之前，保留上下文优先。
+			ctxInputs := map[string]any{
+				"__executionId__": execID,
+				"__nodeId__":      nodeDef.ID,
+			}
+			for k, v := range upstream {
+				ctxInputs[k] = v
+			}
+
 			nodeExecID := e.startNodeExec(ctx, execID, nodeDef, upstream)
 
 			impl, ok := e.nodes[nodeDef.Type]
@@ -201,8 +220,7 @@ func (e *Executor) runLayer(
 				return
 			}
 
-			renderedCfg := RenderConfigMap(nodeDef.Config, outputs)
-			out, err := impl.Execute(ctx, upstream, renderedCfg, upstream)
+			out, err := impl.Execute(ctx, ctxInputs, renderedCfg, upstream)
 			if err != nil {
 				e.finishNodeFailed(ctx, nodeExecID, err)
 				mu.Lock()

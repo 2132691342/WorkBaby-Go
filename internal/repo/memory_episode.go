@@ -3,7 +3,6 @@ package repo
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"WorkBaby/internal/domain"
@@ -44,8 +43,11 @@ func (r *MemoryEpisodeRepo) SearchFTS(ctx context.Context, query string, topK in
 	if q == "" {
 		return nil, nil
 	}
-	// trigram 子串匹配：需要双引号包裹才不按 token 拆分
-	match := fmt.Sprintf(`"%s"`, strings.ReplaceAll(q, `"`, `""`))
+	// 按词 OR 检索（与知识库同一口径，见 pkg.BuildMatchQuery），按 rank 排序
+	match := pkg.BuildMatchQuery(q)
+	if match == "" {
+		return r.searchEpisodeLike(ctx, q, topK)
+	}
 	var rows []domain.MemoryEpisodeDO
 	if err := r.db.WithContext(ctx).Raw(`
 		SELECT me.* FROM memory_episodes me
@@ -54,6 +56,21 @@ func (r *MemoryEpisodeRepo) SearchFTS(ctx context.Context, query string, topK in
 		ORDER BY f.rank
 		LIMIT ?`, match, topK).Scan(&rows).Error; err != nil {
 		return nil, pkg.Wrap(6004, "search memory fts failed", err)
+	}
+	return rows, nil
+}
+
+// searchEpisodeLike 兜底：所有 token 都短于 trigram 最小窗口（如 2 字中文「部署」）时
+// 走 LIKE 子串扫描，本地单库规模下代价可接受。
+func (r *MemoryEpisodeRepo) searchEpisodeLike(ctx context.Context, q string, topK int) ([]domain.MemoryEpisodeDO, error) {
+	like := "%" + pkg.EscapeLike(q) + "%"
+	var rows []domain.MemoryEpisodeDO
+	if err := r.db.WithContext(ctx).Raw(`
+		SELECT me.* FROM memory_episodes me
+		WHERE me.summary LIKE ? ESCAPE '\'
+		ORDER BY me.created_at DESC
+		LIMIT ?`, like, topK).Scan(&rows).Error; err != nil {
+		return nil, pkg.Wrap(6004, "search memory like failed", err)
 	}
 	return rows, nil
 }

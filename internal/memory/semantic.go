@@ -20,6 +20,7 @@ func (s *semantic) List(ctx context.Context, limit int) ([]domain.MemoryFactDO, 
 }
 
 // Write 写入/覆盖一条事实（同 subject+key 视为同一事实）。
+// Source 记来源会话 ID（面板溯源）；提案未带时留空。
 func (s *semantic) Write(ctx context.Context, p FactProposal) (string, error) {
 	now := time.Now().UnixMilli()
 	row := &domain.MemoryFactDO{
@@ -28,6 +29,7 @@ func (s *semantic) Write(ctx context.Context, p FactProposal) (string, error) {
 		Key:        p.Key,
 		Value:      p.Value,
 		Confidence: p.Confidence,
+		Source:     p.SessionID,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}

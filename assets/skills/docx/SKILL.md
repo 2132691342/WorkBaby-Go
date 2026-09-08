@@ -1,6 +1,14 @@
 ---
 name: docx
 version: 2.0.1
+when_to_use:
+  - .docx
+  - word 文档
+  - word文档
+  - 生成 word
+  - 转 word
+  - 会议纪要
+  - 合同
 description: "Comprehensive Word (.docx) skill: create, read, edit, and manipulate Word documents end-to-end. Covers turning Markdown or structured text into polished Word output, filling reusable templates ({{token}} or reference-doc), applying correct Chinese (CJK) typography defaults, generating bespoke docs from scratch with docx-js, and low-level OOXML patching including tracked changes and comments. Triggers include any mention of 'Word doc', 'word document', '.docx', '报告', '备忘录', '信函', '合同', '会议纪要', 'Markdown 转 Word', 'md 转 docx', '套模板生成 Word', '中文 Word 报告', 'tracked changes', '修订标记', 'Word 批注', 'OOXML', or requests to insert/replace images, perform find-and-replace, or convert content into a polished Word document. Do NOT use for PDFs, spreadsheets, Google Docs, or general coding tasks unrelated to document generation."
 description_zh: "全功能 Word(.docx) 技能：端到端创建、读取、编辑和操作 Word 文档。覆盖 Markdown/结构化文本转 Word、模板套用（{{token}} 或 reference-doc 两种）、正确的中文排版默认值、用 docx-js 从零定制文档、以及 OOXML 底层修补（含修订标记、批注）。触发词：'Word 文档'、'.docx'、'报告/备忘录/信函/合同/会议纪要'、'Markdown 转 Word'、'md 转 docx'、'套模板生成 Word'、'中文 Word 报告'、'修订标记'、'Word 批注'、'OOXML'，以及插入/替换图片、查找替换、把内容转为精美 Word 文档等请求。不适用于 PDF、电子表格、Google Docs 或与文档生成无关的编程任务。"
 license: Proprietary

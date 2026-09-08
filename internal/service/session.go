@@ -23,6 +23,9 @@ const (
 // sessionMetaKeyCompactInstructions 保留指示的元数据键（/compact 落点）。
 const sessionMetaKeyCompactInstructions = "compact_instructions"
 
+// sessionMetaKeyArchiveSummary 归档摘要的元数据键（/compact 落点，buildSystem 注入）。
+const sessionMetaKeyArchiveSummary = "compact_archive_summary"
+
 // SearchSessions 跨会话检索（/resume 快速检索）。
 //
 // 标题命中优先于正文命中；两者都命中时只出现一次（标题命中优先）。
@@ -191,5 +194,11 @@ func (s *ChatService) writeSessionMeta(ctx context.Context, ses *domain.ChatSess
 // compactInstructions 读会话上的保留指示；未设置返回空串。
 func compactInstructions(ses *domain.ChatSessionDO) string {
 	v, _ := readSessionMeta(ses)[sessionMetaKeyCompactInstructions].(string)
+	return strings.TrimSpace(v)
+}
+
+// archiveSummary 读会话上的归档摘要；未设置返回空串。
+func archiveSummary(ses *domain.ChatSessionDO) string {
+	v, _ := readSessionMeta(ses)[sessionMetaKeyArchiveSummary].(string)
 	return strings.TrimSpace(v)
 }

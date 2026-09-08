@@ -1,6 +1,14 @@
 ---
 name: pdf
 version: 1.0.4
+when_to_use:
+  - pdf
+  - 合并 pdf
+  - 拆分 pdf
+  - pdf 水印
+  - pdf 加密
+  - 生成 pdf
+  - 转 pdf
 description: >
   Operates on PDF files: inspect/fill forms, merge/split, watermark, encrypt/decrypt, strip metadata, extract tables or images, compress, validate, render pages to images (so the agent can read scanned PDFs with vision); render an existing .md/.html/.tex source file to PDF; or create new branded PDFs from MDX (reports, briefings, whitepapers). Do not use for: reading/summarizing/analyzing PDF content (use parse_file); PDF → Word (use pdf-convert-to-word); editing Word/PPT/spreadsheets; unauthorized files.
 description_zh: >

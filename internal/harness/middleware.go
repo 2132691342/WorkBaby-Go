@@ -96,17 +96,9 @@ func (t *HistoryTruncator) BeforeTurn(ms []*llm.Message) []*llm.Message {
 	return out
 }
 
-// estimateTokens 粗略估算消息 token 总量（utf8 字符数 / 4）。
-func estimateTokens(ms []*llm.Message) int {
-	n := 0
-	for _, m := range ms {
-		if m == nil {
-			continue
-		}
-		n += len([]rune(m.Content)) + len([]rune(m.Thinking))
-	}
-	return n / 4
-}
+// estimateTokens 消息 token 估算；委托给 EstimateTokens 保证全 harness 同一口径
+// （两份估算器各算各的，是压缩阈值失准的历史成因）。
+func estimateTokens(ms []*llm.Message) int { return EstimateTokens(ms) }
 
 // defaultMiddlewares 默认中间件链。
 func defaultMiddlewares() []Middleware {

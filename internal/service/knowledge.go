@@ -33,12 +33,15 @@ const (
 	MaxManagedDocBytes = 60 << 20 // 单文件 ≤ 60MB（对应当前文档解析面）
 )
 
-// managedDocExts 允许导入受管库的扩展名白名单（与文档 loader 支持面一致）：
-// 只收主流文本类与 PDF 格式，拒收 doc/docx 等私有二进制格式。
+// managedDocExts 允许导入受管库的扩展名白名单（与文档 loader 支持面一致）。
+//
+// .docx 已在 loader 中实现解包（archive/zip + word/document.xml），白名单一并放开；
+// 旧版私文档二进制 .doc 仍拒收（结构老旧、依赖重）。
 var managedDocExts = map[string]bool{
 	".txt": true, ".md": true, ".markdown": true, ".pdf": true,
 	".json": true, ".yaml": true, ".yml": true, ".xml": true,
 	".csv": true, ".html": true, ".htm": true,
+	".docx": true,
 }
 
 // AddDoc 新建文档并后台索引；索引状态通过 GetDoc 轮询。
@@ -235,13 +238,17 @@ func (s *KnowledgeService) UpdateDoc(ctx context.Context, id string, req *domain
 	if req.Name != "" {
 		row.Name = strings.TrimSpace(req.Name)
 	}
-	if req.Source != "" && req.Source != row.Source {
+	// 先记下旧来源：row.Source 下面会被赋成 req.Source，若用更新后的值判断
+	// 「是否换源」会恒为 false，导致改了 text/URL 的文档永远不再重索引（状态卡 pending）。
+	oldSource := row.Source
+	sourceChanged := req.Source != "" && req.Source != oldSource
+	if sourceChanged {
 		if st, err := normalizeSourceType(req.SourceType, req.Source); err == nil {
 			row.SourceType = st
 		}
 		if row.SourceType == domain.KnowledgeSourceFile {
 			// file 型换源 → 也走受管复制（旧受管文件级联清理），DB 不裸引用用户路径
-			if s.dir != "" && strings.HasPrefix(req.Source, s.dir+string(os.PathSeparator)) {
+			if underManagedDir(s.dir, req.Source) {
 				// 已是受管目录内路径（如编辑回显），直接沿用
 				row.Source = req.Source
 			} else {
@@ -252,7 +259,7 @@ func (s *KnowledgeService) UpdateDoc(ctx context.Context, id string, req *domain
 				if cerr != nil {
 					return nil, cerr
 				}
-				if s.dir != "" && strings.HasPrefix(row.Source, s.dir+string(os.PathSeparator)) {
+				if underManagedDir(s.dir, row.Source) {
 					_ = os.Remove(row.Source)
 				}
 				row.Source = dst
@@ -268,8 +275,8 @@ func (s *KnowledgeService) UpdateDoc(ctx context.Context, id string, req *domain
 	if err := s.docRepo.Update(ctx, row); err != nil {
 		return nil, err
 	}
-	// 来源变化 → 后台重索引
-	if req.Source != "" && req.Source != row.Source {
+	// 来源变化 → 后台重索引（与上面用同一个 oldSource 比较，不能用已更新的 row.Source）
+	if sourceChanged {
 		go func(docID string) {
 			bctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
@@ -277,6 +284,29 @@ func (s *KnowledgeService) UpdateDoc(ctx context.Context, id string, req *domain
 		}(row.ID)
 	}
 	return toKnowledgeRESP(row), nil
+}
+
+// underManagedDir 判定路径是否真正落在受管知识库目录内。
+//
+// 不能用 HasPrefix：`{dir}\..\..\任意文件.txt` 能通过前缀检查却被当作受管源读取，
+// 是标准的 .. 穿越。先 Abs 归一，再用 Rel 判定不逃逸。
+func underManagedDir(dir, p string) bool {
+	if dir == "" || p == "" {
+		return false
+	}
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
 // ListGroups 返回全部分组（按 source_type 去重；前端 group 下拉用）。

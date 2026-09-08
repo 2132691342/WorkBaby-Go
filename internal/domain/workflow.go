@@ -93,14 +93,15 @@ type WorkflowPos struct {
 
 // WorkflowDAGNode 可视化编辑器节点（Vue Flow 格式）。
 //
-// Branch 是 condition 分支归属（"true"/"false"/自定义字符串）；Pos 是画布坐标，
-// 二者都持久化到 Graph JSON，保证编辑器所见即所存。
+// Branch 是 condition 分支归属（"true"/"false"/自定义字符串）；Pos 是画布坐标；
+// Inputs 是节点入参变量引用（key → "nodeId.field"），三 者都持久化到 Graph JSON。
 type WorkflowDAGNode struct {
-	ID     string         `json:"id"`
-	Type   string         `json:"type"`
-	Params map[string]any `json:"params"`
-	Branch string         `json:"branch,omitempty"`
-	Pos    *WorkflowPos   `json:"pos,omitempty"`
+	ID     string            `json:"id"`
+	Type   string            `json:"type"`
+	Params map[string]any    `json:"params"`
+	Branch string            `json:"branch,omitempty"`
+	Pos    *WorkflowPos      `json:"pos,omitempty"`
+	Inputs map[string]string `json:"inputs,omitempty"` // 入参变量引用：key → "nodeId.field"
 }
 
 // WorkflowDAGEdge 可视化编辑器连线。
@@ -134,6 +135,7 @@ type WorkflowNodeTypeRESP struct {
 // WorkflowDAGREQ 可视化编辑器保存的图（前端格式；service 转换为 Graph JSON 落库）。
 type WorkflowDAGREQ struct {
 	Name    string            `json:"name"`
+	Inputs  map[string]string `json:"inputs,omitempty"`  // 图级入参：key → "nodeId.field" 引用
 	Nodes   []WorkflowDAGNode `json:"nodes"`
 	Edges   []WorkflowDAGEdge `json:"edges"`
 	Outputs map[string]string `json:"outputs,omitempty"` // 图级输出：key → "nodeId.field"
@@ -142,6 +144,7 @@ type WorkflowDAGREQ struct {
 // WorkflowDAGRESP 可视化编辑器加载的图（后端 Graph JSON → 前端格式）。
 type WorkflowDAGRESP struct {
 	Name    string            `json:"name"`
+	Inputs  map[string]string `json:"inputs,omitempty"`
 	Nodes   []WorkflowDAGNode `json:"nodes"`
 	Edges   []WorkflowDAGEdge `json:"edges"`
 	Outputs map[string]string `json:"outputs,omitempty"` // 图级输出：key → "nodeId.field"

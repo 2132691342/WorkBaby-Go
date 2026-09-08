@@ -21,7 +21,11 @@ import (
 
 const (
 	// maxFileBytes 单文件最大读取字节（防 OOM）。
-	maxFileBytes = 20 << 20
+	//
+	// 与 service.KnowledgeService.MaxManagedDocBytes 对齐：导入允许 ≤ 60MB，
+	// loader 必须能读完整文件否则索引必然失败。URL 抓取有更严的 urlMaxBytes（5MB），
+	// 与单文件上限独立。
+	maxFileBytes = 60 << 20
 	// urlTimeout / urlMaxBytes 远程抓取限制。
 	urlTimeout  = 30 * time.Second
 	urlMaxBytes = 5 << 20
@@ -331,6 +335,8 @@ func MIMEFromPath(path string) string {
 		return "application/yaml"
 	case ".xml":
 		return "application/xml"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 	default:
 		return ""
 	}

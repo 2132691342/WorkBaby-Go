@@ -112,10 +112,13 @@ func (r *DashboardRepo) CountTodayMessages(ctx context.Context, todayStart int64
 	return r.count(ctx, &domain.MessageDO{}, todayStart)
 }
 
-// SumTodayTokens 今日 token 消耗（assistant 消息 totalTokens 求和）。
+// SumTodayTokens 今日 token 消耗（token_usages 求和）。
+//
+// 与 TokenTrend 同源（token_usages 每次 LLM 调用一行）：chat_messages.total_tokens
+// 只存末轮 per-turn 汇总，多轮工具 run 会被严重低估，两处数字对不上。
 func (r *DashboardRepo) SumTodayTokens(ctx context.Context, todayStart int64) (int64, error) {
 	var sum int64
-	if err := r.db.WithContext(ctx).Model(&domain.MessageDO{}).
+	if err := r.db.WithContext(ctx).Model(&domain.TokenUsageDO{}).
 		Where("created_at >= ?", todayStart).
 		Select("COALESCE(SUM(total_tokens), 0)").
 		Scan(&sum).Error; err != nil {
@@ -176,7 +179,9 @@ func (r *DashboardRepo) Trend(ctx context.Context, days int) (*domain.DashboardT
 			Count(&messages).Error; err != nil {
 			return nil, pkg.Wrap(2010, "trend messages failed", err)
 		}
-		if err := r.db.WithContext(ctx).Model(&domain.MessageDO{}).
+		// token 与 SumTodayTokens / TokenTrend 同源（token_usages 逐调用明细）：
+		// messages.total_tokens 是末轮 per-turn 汇总，多轮 run 会低估每日消耗。
+		if err := r.db.WithContext(ctx).Model(&domain.TokenUsageDO{}).
 			Where("created_at >= ? AND created_at < ?", start.UnixMilli(), end.UnixMilli()).
 			Select("COALESCE(SUM(total_tokens), 0)").
 			Scan(&tokens).Error; err != nil {

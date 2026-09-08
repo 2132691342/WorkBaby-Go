@@ -151,7 +151,9 @@ func (t *ExecTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(execCtx, req.Command, req.Args...)
+	// 平台侧解析：Windows 上 .cmd 外壳与 cmd 内建命令需包 cmd /c 才能 CreateProcess
+	exe, prefix := resolveCommand(req.Command)
+	cmd := exec.CommandContext(execCtx, exe, append(prefix, req.Args...)...)
 	switch {
 	case req.Cwd != "":
 		cmd.Dir = req.Cwd
@@ -186,25 +188,26 @@ func (t *ExecTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 	return tool.ToolResult{Content: string(output), Meta: meta}
 }
 
-// envWithPath 返回在现有环境基础上把 dirs 前置到 PATH 的环境切片
-// （Windows 变量名不区分大小写，用前缀 PATH= 匹配替换）。
+// envWithPath 返回在现有环境基础上把 dirs 前置到 PATH 的环境切片。
+//
+// Windows 的环境变量名大小写不敏感，os.Environ() 可能返回 "Path=" 而非 "PATH="：
+// 按字面前缀匹配会漏掉，导致原 PATH 被丢弃、子进程只剩内置运行时目录。
+// 这里用 os.Getenv（Windows 上大小写不敏感）取值，再按不区分大小写的键名整条替换。
 func envWithPath(dirs []string) []string {
 	sep := string(os.PathListSeparator)
 	extra := strings.Join(dirs, sep)
-	env := make([]string, 0, len(os.Environ()))
-	pathVal, hasPath := "", false
+	pathVal := os.Getenv("PATH")
+	if pathVal == "" {
+		pathVal = extra
+	} else {
+		pathVal = extra + sep + pathVal
+	}
+	env := make([]string, 0, len(os.Environ())+1)
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "PATH=") {
-			pathVal = kv[len("PATH="):]
-			hasPath = true
+		if i := strings.Index(kv, "="); i > 0 && strings.EqualFold(kv[:i], "PATH") {
 			continue
 		}
 		env = append(env, kv)
-	}
-	if hasPath {
-		pathVal = extra + sep + pathVal
-	} else {
-		pathVal = extra
 	}
 	return append(env, "PATH="+pathVal)
 }

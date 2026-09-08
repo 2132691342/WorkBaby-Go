@@ -9,19 +9,9 @@ import (
 	"WorkBaby/internal/llm"
 )
 
-// 文本工具调用兜底：部分 OpenAI 兼容端点不支持结构化 tool_calls，会把调用意图写成正文。
-//
-// 解析形态（按优先级）：
-//   - XML 标签：<tool_call name="x">{...}</tool_call> 或 <tool_call>{"name":"x",...}</tool_call>
-//   - Markdown 代码块：```json { ... } ```
-//   - 整段正文就是一个裸 JSON 对象。
-//
-// 参数别名：name/tool、input/arguments 都认，兼容各家 prompt 约定。
-//
-// 安全约束：
-//   - 只有 JSON 携带「本次 run 暴露给 LLM 的工具名」（defs 白名单）才解析为调用，
-//     普通的 JSON 代码示例 / 数据回答不受影响；
-//   - 单轮最多解析 maxTextToolCalls 个，防止模型刷屏式误触发。
+// 文本工具调用兜底：部分 OpenAI 兼容端点不支持结构化 tool_calls，把调用意图写成正文。
+// 按 XML 标签 → Markdown 代码块 → 裸 JSON 三种形态解析（name/tool、input/arguments 别名都认）。
+// 安全约束：只认本次 run 暴露的工具名（defs 白名单），单轮最多解析 maxTextToolCalls 个。
 type textToolCall struct {
 	Name      string         `json:"name"`
 	Tool      string         `json:"tool"`

@@ -12,7 +12,7 @@ import Field from '@/components/common/Field.vue'
 import type { AiProvider } from '@/types/api'
 
 /**
- * 设置 · 模型 tab（照 prd/WorkBaby-UI-Prototype.html 20 屏原型排版）：
+ * 设置 · 模型 tab。
  *
  * <p>布局：
  * <ol>
@@ -20,9 +20,6 @@ import type { AiProvider } from '@/types/api'
  *   <li><b>全局默认参数</b>卡片：温度 / 思考强度 / 压缩阈值 / 输入上限。</li>
  *   <li><b>已配置模型</b>卡片：表格一行一模型，状态徽标 + 测试 / 编辑 / 删除。</li>
  * </ol>
- *
- * <p>关键：新增 / 编辑都是同一张 720px 表单弹窗（统一交互与排版），
- * 不再有「页内折叠表单」与「弹窗」两套写法。
  */
 const settings = useSettingsStore()
 const toast = useToast()
@@ -402,7 +399,8 @@ defineExpose({ load })
       @confirm="submitDialog"
       @close="closeDialog"
     >
-      <div class="wb-fgrid">
+      <!-- 单列栅格：每个输入项/下拉框独占整行，宽度一致、左缘对齐 -->
+      <div class="wb-fgrid wb-fgrid--1">
         <p class="wb-fsect__title">{{ t('settings.section.basic') }}</p>
         <Field :label="t('settings.name')" required :error="dialogFeedback ?? undefined">
           <input v-model="draft.name" class="input" :placeholder="t('settings.namePlaceholder')" />
@@ -435,15 +433,15 @@ defineExpose({ load })
         <Field :label="t('settings.base_url')" :hint="t('settings.baseUrlHint')">
           <input v-model="draft.base_url" class="input mono" :placeholder="baseUrlPlaceholder" />
         </Field>
-        <Field :label="t('settings.model')" required :hint="t('settings.modelHint')" full>
+        <Field :label="t('settings.model')" required :hint="t('settings.modelHint')">
           <input v-model="draft.model" class="input mono" :placeholder="modelPlaceholder" />
         </Field>
 
         <p class="wb-fsect__title">{{ t('settings.section.behavior') }}</p>
-        <Field :label="t('settings.context_window')">
+        <Field :label="t('settings.context_window')" :hint="t('settings.contextWindowHint')">
           <input v-model.number="draft.context_window" class="input mono" type="number" min="1" placeholder="128000" />
         </Field>
-        <Field :label="t('settings.max_output_tokens')">
+        <Field :label="t('settings.max_output_tokens')" :hint="t('settings.maxOutputTokensTip')">
           <input v-model.number="draft.max_output_tokens" class="input mono" type="number" min="1" placeholder="8192" />
         </Field>
         <Field :label="t('settings.compress_ratio')" :hint="t('settings.compressRatioTip')">

@@ -53,13 +53,31 @@ func (c *memoryCap) Preload(ctx context.Context, p *PreloadCtx) ([]harness.Conte
 	}
 	out := make([]harness.ContextPiece, 0, 2)
 	if ltm := c.mem.LongTerm(ctx, p.SessionID); ltm != "" {
-		out = append(out, harness.ContextPiece{Key: "memory", Title: "本会话长期记忆", Body: ltm})
+		// MEMORY.md 上限 100KB，全量注入会一口吃掉上下文预算且挤掉工具定义；
+		// 只注入尾部（按时间追加，最近内容最相关），截断量与 harness 上下文预算同量级。
+		out = append(out, harness.ContextPiece{Key: "memory", Title: "本会话长期记忆",
+			Body: tailRunes(ltm, maxMemoryInjectRunes)})
 	}
 	// 跨会话召回：按本轮输入取相关条目，否则形成过的记忆永远进不了上下文
 	if recalled := c.recallText(ctx, p.UserInput, p.Def.Memory.RecallLimit); recalled != "" {
 		out = append(out, harness.ContextPiece{Key: "recall", Title: "相关记忆（自动召回，仅供参考）", Body: recalled})
 	}
 	return out, nil
+}
+
+// maxMemoryInjectRunes 长期记忆注入上下文的 rune 上限（MEMORY.md 上限 100KB，不能全量进 prompt）。
+const maxMemoryInjectRunes = 4000
+
+// tailRunes 取字符串末尾 n 个 rune：长期记忆按时间追加，最近内容最相关。
+func tailRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[len(r)-n:])
 }
 
 // recallText 按本轮输入召回并渲染；无命中返回空。纯本地检索，不调 LLM、不阻塞首 token。

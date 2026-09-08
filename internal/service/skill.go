@@ -22,13 +22,18 @@ func NewSkillService(r *repo.SkillRepo, reg *skill.Registry) *SkillService {
 }
 
 // SyncBuiltin 启动期：内置 Skill upsert 进表 + 重建 Registry。
+//
+// 用户关闭状态必须保留：内置 SKILL.md 每次启动重新解析（Enabled 恒为 true），
+// 直接 upsert 全字段覆盖会把用户 SetSkillEnabled(false) 的结果重置回 true。
 func (s *SkillService) SyncBuiltin(ctx context.Context) error {
 	rows, err := skill.LoadBuiltin()
 	if err != nil {
 		return err
 	}
 	for i := range rows {
-		// 用户改过的 custom 不覆盖：builtin upsert 保持 enabled 原值
+		if exist, gerr := s.repo.GetByName(ctx, rows[i].Name); gerr == nil && exist != nil {
+			rows[i].Enabled = exist.Enabled
+		}
 		if err := s.repo.Upsert(ctx, &rows[i]); err != nil {
 			return err
 		}

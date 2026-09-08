@@ -23,7 +23,8 @@ import {
   Radio,
   PawPrint,
   ArrowRight,
-  Plus
+  Plus,
+  Activity
 } from '@/components/common/icons'
 import { storeToRefs } from 'pinia'
 import { UploadFile } from '@/wailsjs/go/main/App'
@@ -83,7 +84,8 @@ const mainNav: NavItem[] = [
   { id: 'workflows', to: '/workflows', labelKey: 'nav.workflows', icon: GitBranch },
   { id: 'tasks', to: '/tasks', labelKey: 'nav.tasks', icon: ListTree },
   { id: 'cron', to: '/cron', labelKey: 'nav.cron', icon: Clock },
-  { id: 'dashboard', to: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard }
+  { id: 'dashboard', to: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard },
+  { id: 'runs', to: '/runs', labelKey: 'nav.runs', icon: Activity }
 ]
 
 const resourceNav: NavItem[] = [

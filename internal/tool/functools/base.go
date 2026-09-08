@@ -37,6 +37,11 @@ func (t *FuncTool) Schema() tool.ToolSchema {
 	return tool.ToolSchema{Name: t.name, Description: t.desc, Parameters: json.RawMessage(t.schema)}
 }
 
+// Meta 打 functools 分组标签，让 ToolService 能在「未配置启停」时按分组默认禁用。
+func (t *FuncTool) Meta() tool.ToolMeta {
+	return tool.ToolMeta{Group: tool.GroupFunctools}
+}
+
 // Execute 调用执行函数并把结果序列化为 JSON 文本（ToolResult.Content）。
 // 字符串结果原样返回（LLM 直接读文本），其余类型 JSON 序列化。
 func (t *FuncTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolResult {

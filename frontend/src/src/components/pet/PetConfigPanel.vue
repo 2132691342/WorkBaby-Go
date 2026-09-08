@@ -26,6 +26,7 @@ import {
   type PetMood,
   type PetCharacter
 } from '@/components/pet/PetCharacters'
+import ImageCropper from '@/components/common/ImageCropper.vue'
 import type { PetConfig, PetSprite } from '@/types/api'
 
 const toast = useToast()
@@ -43,6 +44,9 @@ const config = ref<PetConfig>({
   scale: 1,
   bubble_enabled: true,
   bubble_duration_ms: 5000,
+  chat_background: false,
+  background_opacity: 18,
+  background_blur_px: 0,
   updated_at: null
 })
 
@@ -117,30 +121,42 @@ function selectCharacter(character: PetCharacter): void {
   config.value.sprite_id = sprite.id
 }
 
-// 上传自定义图片
+// 上传自定义图片：先过裁剪 / 旋转编辑器，确认后再上传
+const cropperOpen = ref(false)
+const pendingFile = ref<File | null>(null)
+
 function onUploadFileChange(file: { raw?: File }): void {
-  void handleUploadFile(file.raw)
+  const f = file.raw
+  if (!f || !validateFile(f)) return
+  pendingFile.value = f
+  cropperOpen.value = true
 }
 
-async function handleUploadFile(file: File | undefined): Promise<void> {
-  if (!file) return
-
-  // 5MB 校验
+// 尺寸与类型校验；宽容 file.type 缺失的情况（部分浏览器/系统对 png 不返回 mime），
+// 后端仍按扩展名严格白名单 (png/webp/gif/jpg/jpeg)，前端只做 hint。
+function validateFile(file: File): boolean {
   if (file.size > 5 * 1024 * 1024) {
     toast.warning(t('pet.fileTooLarge'))
-    return
+    return false
   }
-  // 类型校验：宽容 file.type 缺失的情况（部分浏览器/系统对 png 不返回 mime）；
-  // 后端仍按扩展名严格白名单 (png/webp/gif/jpg/jpeg)，前端只做 hint。
   const typeOk =
-    !file.type /* 浏览器未识别 */ ||
+    !file.type ||
     /^image\/(png|webp|gif|jpeg|jpg)$/.test(file.type) ||
     /\.(png|webp|gif|jpe?g)$/i.test(file.name)
   if (!typeOk) {
     toast.warning(t('pet.invalidFileType'))
-    return
+    return false
   }
+  return true
+}
 
+async function onCropConfirm(blob: Blob): Promise<void> {
+  cropperOpen.value = false
+  await handleUploadFile(new File([blob], pendingFile.value?.name ?? 'pet.png', { type: 'image/png' }))
+}
+
+async function handleUploadFile(file: File | undefined): Promise<void> {
+  if (!file) return
   uploading.value = true
   try {
     const res = await apiUpload<{ sprite_id: string; name?: string; format: string; size: number }>(
@@ -334,6 +350,30 @@ onMounted(loadConfig)
         <span class="text-xs text-wb-muted">{{ t('pet.bubbleDuration') }}</span>
         <el-input-number v-model="config.bubble_duration_ms" size="small" class="mt-1! w-full" />
       </div>
+
+      <!-- 聊天背景：复用同一个 sprite，避免用户为两处各传一张图 -->
+      <div class="flex items-center justify-between">
+        <span class="text-sm text-wb-ink">{{ t('pet.chatBackground') }}</span>
+        <el-switch v-model="config.chat_background" />
+      </div>
+
+      <template v-if="config.chat_background">
+        <div class="flex items-center justify-between gap-3">
+          <span class="shrink-0 text-sm text-wb-ink">{{ t('pet.backgroundOpacity') }}</span>
+          <div class="flex flex-1 items-center gap-3">
+            <el-slider v-model="config.background_opacity" :min="4" :max="100" :step="2" class="flex-1" />
+            <span class="w-10 shrink-0 text-right text-xs tabular-nums text-wb-ink">{{ config.background_opacity }}%</span>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between gap-3">
+          <span class="shrink-0 text-sm text-wb-ink">{{ t('pet.backgroundBlur') }}</span>
+          <div class="flex flex-1 items-center gap-3">
+            <el-slider v-model="config.background_blur_px" :min="0" :max="20" :step="1" class="flex-1" />
+            <span class="w-10 shrink-0 text-right text-xs tabular-nums text-wb-ink">{{ config.background_blur_px }}</span>
+          </div>
+        </div>
+      </template>
     </div>
 
     <!-- 保存按钮 -->
@@ -347,6 +387,8 @@ onMounted(loadConfig)
     >
       {{ saving ? t('common.saving') : t('pet.save') }}
     </el-button>
+
+    <ImageCropper v-model="cropperOpen" :source="pendingFile" @confirm="onCropConfirm" />
   </div>
 </template>
 

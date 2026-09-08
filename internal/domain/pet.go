@@ -13,7 +13,12 @@ type PetConfigDO struct {
 	Scale            float64 `gorm:"default:1" json:"scale"`
 	BubbleEnabled    bool    `gorm:"default:true" json:"bubble_enabled"`
 	BubbleDurationMs int     `gorm:"default:3000" json:"bubble_duration_ms"`
-	CreatedAt        int64   `gorm:"autoCreateTime:milli" json:"created_at"`
+	// 聊天背景：同一个 sprite 复用为聊天区背景（可开关 / 调不透明度与模糊），
+	// 与桌宠共享形象来源，避免用户为两处各传一张图。
+	ChatBackground    bool `gorm:"default:false" json:"chat_background"`
+	BackgroundOpacity int  `gorm:"default:18" json:"background_opacity"` // 不透明度百分比（0~100）
+	BackgroundBlurPx  int  `gorm:"default:0" json:"background_blur_px"`
+	CreatedAt         int64 `gorm:"autoCreateTime:milli" json:"created_at"`
 	UpdatedAt        int64   `gorm:"autoUpdateTime:milli" json:"updated_at"`
 }
 
@@ -30,6 +35,9 @@ type PetConfigREQ struct {
 	Scale            *float64 `json:"scale"`
 	BubbleEnabled    *bool    `json:"bubble_enabled"`
 	BubbleDurationMs *int     `json:"bubble_duration_ms"`
+	ChatBackground    *bool `json:"chat_background"`
+	BackgroundOpacity *int  `json:"background_opacity"`
+	BackgroundBlurPx  *int  `json:"background_blur_px"`
 }
 
 // PetConfigRESP 出参（对齐前端 PetConfig）。
@@ -43,7 +51,10 @@ type PetConfigRESP struct {
 	Scale            float64 `json:"scale"`
 	BubbleEnabled    bool    `json:"bubble_enabled"`
 	BubbleDurationMs int     `json:"bubble_duration_ms"`
-	UpdatedAt        int64   `json:"updated_at"`
+	ChatBackground    bool `json:"chat_background"`
+	BackgroundOpacity int  `json:"background_opacity"`
+	BackgroundBlurPx  int  `json:"background_blur_px"`
+	UpdatedAt         int64 `json:"updated_at"`
 }
 
 // PetSpriteDO 桌宠 sprite（pet_sprites 表；文件落 {home}/sprites/{id}.{ext}）。

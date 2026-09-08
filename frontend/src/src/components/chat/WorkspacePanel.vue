@@ -4,25 +4,22 @@ import {
   FileText,
   FolderOpen,
   Image,
-  Layers,
   RefreshCw,
-  Download,
   X as Close
 } from '@/components/common/icons'
 import { apiGet } from '@/api/client'
 import { openExternal } from '@/api/shellBridge'
-import type { FolderTreeNode, WorkspaceFile } from '@/types/api'
+import type { WorkspaceFile } from '@/types/api'
 import { t } from '@/i18n'
 import Skeleton from '@/components/common/Skeleton.vue'
-import FolderTree from '@/components/chat/FolderTree.vue'
+import WorkspaceFileTree from '@/components/chat/WorkspaceFileTree.vue'
 
 /**
- * 工作区侧栏：三个 tab 展示当前会话的工作区内容。
+ * 工作区侧栏：两个 tab 展示当前会话的工作区内容。
  *
  * <ul>
- *   <li><b>files</b>：工作区全部文件（`/api/v1/chat/workspace/files/{id}`，含大小与下载）</li>
+ *   <li><b>tree</b>：工作区真实磁盘目录树（懒加载，默认 tab）——用户打开工作区想看的是文件，不是标签</li>
  *   <li><b>artifacts</b>：可内嵌预览的产物（html / url / text / pdf / image）</li>
- *   <li><b>folders</b>：绑定到该会话工作区的逻辑文件夹树</li>
  * </ul>
  */
 const props = defineProps<{
@@ -33,7 +30,9 @@ const props = defineProps<{
   pick?: () => void
 }>()
 
-type TabID = 'files' | 'artifacts' | 'folders'
+const emit = defineEmits<{ attach: [path: string] }>()
+
+type TabID = 'tree' | 'artifacts'
 
 interface TabDef {
   id: TabID
@@ -42,18 +41,15 @@ interface TabDef {
 }
 
 const tabs: TabDef[] = [
-  { id: 'files', labelKey: 'chat.tabFiles', icon: FolderOpen },
-  { id: 'artifacts', labelKey: 'chat.tabArtifacts', icon: Image },
-  { id: 'folders', labelKey: 'chat.tabFolders', icon: Layers }
+  { id: 'tree', labelKey: 'chat.tabDir', icon: FolderOpen },
+  { id: 'artifacts', labelKey: 'chat.tabArtifacts', icon: Image }
 ]
 
-const activeTab = ref<TabID>('files')
+const activeTab = ref<TabID>('tree')
 const files = ref<WorkspaceFile[]>([])
-const folders = ref<FolderTreeNode[]>([])
 const loading = ref(false)
 const selected = ref<WorkspaceFile | null>(null)
-
-const totalFolderCount = computed(() => countNodes(folders.value))
+const treeRef = ref<InstanceType<typeof WorkspaceFileTree> | null>(null)
 
 /** 头部目录展示：外部目录取末两级，默认工作区给固定文案。 */
 const rootDisplay = computed(() => {
@@ -68,30 +64,17 @@ const previewableFiles = computed(() =>
   files.value.filter((f) => ['html', 'url', 'text', 'pdf', 'image'].includes(f.kind))
 )
 
-function countNodes(nodes: FolderTreeNode[]): number {
-  let n = 0
-  for (const x of nodes) {
-    n += 1 + countNodes(x.children ?? [])
-  }
-  return n
-}
-
 watch(
   () => [props.session_id, props.workspace_path] as [string | null, string | null | undefined],
-  ([id, wp], old) => {
-    const [prevId, prevWp] = old ?? [null, undefined]
+  ([id], old) => {
+    const [prevId] = old ?? [null]
     selected.value = null
-    // 绑定路径变化（含切换会话）：文件夹树与文件列表都失效，全部重置重拉
-    if (id !== prevId || wp !== prevWp) folders.value = []
-    if (id) {
-      void load(id)
-    } else {
-      files.value = []
-    }
+    if (id && id !== prevId) void load(id)
   },
   { immediate: true }
 )
 
+/** 产物清单：仅 artifacts tab 用（真实目录树由 WorkspaceFileTree 自行拉取）。 */
 async function load(id: string): Promise<void> {
   loading.value = true
   try {
@@ -103,45 +86,17 @@ async function load(id: string): Promise<void> {
   }
 }
 
-/** 拉取绑定到当前 session workspace 的逻辑文件夹树。 */
-async function loadFolders(id: string): Promise<void> {
-  loading.value = true
-  try {
-    folders.value = await apiGet<FolderTreeNode[]>(
-      `/api/v1/folders/tree?workspaceID=${encodeURIComponent(id)}`
-    )
-  } catch {
-    folders.value = []
-  } finally {
-    loading.value = false
-  }
-}
-
 function selectFile(f: WorkspaceFile): void {
   selected.value = f
 }
 
-function fmtSize(size?: number): string {
-  if (!size) return ''
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
-}
-
-function switchTab(id: TabID): void {
-  activeTab.value = id
-  if (id === 'folders' && props.session_id && folders.value.length === 0) {
-    void loadFolders(props.session_id)
-  }
-}
-
 function onTabChange(name: string | number): void {
-  switchTab(name as TabID)
+  activeTab.value = name as TabID
 }
 
 function refresh(): void {
   if (!props.session_id) return
-  if (activeTab.value === 'folders') void loadFolders(props.session_id)
+  if (activeTab.value === 'tree') treeRef.value?.refresh()
   else void load(props.session_id)
 }
 </script>
@@ -187,46 +142,21 @@ function refresh(): void {
       </el-tab-pane>
     </el-tabs>
 
-    <!-- 内容区按当前 tab 渲染 -->
-    <div class="min-h-0 flex-1 overflow-y-auto p-2">
-      <Skeleton v-if="loading" :lines="4" />
+    <!-- 内容区：tree tab 自带工具行与滚动，外层不套 padding；artifacts 自己滚动 -->
+    <div class="min-h-0 flex-1 overflow-hidden">
+      <Skeleton v-if="loading && activeTab === 'artifacts'" class="p-2" :lines="4" />
 
-      <!-- files：工作区全部文件（含下载） -->
-      <template v-else-if="activeTab === 'files'">
-        <el-empty
-          v-if="files.length === 0"
-          :description="t('chat.workspaceEmpty')"
-          :image-size="48"
-        />
-        <ul v-else class="space-y-0.5">
-          <li
-            v-for="f in files"
-            :key="f.path"
-            class="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition-colors"
-            :class="selected?.path === f.path ? 'bg-wb-primary/10 text-wb-primary-strong' : 'text-wb-ink hover:bg-wb-primary/5'"
-            @click="selectFile(f)"
-          >
-            <component
-              :is="['image'].includes(f.kind) ? Image : FileText"
-              class="h-3.5 w-3.5 shrink-0"
-            />
-            <span class="min-w-0 flex-1 truncate" :title="f.path">{{ f.path }}</span>
-            <span class="shrink-0 text-[10px] text-wb-muted">{{ fmtSize(f.size) }}</span>
-            <a
-              :href="f.url"
-              :download="f.name"
-              :title="t('chat.download')"
-              class="hidden shrink-0 text-wb-muted hover:text-wb-primary-strong group-hover:block"
-              @click.prevent.stop="openExternal(f.url)"
-            >
-              <Download class="h-3 w-3" />
-            </a>
-          </li>
-        </ul>
-      </template>
+      <!-- tree：工作区真实磁盘目录树（懒加载 + 筛选 + 添加到聊天） -->
+      <WorkspaceFileTree
+        v-else-if="activeTab === 'tree'"
+        ref="treeRef"
+        class="h-full"
+        :session_id="session_id"
+        @attach="(p: string) => emit('attach', p)"
+      />
 
       <!-- artifacts：可内嵌预览的产物 -->
-      <template v-else-if="activeTab === 'artifacts'">
+      <div v-else class="h-full overflow-y-auto p-2">
         <el-empty
           v-if="previewableFiles.length === 0"
           :description="t('chat.noArtifacts')"
@@ -244,20 +174,7 @@ function refresh(): void {
             <span class="min-w-0 flex-1 truncate">{{ f.name || f.path }}</span>
           </li>
         </ul>
-      </template>
-
-      <!-- folders：绑定到本会话工作区的逻辑文件夹树 -->
-      <template v-else-if="activeTab === 'folders'">
-        <div class="mb-2 flex items-center justify-between px-1 text-[10px] text-wb-muted">
-          <span>共 {{ totalFolderCount }} 个文件夹</span>
-        </div>
-        <el-empty
-          v-if="folders.length === 0"
-          :description="t('chat.noFolders')"
-          :image-size="48"
-        />
-        <FolderTree v-else :nodes="folders" />
-      </template>
+      </div>
     </div>
 
     <!-- 选中文件预览 -->

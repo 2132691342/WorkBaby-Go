@@ -62,11 +62,12 @@ type ToolMeta struct {
 
 // 展示分组：与前端工具页分组顺序一致。
 const (
-	GroupFile  = "file"
-	GroupExec  = "exec"
-	GroupDoc   = "doc"
-	GroupAgent = "agent"
-	GroupMedia = "media"
+	GroupFile      = "file"
+	GroupExec      = "exec"
+	GroupDoc       = "doc"
+	GroupAgent     = "agent"
+	GroupMedia     = "media"
+	GroupFunctools = "functools" // 纯函数工具（默认禁用，避免 Agent 工具集过载）
 )
 
 // GroupOf 按工具名前缀推导展示分组，未命中再按风险等级兜底。

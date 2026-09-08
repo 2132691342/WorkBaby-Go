@@ -167,7 +167,8 @@ defineExpose({ current })
 </template>
 
 <style scoped>
-/* 顶部次要控制项 chip：统一紧凑外观（与 ChatInput .chip-btn 同款）。 */
+/* 顶部次要控制项 chip：幽灵胶囊（无常驻框线，hover 才浮出底色）。
+   样式在组件内定义（scoped 不跨组件），勿在父组件用 :deep 覙覆盖——注入顺序会输。 */
 .chip-btn {
   display: inline-flex;
   align-items: center;
@@ -175,32 +176,30 @@ defineExpose({ current })
   height: 24px;
   max-width: 240px;
   padding: 0 8px;
-  border: 1px solid var(--wb-border);
+  border: 1px solid transparent;
   border-radius: 9999px;
-  background: var(--wb-surface);
+  background: transparent;
   color: var(--wb-muted);
   font-size: 11px;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
   transition:
-    border-color 0.15s ease,
     color 0.15s ease,
     background-color 0.15s ease;
 }
 .chip-btn:hover {
-  border-color: color-mix(in srgb, var(--wb-primary) 45%, transparent);
-  color: var(--wb-primary-strong);
+  background: var(--wb-surface-hover);
+  color: var(--wb-ink);
 }
 .chip-btn:focus-visible {
   outline: none;
-  border-color: var(--wb-primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-primary) 14%, transparent);
+  background: var(--wb-surface-hover);
+  color: var(--wb-ink);
 }
-/* 存在请求级覆盖时提示用户：当前值不再跟随配置 */
+/* 存在请求级覆盖时提示用户：当前值不再跟随配置（只用文字色 + 底色，不描边） */
 .chip-btn--overridden {
-  border-color: color-mix(in srgb, var(--wb-primary) 50%, transparent);
   color: var(--wb-primary-strong);
-  background: color-mix(in srgb, var(--wb-primary) 8%, transparent);
+  background: color-mix(in srgb, var(--wb-primary) 10%, transparent);
 }
 </style>

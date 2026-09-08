@@ -34,6 +34,8 @@ type Config struct {
 	StreamTime       time.Duration // 单轮流式超时
 	ToolCallTimeout  time.Duration // 工具执行超时，默认 5min
 	StagnationLimit  int           // 连续失败/重复调用熔断阈值，默认 5
+	LoopLimit        int           // 同名同参在整 run 内的累计次数上限；默认 3；0 = 关
+	MaxToolCalls     int           // 单 run 工具执行总次数预算；默认 0 = 不限
 	MaxToolResultLen int           // 工具结果回填 LLM 的截断长度，默认 50k
 	ToolParallelism  int           // 只读工具并发数；默认 4；1 = 串行
 	ContextBudget    int           // 单轮消息估算 token 预算；超预算每轮前自动压缩；0 = 关
@@ -48,6 +50,8 @@ func DefaultConfig() Config {
 		MaxTokens:        0,
 		ToolCallTimeout:  5 * time.Minute,
 		StagnationLimit:  5,
+		LoopLimit:        3,
+		MaxToolCalls:     0,
 		MaxToolResultLen: 50_000,
 		ToolParallelism:  4,
 		ContextBudget:    120_000, // 估算 token 上限
@@ -100,6 +104,11 @@ type Runner struct {
 	model           string                     // 当前 run 的模型（子 Agent 委派继承同一模型）
 	execs           *ExecutionRegistry         // 执行平面；委派时登记子 run 拓扑（nil = 不登记）
 	modelSwitches   int                        // 本 run 已发生的模型切换次数（有界防横跳）
+	tokenScale      float64                    // 估算→实测校准系数（EMA）；<=0 视作 1（未校准）
+	lastMeasuredIn  int                        // 上一轮上游实测的 prompt token 数
+	loopMu          sync.Mutex                 // 循环护栏 / 工具计数保护（并行只读路径也走 execOne）
+	loopHits        map[string]int             // run 内 name+args → 累计调用次数
+	toolCallsRun    int                        // 本 run 已执行的工具次数（预算护栏）
 	steps           map[string]StepRecord      // 幂等恢复：已完成成功工具调用（name+args → 结果）
 	stepsMu         sync.Mutex                 // 工具并发路径保护 steps
 	delegateMu      sync.Mutex                 // 委派去重保护
@@ -304,10 +313,11 @@ func (r *Runner) WithExecutionRegistry(reg *ExecutionRegistry) *Runner {
 	return r
 }
 
-// TurnUsage 单轮 LLM 调用的用量（落 token_usages 明细，支撑仪表盘分线统计）。
+// TurnUsage 单轮 LLM 调用的用量与耗时（落 token_usages 明细，支撑仪表盘分线统计）。
 type TurnUsage struct {
-	Turn  int
-	Usage llm.TokenUsage
+	Turn      int
+	Usage     llm.TokenUsage
+	LatencyMs int // 本轮「建流→流结束」墙钟耗时（含重试等待；0 = 未计量）
 }
 
 // RunResult 一次 Run 的成品（service 用于落库与返回）。
@@ -389,17 +399,22 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		}
 
 		// 上下文预算：每轮前把消息压回 ContextBudget 内；
-		// Auto（结构化摘要）优先，确定性 Micro 兜底
+		// Auto（结构化摘要）优先，确定性 Micro 兜底。
+		// 预算先按校准系数折算再交给压缩器：压缩器内部用 EstimateTokens 比较，
+		// 折算后等价于「估算 × 系数 ≤ 真实预算」，无需改动压缩器实现。
 		if r.cfg.ContextBudget > 0 && r.compressor != nil {
+			budget := r.calibratedBudget(r.cfg.ContextBudget)
 			if cc, ok := r.compressor.(ContextCompressor); ok {
-				msgs = cc.CompressCtx(ctx, msgs, r.cfg.ContextBudget)
+				msgs = cc.CompressCtx(ctx, msgs, budget)
 			} else {
-				msgs = r.compressor.Compress(msgs, r.cfg.ContextBudget)
+				msgs = r.compressor.Compress(msgs, budget)
 			}
 		}
 
 		// 中间件：截断/压缩（BeforeTurn 调整消息）
 		msgs = r.applyMiddlewares(msgs)
+		// 本轮实际送入模型的估算量（含工具定义），供实测回推校准
+		estAtTurn := EstimateTokens(msgs) + EstimateToolTokens(r.toolDefs)
 
 		r.sink.Emit(Event{Kind: EventTurnStart, RunID: runID, SessionID: sessionID, Turn: turn})
 		req := &llm.ChatRequest{
@@ -423,6 +438,7 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			req.Thinking = r.reqParams.Thinking
 		}
 
+		turnStartedAt := time.Now()
 		stream, err := r.streamWithRetry(ctx, req, runID, sessionID, turn)
 		if err != nil {
 			// 自动降级：重试耗尽仍失败时询问调整钩子，换模型再试本轮（有界；仅连接期错误，
@@ -473,9 +489,16 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		if runErr != nil {
 			break
 		}
+		turnLatency := int(time.Since(turnStartedAt).Milliseconds())
 		r.usage.AfterTurn(usage)
+		// 用上游实测 prompt tokens 回推本地估算的系统性偏差：工具结果（文档正文 /
+		// 结构化 JSON）与纯文本的 token 密度可差数倍，单次估算无法覆盖，逐轮 EMA 修正。
+		if usage.InputTokens > 0 && estAtTurn > 0 {
+			r.tokenScale = updateTokenScale(r.tokenScale, float64(usage.InputTokens)/float64(estAtTurn))
+			r.lastMeasuredIn = usage.InputTokens
+		}
 		if usage.TotalTokens > 0 || usage.InputTokens > 0 || usage.OutputTokens > 0 {
-			turnUsages = append(turnUsages, TurnUsage{Turn: turn, Usage: usage})
+			turnUsages = append(turnUsages, TurnUsage{Turn: turn, Usage: usage, LatencyMs: turnLatency})
 		}
 
 		contentAll.WriteString(content.String())
@@ -805,6 +828,31 @@ func (r *Runner) execOne(ctx context.Context, runID, sessionID string, turn int,
 		}
 	}
 
+	// 循环护栏 + 工具预算：与停滞检测互补。
+	// 停滞只认「连续重复」，抓不到 A→B→A→B 这类交替循环，故再叠一层全 run 的 name+args 计数；
+	// 预算则在工具执行前拦截，避免一轮内几十次调用要等到下一轮轮首才停。
+	// 命中走 refused（结构化回执）而非错误——模型看得到原因，可自行换路而不是硬失败。
+	if r.cfg.LoopLimit > 0 || r.cfg.MaxToolCalls > 0 {
+		key := call.Name + "|" + string(call.Arguments)
+		r.loopMu.Lock()
+		if r.loopHits == nil {
+			r.loopHits = map[string]int{}
+		}
+		r.loopHits[key]++
+		hits := r.loopHits[key]
+		r.toolCallsRun++
+		used := r.toolCallsRun
+		r.loopMu.Unlock()
+		if r.cfg.LoopLimit > 0 && hits >= r.cfg.LoopLimit {
+			return r.refused(runID, sessionID, turn, call,
+				fmt.Sprintf("loop guard: identical call repeated %d times (limit %d)", hits, r.cfg.LoopLimit))
+		}
+		if r.cfg.MaxToolCalls > 0 && used > r.cfg.MaxToolCalls {
+			return r.refused(runID, sessionID, turn, call,
+				fmt.Sprintf("tool budget exhausted: %d/%d calls used", used-1, r.cfg.MaxToolCalls))
+		}
+	}
+
 	// 幂等恢复（Resume 场景）：同名同参已完成的成功调用直接复用结果，不重放副作用
 	if rec, ok := r.stepHit(call); ok {
 		r.sink.Emit(Event{Kind: EventToolResult, RunID: runID, SessionID: sessionID, Turn: turn, Payload: ToolResultPayload{
@@ -917,34 +965,43 @@ func (r *Runner) trustTool(ctx context.Context, runID, sessionID string, turn in
 	return nil
 }
 
-// gateTool 工具策略门；未启用（toolGate nil）返回 nil。
-// deny / ask 被拒 → 结构化拒绝回执（Refused 语义）：不计失败熔断、发 tool result 事件，
-// 模型收到「用户拒绝 + 建议动作」信号后可换方案自愈，而非把拒绝当故障硬终止。
-//
-// 审批描述与风险优先取工具的 ClassifyArgs（per-call，如具体命令）——统一护栏链的
-// 单层裁决点：ask 且分类为白名单安全命令（risk 空）直接免审放行。
+// gateTool 工具策略门——统一护栏链的单层裁决点。
+// 实现 RiskClassifier 的工具（exec / run_skill_script）按 per-call 命令级风险裁决；
+// 其余工具显式 Allow 即放行、ask 才按静态风险问。拒绝一律 refused（结构化回执），
+// 不计失败熔断，模型可据此换方案自愈。放行后 ctx 标记 GuardChain（单层闸门）。
 func (r *Runner) gateTool(ctx context.Context, runID, sessionID string, turn int, call llm.NormalizedToolCall, t tool.Tool) *llm.Message {
 	if r.hooks.ToolGate == nil {
 		return nil
 	}
-	desc, risk := t.Name()+"("+string(call.Arguments)+")", gateApprovalRisk(t.RiskLevel())
+	desc := t.Name() + "(" + string(call.Arguments) + ")"
+	risk := ""
+	cmdLevel := false // 工具给出了 per-call 命令级裁决
 	if rc, ok := t.(tool.RiskClassifier); ok {
 		if d, rr := rc.ClassifyArgs(call.Arguments); d != "" {
-			desc, risk = d, rr
+			desc, risk, cmdLevel = d, rr, true
 		}
 	}
 	switch r.hooks.ToolGate.Decide(call.Name, t.RiskLevel()) {
 	case tool.DecisionDeny:
 		return r.refused(runID, sessionID, turn, call, "denied by policy")
-	case tool.DecisionAsk:
-		if risk == "" {
+	case tool.DecisionAllow:
+		// YOLO（完全访问）：用户已授权全部动作，命令级风险一并放行
+		if r.hooks.ToolGate.Mode() == tool.SessionModeYolo {
 			return nil
 		}
-		if r.hooks.Approver != nil {
-			if !r.hooks.Approver(ctx, desc, risk) {
-				return r.refused(runID, sessionID, turn, call, "denied by user")
-			}
+		if !cmdLevel {
+			return nil
 		}
+	case tool.DecisionAsk:
+		if !cmdLevel {
+			risk = gateApprovalRisk(t.RiskLevel())
+		}
+	}
+	if risk == "" || r.hooks.Approver == nil {
+		return nil
+	}
+	if !r.hooks.Approver(ctx, desc, risk) {
+		return r.refused(runID, sessionID, turn, call, "denied by user")
 	}
 	return nil
 }

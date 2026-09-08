@@ -1,5 +1,11 @@
 ---
 name: better-harness
+when_to_use:
+  - /better-harness
+  - harness
+  - agent 编排
+  - 多 agent
+  - 审查 harness
 description: Use when /better-harness reviews the outer coding-agent Harness for lifecycle controls, repeated work, project feedback, agent assets, session outcomes, repair planning, durable reports, or finding-bound fixes. Invoke only via slash command.
 ---
 

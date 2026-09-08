@@ -30,15 +30,23 @@ type managedServer struct {
 // Manager 管理 MCP server 生命周期：启动 → 握手 → 拉工具 → 注册进 tool.Registry。
 // 单个 server 失败只标记 unready，不阻断整体启动。
 type Manager struct {
-	toolReg *tool.Registry
-	opMu    sync.Mutex // 串行化 Reload / Close
-	mu      sync.Mutex // 保护 servers
-	servers map[string]*managedServer
+	toolReg  *tool.Registry
+	pathDirs func() []string // 可选：注入内置运行时 bin 目录（如 node/python 解压根），启动时前置到子进程 PATH
+	opMu     sync.Mutex // 串行化 Reload / Close
+	mu       sync.Mutex // 保护 servers
+	servers  map[string]*managedServer
 }
 
 // NewManager 注入全局工具注册中心（MCP 工具注册/注销的目标）。
 func NewManager(toolReg *tool.Registry) *Manager {
 	return &Manager{toolReg: toolReg, servers: make(map[string]*managedServer)}
+}
+
+// WithPathDirs 设置内置运行时 bin 目录来源；启动时会把这些目录前置到子进程 PATH。
+// 不调则走系统 PATH——npx / uvx 等依赖 node/python 内置运行时的 server 将用系统安装版本。
+func (m *Manager) WithPathDirs(f func() []string) *Manager {
+	m.pathDirs = f
+	return m
 }
 
 // Reload 按期望配置增量对齐：停掉被删除或改了配置的 server，启动缺失的。
@@ -142,7 +150,7 @@ func (m *Manager) start(ctx context.Context, srv domain.McpServerDO) {
 		ms.toolNames = registered
 	}()
 
-	client, err := DialStdio(name, srv.Command, parseStringList(srv.Args), parseEnvMap(srv.Env))
+	client, err := DialStdio(name, srv.Command, parseStringList(srv.Args), parseEnvMap(srv.Env), m.pathDirs)
 	if err != nil {
 		st.Error = err.Error()
 		return
@@ -153,6 +161,11 @@ func (m *Manager) start(ctx context.Context, srv domain.McpServerDO) {
 		client = nil
 		return
 	}
+	// 死亡自清理：子进程一旦崩溃，注销其已注册工具——避免模型反复调用空指针。
+	go func() {
+		<-client.Done()
+		m.stop(name)
+	}()
 	tools, err := client.ListTools(ctx)
 	if err != nil {
 		st.Error = err.Error()

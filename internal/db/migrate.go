@@ -29,6 +29,7 @@ func Migrate(db *gorm.DB) error {
 		&domain.WorkflowExecutionDO{},
 		&domain.WorkflowNodeExecutionDO{},
 		&domain.AgentCheckpointDO{},
+		&domain.RunRecordDO{},
 		&domain.ApprovalRecordDO{},
 		&domain.ChannelConfigDO{},
 		&domain.ChannelMessageLogDO{},

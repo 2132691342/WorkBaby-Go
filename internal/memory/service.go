@@ -11,7 +11,6 @@ import (
 
 // Service 三层记忆聚合实现。
 type Service struct {
-	short      *shortTerm
 	long       *longTerm
 	episodic   *episodic
 	semantic   *semantic
@@ -22,13 +21,12 @@ type Service struct {
 }
 
 // NewService 构造记忆服务；home 为数据根目录（paths.Home）。
-func NewService(msgRepo *repo.MessageRepo, epRepo *repo.MemoryEpisodeRepo,
+func NewService(epRepo *repo.MemoryEpisodeRepo,
 	factRepo *repo.MemoryFactRepo, procRepo *repo.MemoryProcedureRepo, home string) *Service {
 	e := newEpisodic(epRepo, home)
 	sem := newSemantic(factRepo)
 	proc := newProcedural(procRepo)
 	return &Service{
-		short:      newShortTerm(msgRepo),
 		long:       newLongTerm(home),
 		episodic:   e,
 		semantic:   sem,
@@ -46,11 +44,6 @@ func (s *Service) WithMemoryPath(resolve func(sessionID string) string) *Service
 		s.long.resolve = resolve
 	}
 	return s
-}
-
-// ShortTerm 短期记忆窗口。
-func (s *Service) ShortTerm(ctx context.Context, sessionID string, opts ShortTermOpts) []llm.Message {
-	return s.short.Load(ctx, sessionID, opts)
 }
 
 // LongTerm 读取 MEMORY.md 全文（空串 = 无记忆）。

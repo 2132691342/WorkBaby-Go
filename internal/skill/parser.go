@@ -58,7 +58,12 @@ func ParseSKILLMD(data []byte, source domain.SkillSourceKind, ref string) (*doma
 	if err != nil {
 		return nil, pkg.Wrap(8002, "marshal allowed_tools failed", err)
 	}
+	// 缺 when_to_use 时退回 skill 名兜底：触发词为空会让 Skill 永远匹配不上，
+	// 表现为「装进去了但一次都触发不了」的静默死功能。
 	whenToUse := strings.Join(fm.WhenToUse, "\n")
+	if strings.TrimSpace(whenToUse) == "" {
+		whenToUse = fm.Name
+	}
 	return &domain.SkillDO{
 		Name:         fm.Name,
 		Description:  fm.Description,

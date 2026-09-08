@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -95,6 +97,185 @@ func (s *WorkspaceService) ReadFile(_ context.Context, sessionID, path string) (
 		return nil, "", pkg.Wrap(1211, "read workspace file failed", err)
 	}
 	return bs, workspaceContentType(path), nil
+}
+
+// listDirIgnore 工作区文件树默认隐藏的目录：VCS 元数据 / 依赖 / 构建产物是噪音，
+// 且 node_modules 之类动辄数千项。隐藏不等于不可访问——用户在输入框里仍可让 agent 读。
+var listDirIgnore = map[string]bool{
+	".git": true, ".idea": true, ".vscode": true, ".workbaby": true,
+	"node_modules": true, "__pycache__": true, ".venv": true, "venv": true,
+	"dist": true, "target": true, ".next": true, ".nuxt": true, ".gradle": true,
+}
+
+// dirListCap 单层目录条目上限：超过即截断并置 Truncated，防一次拉回几千项。
+const dirListCap = 500
+
+// ListDir 懒加载列工作区单层目录（真实磁盘内容，区别于 ListFiles 的托管产物清单）。
+//
+// 路径一律相对工作区根；Within 防穿越，与 ReadFile 同一防线。
+// 文件夹优先、大小写不敏感排序；隐藏目录与依赖目录默认不出现。
+// 出参 root 返回工作区根绝对路径：前端「添加到聊天」据此拼出文件的绝对路径引用
+// （相对路径解析依赖工作区语义，进聊天后易歧义）。
+func (s *WorkspaceService) ListDir(_ context.Context, sessionID, dir string) (domain.WorkspaceListRESP, error) {
+	root := s.Dir(sessionID)
+	full := root
+	if dir = strings.Trim(strings.TrimSpace(dir), "/"); dir != "" {
+		full = filepath.Join(root, filepath.FromSlash(dir))
+	}
+	if err := pkg.Within(root, full); err != nil {
+		return domain.WorkspaceListRESP{}, err
+	}
+	entries, err := os.ReadDir(full)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return domain.WorkspaceListRESP{Items: []domain.WorkspaceEntry{}}, nil
+		}
+		return domain.WorkspaceListRESP{}, pkg.Wrap(1210, "read workspace dir failed", err)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		di, dj := entries[i].IsDir(), entries[j].IsDir()
+		if di != dj {
+			return di // 文件夹优先
+		}
+		return strings.ToLower(entries[i].Name()) < strings.ToLower(entries[j].Name())
+	})
+
+	prefix := ""
+	if dir != "" {
+		prefix = dir + "/"
+	}
+	out := make([]domain.WorkspaceEntry, 0, len(entries))
+	truncated := false
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || (e.IsDir() && listDirIgnore[name]) {
+			continue
+		}
+		if len(out) >= dirListCap {
+			truncated = true
+			break
+		}
+		var size int64
+		if !e.IsDir() {
+			if info, ierr := e.Info(); ierr == nil {
+				size = info.Size()
+			}
+		}
+		p := prefix + name
+		if e.IsDir() {
+			p += "/"
+		}
+		out = append(out, domain.WorkspaceEntry{
+			Path:  p,
+			Name:  name,
+			IsDir: e.IsDir(),
+			Size:  size,
+			Ext:   strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), "."),
+			Kind:  workspaceKind(name),
+		})
+	}
+	return domain.WorkspaceListRESP{Items: out, Truncated: truncated, Root: root}, nil
+}
+
+// resolveEntry 相对路径 → 工作区内绝对路径（Within 沙箱防穿越）。
+func (s *WorkspaceService) resolveEntry(sessionID, path string) (string, error) {
+	root := s.Dir(sessionID)
+	full := filepath.Join(root, filepath.FromSlash(strings.Trim(strings.TrimSpace(path), "/")))
+	if err := pkg.Within(root, full); err != nil {
+		return "", err
+	}
+	return full, nil
+}
+
+// RenameEntry 工作区内同级重命名（文件/目录均可；不做跨目录移动，避免扩大沙箱语义）。
+func (s *WorkspaceService) RenameEntry(_ context.Context, sessionID, path, newName string) error {
+	if newName == "" || newName == "." || newName == ".." || strings.ContainsAny(newName, `/\`) {
+		return pkg.New(1212, "invalid new name", newName)
+	}
+	full, err := s.resolveEntry(sessionID, path)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(full); err != nil {
+		return pkg.Wrap(1213, "workspace entry not found", err)
+	}
+	dst := filepath.Join(filepath.Dir(full), newName)
+	if _, err := os.Stat(dst); err == nil {
+		return pkg.New(1214, "target name already exists", newName)
+	}
+	if err := os.Rename(full, dst); err != nil {
+		return pkg.Wrap(1215, "rename workspace entry failed", err)
+	}
+	return nil
+}
+
+// CopyEntry 复制文件为同级副本（"name (1).ext" 就近递增）；返回新相对路径。
+// 目录不支持副本（克制：目录级操作交给 Agent 工具），NotDir 时明确报错。
+func (s *WorkspaceService) CopyEntry(_ context.Context, sessionID, path string) (string, error) {
+	full, err := s.resolveEntry(sessionID, path)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		return "", pkg.Wrap(1213, "workspace entry not found", err)
+	}
+	if info.IsDir() {
+		return "", pkg.New(1216, "copy directory is not supported", path)
+	}
+	dst := full
+	n := 1
+	for {
+		dst = filepath.Join(filepath.Dir(full), copyName(info.Name(), n))
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			break
+		}
+		n++
+	}
+	src, err := os.Open(full)
+	if err != nil {
+		return "", pkg.Wrap(1217, "open workspace file failed", err)
+	}
+	defer src.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return "", pkg.Wrap(1217, "create workspace copy failed", err)
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, src); err != nil {
+		return "", pkg.Wrap(1217, "copy workspace file failed", err)
+	}
+	rel, err := filepath.Rel(s.Dir(sessionID), dst)
+	if err != nil {
+		return "", pkg.Wrap(1217, "resolve copy path failed", err)
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// copyName 生成第 n 份副本文件名："a.txt" → "a (1).txt"。
+func copyName(name string, n int) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	return fmt.Sprintf("%s (%d)%s", base, n, ext)
+}
+
+// DeleteEntry 删除文件/目录（目录递归；禁止删除工作区根本身）。
+func (s *WorkspaceService) DeleteEntry(_ context.Context, sessionID, path string) error {
+	root := s.Dir(sessionID)
+	full, err := s.resolveEntry(sessionID, path)
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(full) == filepath.Clean(root) {
+		return pkg.New(1218, "cannot remove workspace root", path)
+	}
+	if _, err := os.Stat(full); err != nil {
+		return pkg.Wrap(1213, "workspace entry not found", err)
+	}
+	if err := os.RemoveAll(full); err != nil {
+		return pkg.Wrap(1219, "remove workspace entry failed", err)
+	}
+	return nil
 }
 
 // workspaceKind 按扩展名分类（对齐前端 WorkspaceFile.kind）。

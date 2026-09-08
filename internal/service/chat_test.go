@@ -44,7 +44,7 @@ func newChatOpsService(t *testing.T) (*ChatService, *repo.MessageRepo) {
 	sessRepo := repo.NewChatSessionRepo(gdb)
 	msgRepo := repo.NewMessageRepo(gdb)
 	setRepo := repo.NewSystemSettingRepo(gdb)
-	mem := memory.NewService(msgRepo, repo.NewMemoryEpisodeRepo(gdb),
+	mem := memory.NewService(repo.NewMemoryEpisodeRepo(gdb),
 		repo.NewMemoryFactRepo(gdb), repo.NewMemoryProcedureRepo(gdb), t.TempDir())
 	svc := NewChatService(sessRepo, msgRepo, repo.NewAiProviderRepo(gdb), setRepo, repo.NewTokenUsageRepo(gdb),
 		event.New(), registry.New(), NewToolService(tool.NewRegistry(), setRepo), mem)
@@ -330,11 +330,108 @@ func TestWorkspaceBindLifecycle(t *testing.T) {
 	assert.Equal(t, "default-root", svc.WorkspaceRoot(ctx, ses.ID, "default-root"))
 }
 
+// TestCompactSessionArchive 复现「摘要+归档」压缩语义：
+//
+// <p>早期轮次整体标 archived 剔出 LLM 上下文（正文不删改）；归档边界不得切进
+// assistant(tool_calls) 与其 tool 结果之间；归档摘要写会话元数据供 buildSystem 注入。
+func TestCompactSessionArchive(t *testing.T) {
+	svc, msgRepo := newChatOpsService(t)
+	ctx := context.Background()
+	ses, _ := seedSession(t, svc, msgRepo, ctx)
+	// 追加工具段 + 收尾轮：M_6 用户 / M_7 assistant(tool_calls) / M_8 tool / M_9 assistant / M_10 用户
+	seed := []domain.MessageDO{
+		{ID: "M_6", SessionID: ses.ID, Seq: 6, Role: domain.MessageRoleUser, Content: "再来一步", Status: domain.MessageStatusCompleted},
+		{ID: "M_7", SessionID: ses.ID, Seq: 7, Role: domain.MessageRoleAssistant,
+			ToolCalls: `[{"id":"CALL_X","type":"function","function":{"name":"exec","arguments":"{}"}}]`,
+			Status:    domain.MessageStatusCompleted},
+		{ID: "M_8", SessionID: ses.ID, Seq: 8, Role: domain.MessageRoleTool, ToolCallID: "CALL_X", Content: "ok", Status: domain.MessageStatusCompleted},
+		{ID: "M_9", SessionID: ses.ID, Seq: 9, Role: domain.MessageRoleAssistant, Content: "搞定", Status: domain.MessageStatusCompleted},
+		{ID: "M_10", SessionID: ses.ID, Seq: 10, Role: domain.MessageRoleUser, Content: "收尾", Status: domain.MessageStatusCompleted},
+	}
+	for i := range seed {
+		require.NoError(t, msgRepo.Insert(ctx, &seed[i]))
+	}
+
+	res, err := svc.CompactSession(ctx, ses.ID, domain.CompactREQ{KeepRecent: 3})
+	require.NoError(t, err)
+	require.Zero(t, res.Failed)
+
+	rows, err := msgRepo.ListBySession(ctx, ses.ID, 0, 0)
+	require.NoError(t, err)
+	require.Len(t, rows, 10, "归档不删消息，UI 仍可回看")
+
+	// 边界回退：cut=7 落在 tool 消息上 → 回退到 M_7（assistant），M_1..M_6 归档
+	archived := map[string]bool{}
+	for _, r := range rows {
+		archived[r.ID] = r.Status == domain.MessageStatusArchived
+	}
+	for _, id := range []string{"M_1", "M_2", "M_3", "M_4", "M_5", "M_6"} {
+		assert.True(t, archived[id], "%s 应已归档", id)
+	}
+	for _, id := range []string{"M_7", "M_8", "M_9", "M_10"} {
+		assert.False(t, archived[id], "%s 应保留在上下文", id)
+	}
+
+	// 归档后上下文不含归档行；保留侧 assistant(tool_calls)+tool 配对完整
+	out, err := svc.toLLMMessages(rows)
+	require.NoError(t, err)
+	require.Len(t, out, 4)
+	keptRoles := map[llm.RoleType]int{}
+	for _, m := range out {
+		keptRoles[m.Role]++
+		if m.Role == llm.RoleTool {
+			require.Equal(t, "CALL_X", m.ToolCallID, "保留侧 tool 必须与保留侧 assistant 配对")
+		}
+	}
+	assert.Equal(t, 1, keptRoles[llm.RoleUser])
+	assert.Equal(t, 2, keptRoles[llm.RoleAssistant])
+
+	// 归档摘要落会话元数据（buildSystem 每轮注入 system）
+	fresh, err := svc.sessions.GetByID(ctx, ses.ID)
+	require.NoError(t, err)
+	sum := archiveSummary(fresh)
+	require.NotEmpty(t, sum)
+	assert.Contains(t, sum, "用户：msg1")
+	assert.NotContains(t, sum, "收尾", "保留侧轮次不应出现在归档摘要里")
+}
+
 // TestToLLMMessagesDropsOrphanTools 续跑/压缩后孤儿 tool 消息不会把整轮送进 LLM。
 //
 // <p>回归：toLLMMessages 历史上会把所有 role=tool 一并发回模型；若某条 tool 消息
 // 的 tool_call_id 在全列表里没有任何 assistant.tool_calls 匹配，上游 LLM 会以
 // 400 「tool result's tool id not found」拒绝整轮。修复后这些孤儿被静默剥掉。
+// TestToLLMMessagesDropsEmptyAssistant 复现 GLM 400（上游码 1214「messages 参数非法」）：
+//
+// <p>上次 run 失败/中断后落库的 assistant 占位（content 为空、无 tool_calls）若原样
+// 回发上游，GLM 等厂商直接以 400 拒绝整轮；且消息已持久化，会话被永久毒化。
+// 修复后空 assistant 消息被静默剥掉；空 content 的 tool 消息兜底为 "(empty)"。
+func TestToLLMMessagesDropsEmptyAssistant(t *testing.T) {
+	svc, _ := newChatOpsService(t)
+	toolCallsJSON := `[{"id":"CALL_1","type":"function","function":{"name":"exec","arguments":"{}"}}]`
+
+	hists := []domain.MessageDO{
+		{ID: "M1", Role: domain.MessageRoleUser, Content: "开工", Status: domain.MessageStatusCompleted},
+		// 上次 run 失败残留的空 assistant 占位（GLM 1214 元凶）
+		{ID: "M2", Role: domain.MessageRoleAssistant, Content: "", Status: domain.MessageStatusFailed},
+		{ID: "M3", Role: domain.MessageRoleUser, Content: "继续", Status: domain.MessageStatusCompleted},
+		// 空 content 的 tool 消息：兜底 "(empty)" 而非剥掉（剥掉会破坏 tool_call 配对）
+		{ID: "M4", Role: domain.MessageRoleAssistant, Content: "", ToolCalls: toolCallsJSON, Status: domain.MessageStatusCompleted},
+		{ID: "M5", Role: domain.MessageRoleTool, ToolCallID: "CALL_1", Content: "", Status: domain.MessageStatusCompleted},
+	}
+	out, err := svc.toLLMMessages(hists)
+	require.NoError(t, err)
+	require.Len(t, out, 4, "空 assistant 占位应被剥掉，其余保留")
+
+	for _, m := range out {
+		if m.Role == llm.RoleAssistant && len(m.ToolCalls) == 0 {
+			require.NotEmpty(t, m.Content, "无 tool_calls 的 assistant 不允许空 content（GLM 1214）")
+		}
+		if m.Role == llm.RoleTool {
+			require.Equal(t, "(empty)", m.Content, "空 tool 结果应兜底为 (empty)")
+		}
+	}
+}
+
 func TestToLLMMessagesDropsOrphanTools(t *testing.T) {
 	svc, _ := newChatOpsService(t)
 	toolCallsJSON := `[{"id":"CALL_REAL","type":"function","function":{"name":"exec","arguments":"{}"}}]`

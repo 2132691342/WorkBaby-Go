@@ -333,8 +333,8 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* 触发按钮：与 ChatInput 顶部 chip 行同款紧凑外观。
-   scoped 样式不跨组件，故在此复刻一份（ModelSelector 仅被 ChatInput 使用）。 */
+/* 触发按钮：与 ChatInput 工具行同款幽灵胶囊（无常驻框线，hover 才浮出底色）。
+   样式在组件内定义（scoped 不跨组件），勿在父组件用 :deep 覜覆盖——注入顺序会输。 */
 .chip-btn {
   display: inline-flex;
   align-items: center;
@@ -342,26 +342,25 @@ onUnmounted(() => {
   height: 24px;
   max-width: 220px;
   padding: 0 8px;
-  border: 1px solid var(--wb-border);
+  border: 1px solid transparent;
   border-radius: 9999px;
-  background: var(--wb-surface);
+  background: transparent;
   color: var(--wb-muted);
   font-size: 11px;
   line-height: 1;
   white-space: nowrap;
   cursor: pointer;
   transition:
-    border-color 0.15s ease,
     color 0.15s ease,
     background-color 0.15s ease;
 }
 .chip-btn:hover {
-  border-color: color-mix(in srgb, var(--wb-primary) 45%, transparent);
-  color: var(--wb-primary-strong);
+  background: var(--wb-surface-hover);
+  color: var(--wb-ink);
 }
 .chip-btn:focus-visible {
   outline: none;
-  border-color: var(--wb-primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--wb-primary) 14%, transparent);
+  background: var(--wb-surface-hover);
+  color: var(--wb-ink);
 }
 </style>

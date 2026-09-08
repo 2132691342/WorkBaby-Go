@@ -97,36 +97,16 @@
 
 /* ===== 组件基元（@layer components） ===== */
 @layer components {
-  /* === 按钮（Studio：纯色实底 + 1px 描边层次 + 克制的 focus ring） === */
-  .btn-primary {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium
-      transition-all duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50
-      bg-wb-primary text-white shadow-[var(--wb-shadow)] hover:bg-wb-primary-strong hover:shadow-[var(--wb-shadow-lg)];
-  }
+  /* === 按钮变体 ===
+   * .btn / .btn-primary / .btn-danger / .btn-ghost / .btn-icon / .card / .card-2
+   * 统一由 wb-ui.css 定义（28px / 12px，走 --wb-ctl-h 密度体系，与 Element Plus 对齐）。
+   * 此处不再重复声明：wb-ui.css 是未分层规则，优先级高于 @layer 内规则，
+   * 双份定义只会让「哪套生效」取决于层叠顺序，且同名不同值必然造成风格漂移。
+   * 仅保留 wb-ui.css 没有的 .btn-secondary 与 .card-pop。 */
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-1.5 rounded-lg border px-4 py-2 text-sm font-medium
       transition-all duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50
       border-wb-border bg-wb-surface text-wb-ink hover:border-wb-primary/40 hover:bg-wb-surface-2 hover:text-wb-primary-strong;
-  }
-  .btn-ghost {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium
-      transition-all duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50
-      text-wb-muted hover:bg-wb-surface-hover hover:text-wb-ink;
-  }
-  .btn-danger {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium
-      transition-all duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50
-      bg-wb-danger text-white shadow-[var(--wb-shadow)] hover:opacity-90;
-  }
-  .btn-icon {
-    @apply inline-flex h-8 w-8 items-center justify-center rounded-lg
-      transition-all duration-150 active:scale-[0.95] disabled:cursor-not-allowed disabled:opacity-50
-      text-wb-muted hover:bg-wb-surface-hover hover:text-wb-ink;
-  }
-
-  /* === 卡片（Studio：surface-2 底 + 细边框 + 轻阴影） === */
-  .card {
-    @apply rounded-xl border border-wb-border bg-wb-surface p-4 shadow-[var(--wb-shadow)];
   }
   /* 浮层卡片（弹窗/下拉用，深阴影） */
   .card-pop {
@@ -134,10 +114,6 @@
     border: 1px solid var(--wb-border);
     border-radius: var(--wb-radius);
     box-shadow: var(--wb-shadow-pop);
-  }
-  /* 次级表面卡片（列表项 / 分组底） */
-  .card-2 {
-    @apply rounded-xl border border-wb-border bg-wb-surface-2 p-4;
   }
 
   /* === Element Plus 组件主题融合（全局唯一声明；各视图不得再复制 scoped 副本） === */
@@ -904,7 +880,10 @@ button:active:not(:disabled) {
   gap: 10px;
 }
 .wb-fsect__title {
-  margin: 0;
+  /* 小节标题必须横跨整行：否则它会占掉一个字段格，把后续字段整体推错一列 */
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  padding-top: 2px;
   font-size: var(--wb-fs-label, 11px);
   font-weight: 700;
   letter-spacing: 0.06em;

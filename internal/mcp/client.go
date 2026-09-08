@@ -39,9 +39,13 @@ type ToolDef struct {
 }
 
 // Content MCP 工具结果的内容块（v1 只处理 text）。
+// Content MCP 返回的内容块。v1 常见三类：text / image / resource。
 type Content struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	MimeType string `json:"mimeType,omitempty"` // image 块的媒体类型
+	Data     string `json:"data,omitempty"`     // image 块的 base64 数据
+	URI      string `json:"uri,omitempty"`      // resource 块的 URI
 }
 
 // Result MCP tools/call 的结果。
@@ -92,23 +96,39 @@ type StdioClient struct {
 	stdin     io.WriteCloser
 	stdout    io.ReadCloser
 	stderr    *tailWriter
-	done      chan struct{}
+	done      chan struct{}  // Close 触发；用于 Close 同步等待 cmd 退出
+	death     chan struct{}  // markDead / Close 都关闭；Manager 监听 server 死亡
 	writeMu   sync.Mutex
 	pendingMu sync.Mutex
 	pending   map[int64]chan *rpcResponse
 	nextID    int64
 	dead      atomicError
-	closeOnce sync.Once
+	closeOnce sync.Once // 关闭 stdin / kill 进程 / 等 cmd 退出
+	deathOnce sync.Once // 关闭 death 通道
 }
+
+// Done 返回「子进程已退出」信号的 channel：Manager 据此自动注销已死亡 server 的工具，
+// 避免模型反复调用一个不再存在的远端工具（连不上 → 8003 → Stagnation 熔断）。
+func (c *StdioClient) Done() <-chan struct{} { return c.death }
 
 // DialStdio 启动 MCP server 子进程并完成 stdio 接线；进程退出由后台 goroutine 接管。
 // 调用方负责 Close，否则子进程会残留。
-func DialStdio(name, command string, args, env []string) (*StdioClient, error) {
+//
+// pathDirs 可选：非空时把 dirs 前置到子进程 PATH（如内置 node/python 解压根），
+// 让 npx / uvx 等命令在系统 PATH 上缺失时也能找到。
+func DialStdio(name, command string, args, env []string, pathDirs func() []string) (*StdioClient, error) {
 	if command == "" {
 		return nil, pkg.New(8003, "mcp command is empty", name)
 	}
-	cmd := exec.Command(command, args...)
+	// 平台侧解析：Windows 上 .cmd 外壳需包 cmd /c 才能 CreateProcess
+	exe, prefix := resolveCommand(command)
+	cmd := exec.Command(exe, append(prefix, args...)...)
 	cmd.Env = append(cmd.Environ(), env...)
+	if pathDirs != nil {
+		if dirs := pathDirs(); len(dirs) > 0 {
+			cmd.Env = envWithPath(cmd.Env, dirs)
+		}
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // Windows 不弹控制台
 
 	stdin, err := cmd.StdinPipe()
@@ -132,6 +152,7 @@ func DialStdio(name, command string, args, env []string) (*StdioClient, error) {
 		stdout:  stdout,
 		stderr:  tail,
 		done:    make(chan struct{}),
+		death:   make(chan struct{}),
 		pending: make(map[int64]chan *rpcResponse),
 	}
 	go c.readLoop()
@@ -169,15 +190,31 @@ func (c *StdioClient) Initialize(ctx context.Context) (*ServerInfo, error) {
 	return &out.ServerInfo, nil
 }
 
-// ListTools 拉取服务端工具清单。
+// ListTools 拉取服务端工具清单（分页跟进 nextCursor 至空）。
+//
+// MCP spec 2025-06-18 的 tools/list 是分页接口；不跟 nextCursor 会让工具超一页的 server
+// 静默丢失工具却仍报 Ready=true。
 func (c *StdioClient) ListTools(ctx context.Context) ([]ToolDef, error) {
-	var out struct {
-		Tools []ToolDef `json:"tools"`
+	out := make([]ToolDef, 0, 8)
+	var cursor string
+	for {
+		var page struct {
+			Tools      []ToolDef `json:"tools"`
+			NextCursor string     `json:"nextCursor,omitempty"`
+		}
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		if err := c.call(ctx, "tools/list", params, &page); err != nil {
+			return nil, wrapMCP(8006, "mcp tools/list failed", err)
+		}
+		out = append(out, page.Tools...)
+		if page.NextCursor == "" {
+			return out, nil
+		}
+		cursor = page.NextCursor
 	}
-	if err := c.call(ctx, "tools/list", map[string]any{}, &out); err != nil {
-		return nil, wrapMCP(8006, "mcp tools/list failed", err)
-	}
-	return out.Tools, nil
 }
 
 // CallTool 调用远端工具；args 为 LLM 产出的原始 JSON。
@@ -209,6 +246,7 @@ func (c *StdioClient) Close() error {
 		case <-time.After(3 * time.Second):
 		}
 	})
+	c.deathOnce.Do(func() { close(c.death) })
 	return killErr
 }
 
@@ -304,7 +342,7 @@ func (c *StdioClient) readLoop() {
 	c.markDead(errors.New("mcp stdout closed"))
 }
 
-// markDead 记录死亡原因并唤醒所有等待中的请求。
+// markDead 记录死亡原因并唤醒所有等待中的请求；同时关闭 death 通道通知 Manager 注销工具。
 func (c *StdioClient) markDead(reason error) {
 	if reason == nil {
 		reason = errors.New("unknown reason")
@@ -322,6 +360,7 @@ func (c *StdioClient) markDead(reason error) {
 	for _, ch := range waiting {
 		ch <- &rpcResponse{Error: &rpcError{Code: -32000, Message: reason.Error()}}
 	}
+	c.deathOnce.Do(func() { close(c.death) })
 }
 
 func (c *StdioClient) dropPending(id int64) {

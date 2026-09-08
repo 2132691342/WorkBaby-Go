@@ -21,6 +21,7 @@ const (
 	MessageStatusCompleted MessageStatus = "completed" // 终止：成功
 	MessageStatusFailed    MessageStatus = "failed"    // 终止：失败
 	MessageStatusCancelled MessageStatus = "cancelled" // 终止：用户取消
+	MessageStatusArchived  MessageStatus = "archived"  // 已归档：/compact 剔出上下文（UI仍可见）
 )
 
 // MessageStopReason 流式停止原因。

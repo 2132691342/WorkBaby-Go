@@ -262,6 +262,7 @@ function submit(): void {
     slashOpen.value = false
     slashQuery.value = ''
     mentionOpen.value = false
+    resetHeight()
     void nextTick(() => textareaRef.value?.focus())
     return
   }
@@ -271,6 +272,7 @@ function submit(): void {
   slashOpen.value = false
   slashQuery.value = ''
   mentionOpen.value = false
+  resetHeight()
   void nextTick(() => textareaRef.value?.focus())
 }
 
@@ -556,11 +558,22 @@ async function showHelp(): Promise<void> {
   )
 }
 
+/** 输入框最大高度：视口 55%（可超过原 240px 上限，长文编辑不憋屈）。 */
+const taMaxHeight = Math.round(window.innerHeight * 0.55)
+
+/** 打字时只增不减：用户手动拉伸（resize: vertical）设置的高度由用户做主，不覆盖。 */
 function autoResize(): void {
   const ta = textareaRef.value
   if (!ta) return
-  ta.style.height = 'auto'
-  ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`
+  if (ta.scrollHeight > ta.clientHeight) {
+    ta.style.height = `${Math.min(ta.scrollHeight, taMaxHeight)}px`
+  }
+}
+
+/** 清空草稿后高度回弹到单行。 */
+function resetHeight(): void {
+  const ta = textareaRef.value
+  if (ta) ta.style.height = ''
 }
 
 function addToQueue(): void {
@@ -568,6 +581,7 @@ function addToQueue(): void {
   if (!text) return
   queue.value.push({ id: `q-${Date.now()}`, text })
   draft.value = ''
+  resetHeight()
 }
 
 function removeQueueItem(id: string): void {
@@ -694,7 +708,15 @@ function setDraft(text: string): void {
   })
 }
 
-defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
+defineExpose({
+  setDraft,
+  /** 追加文本（工作区文件树「添加到聊天」）：保留用户已输入内容，只追加引用后聚焦。 */
+  appendText: (text: string) => {
+    draft.value = draft.value.trimEnd() + (draft.value.trim() ? ' ' : '') + text + ' '
+    void nextTick(() => textareaRef.value?.focus())
+  },
+  focusInput: () => textareaRef.value?.focus()
+})
 </script>
 
 <template>
@@ -893,15 +915,9 @@ defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
 
 <style scoped>
 /* ===== 原型 composer：全局 wb-ui.css 已提供 .composer / .composer-in / .mini / .send
-   基础样式，这里只做组件级微调（ModelSelector / ParamsPopover 触发器统一成 mini 胶囊） ===== */
-
-/* 两个 popover 触发器（.chip-btn）与手写 .mini 对齐：同高同字号，视觉成一个胶囊组 */
-.composer :deep(.chip-btn) {
-  height: 26px;
-  gap: 5px;
-  padding: 0 9px;
-  font-size: 11.5px;
-}
+   基础样式，这里只做组件级微调。chip 触发器的幽灵化在各子组件自己的 scoped
+   样式内完成（ParamsPopover / ModelSelector）——父组件 :deep 跨组件覆盖会因
+   样式注入顺序而失效，不要再加回来 ===== */
 
 .mini:disabled,
 .composer :deep(.chip-btn:disabled) {
@@ -921,16 +937,14 @@ defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
   opacity: 0.7;
 }
 
-/* 非默认权限态需要被看见（warning=受限/需确认，danger=完全访问） */
+/* 非默认权限态需要被看见：只用文字色 + 底色提示，不描边（描边是框线噪音的来源之一） */
 .mini--active {
-  border-color: color-mix(in srgb, var(--wb-warning) 55%, transparent);
   color: var(--wb-warning);
-  background: color-mix(in srgb, var(--wb-warning) 8%, transparent);
+  background: color-mix(in srgb, var(--wb-warning) 10%, transparent);
 }
 .mini--danger {
-  border-color: color-mix(in srgb, var(--wb-danger) 60%, transparent);
   color: var(--wb-danger);
-  background: color-mix(in srgb, var(--wb-danger) 10%, transparent);
+  background: color-mix(in srgb, var(--wb-danger) 12%, transparent);
 }
 
 /* 草稿字符计数：mono 数字，超限标红 */
@@ -975,7 +989,7 @@ defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
 }
 
 /* 激活的 @skill 提及 chip：与附件条同级，视觉上明确「这条消息带着技能上下文」；
-   内边距对齐 textarea（13px） */
+   只用底色 + 文字色，不描边；内边距对齐 textarea（13px） */
 .skill-mention-strip {
   display: flex;
   flex-wrap: wrap;
@@ -989,9 +1003,9 @@ defineExpose({ setDraft, focusInput: () => textareaRef.value?.focus() })
   max-width: 240px;
   height: 24px;
   padding: 0 9px;
-  border: 1px solid color-mix(in srgb, var(--wb-lavender) 45%, transparent);
+  border: 1px solid transparent;
   border-radius: 9999px;
-  background: color-mix(in srgb, var(--wb-lavender) 12%, transparent);
+  background: color-mix(in srgb, var(--wb-lavender) 14%, transparent);
   color: var(--wb-lavender);
   font-size: 11px;
   line-height: 1;

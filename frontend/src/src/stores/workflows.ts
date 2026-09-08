@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { apiGet, apiPost } from '@/api/client'
+import { getApiBase } from '@/api/http'
 import { t } from '@/i18n'
 import { useDialog } from '@/composables/useDialog'
 import { useToast } from '@/composables/useToast'
@@ -47,6 +48,47 @@ export const useWorkflowsStore = defineStore('workflows', () => {
   const showGraph = ref(false)
   const newName = ref('')
   const newDesc = ref('')
+
+  /** workflow SSE 连接：监听当前执行的实时事件（started / node-* / input-required / completed / failed）。 */
+  let workflowES: EventSource | null = null
+
+  function stopWatchWorkflow(): void {
+    if (workflowES) {
+      workflowES.close()
+      workflowES = null
+    }
+  }
+
+  /** 订阅 workflow 进度：runWorkflow 拿到 executionID 后调用；任一终态事件自动关闭。 */
+  function watchWorkflowEvents(executionID: string): void {
+    stopWatchWorkflow()
+    const base = getApiBase()
+    if (!base) return
+    const es = new EventSource(
+      `${base}/events?scope=workflow&runId=${encodeURIComponent(executionID)}`
+    )
+    workflowES = es
+    const onProgress = (): void => {
+      // 节点级事件直接刷新详情（拿到最新 outputs / status）
+      void fetchExecutionDetail()
+    }
+    es.addEventListener('workflow:started', onProgress)
+    es.addEventListener('workflow:node-start', onProgress)
+    es.addEventListener('workflow:node-done', onProgress)
+    es.addEventListener('workflow:input-required', onProgress)
+    es.addEventListener('workflow:completed', () => {
+      void fetchExecutionDetail()
+      stopWatchWorkflow()
+    })
+    es.addEventListener('workflow:failed', () => {
+      void fetchExecutionDetail()
+      stopWatchWorkflow()
+    })
+    es.onerror = (): void => {
+      // watch 关闭 / 网络抖动由后端心跳 + 浏览器重连兜底；这里只防泄漏
+      if (workflowES !== es) return
+    }
+  }
 
   /** 加载工作流列表；无选中项且有数据时自动选中第一个。 */
   async function loadList(): Promise<void> {
@@ -167,7 +209,9 @@ export const useWorkflowsStore = defineStore('workflows', () => {
       currentExecID.value = exec.execution_id
       currentExec.value = null
       currentExecNodes.value = []
+      watchWorkflowEvents(exec.execution_id)
       await pollExecution()
+      stopWatchWorkflow()
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       error.value = msg
@@ -195,7 +239,8 @@ export const useWorkflowsStore = defineStore('workflows', () => {
     for (let i = 0; i < 60; i++) {
       await fetchExecutionDetail()
       const st = currentExec.value?.status
-      if (st === 'COMPLETED' || st === 'FAILED' || st === 'CANCELLED') {
+      // 后端实际值是小写；前后端契约对齐后此处只比较小写
+      if (st === 'completed' || st === 'failed' || st === 'cancelled') {
         break
       }
       await new Promise((r) => setTimeout(r, 500))
@@ -244,10 +289,13 @@ export const useWorkflowsStore = defineStore('workflows', () => {
   /**
    * 提交人工输入（HUMAN_INPUT 节点）。
    * 调用 POST /api/v1/executions/{id}/input。
+   *
+   * nodeID 必传：后端 resolver.Deliver 按 executionID|nodeID 拼 waiter key，
+   * 不传永远匹配不到，节点会卡到 ttlSeconds 后超时。
    */
-  async function submitInput(executionID: string, input: string): Promise<boolean> {
+  async function submitInput(executionID: string, nodeID: string, input: string): Promise<boolean> {
     try {
-      await apiPost(`/api/v1/executions/${executionID}/input`, { value: input })
+      await apiPost(`/api/v1/executions/${executionID}/input`, { node_id: nodeID, value: input })
       toast.success(t('workflows.inputSubmitted'))
       return true
     } catch (e) {
@@ -280,6 +328,7 @@ export const useWorkflowsStore = defineStore('workflows', () => {
     doResume,
     doPause,
     doCancel,
-    submitInput
+    submitInput,
+    stopWatchWorkflow
   }
 })

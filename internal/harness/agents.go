@@ -12,8 +12,20 @@ func DefaultAgents() []Definition {
 			Name:        "default",
 			Description: "通用全能助手（默认）：记忆开启、可执行工具",
 			Persona:     personaDefault,
-			Memory:      MemoryPolicy{Enabled: true, RecallLimit: 6, Formation: true},
-			Budget:      Budget{ContextTokens: 120_000},
+			Tools: ToolPolicy{
+				// 工具白名单显式收敛到核心集：functools 纯函数（30+ 个）默认不在此，
+				// 用户可在设置页手动开启；命令级裁决类（exec / skill / delegate / workflow）
+				// 由 runner.gateTool 统一拦截危险命令，白名单仅控制「带不带」。
+				Allow: []string{
+					"file_*", "doc_reader", "archive_manager",
+					"exec", "run_skill_script", "delegate_task", "run_workflow",
+					"websearch", "webfetch", "http",
+					"knowledge_search", "memory_write",
+					"todo", "request_input",
+				},
+			},
+			Memory: MemoryPolicy{Enabled: true, RecallLimit: 6, Formation: true},
+			Budget: Budget{ContextTokens: 120_000},
 		},
 		{
 			Name:        "coding",
@@ -41,8 +53,7 @@ func DefaultAgents() []Definition {
 	}
 }
 
-// Agent 按名取内置 Agent；未知名回退 default（运行时按名引用不硬失败，
-// 对齐 LeAgent「未知名称回退到默认变体」语义）。
+// Agent 按名取内置 Agent；未知名回退 default（运行时按名引用不硬失败）。
 func Agent(name string) Definition {
 	for _, d := range DefaultAgents() {
 		if d.Name == name {

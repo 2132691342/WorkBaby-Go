@@ -9,15 +9,18 @@ import (
 )
 
 // Thresholds 形成策略阈值。
+//
+// Episodic 设到 0.30 后，基础对话分（0.15）单独不够形成情景记忆——必须有触发器
+// 主动加分才能沉淀，杜绝「几乎每轮都落一条情景」的噪音爆表问题。
 type Thresholds struct {
-	Episodic   float64 // 0.10
+	Episodic   float64 // 0.30
 	Semantic   float64 // 0.25（v2）
 	Procedural float64 // 0.35（v2）
 }
 
 // DefaultThresholds 默认阈值。
 func DefaultThresholds() Thresholds {
-	return Thresholds{Episodic: 0.10, Semantic: 0.25, Procedural: 0.35}
+	return Thresholds{Episodic: 0.30, Semantic: 0.25, Procedural: 0.35}
 }
 
 // DefaultTriggers 触发器 → 加分。
@@ -47,7 +50,10 @@ func NewFormationPolicy(t Thresholds) *FormationPolicy {
 var (
 	rememberRe  = regexp.MustCompile(`(?i)(记住|记得|remember)`)
 	preferRe    = regexp.MustCompile(`(?i)(我喜欢|我偏好|prefer|favorite)`)
-	dislikeRe   = regexp.MustCompile(`(?i)(不喜欢|错误|别这样|不要|不好用|dislike|wrong)`)
+	// dislikeRe 不含「不要」「报错」——这类词在工作上下文里高频出现
+	//（「不要删这个文件」「这个报错…」「不要错把它当故障」），不属于负反馈。
+	// 留作匹配明确表达不满的词（不喜欢 / 错误理解 / 别这样 / 不好用 / dislike / wrong）。
+	dislikeRe   = regexp.MustCompile(`(?i)(不喜欢|错误|别这样|不好用|dislike|wrong)`)
 	correctedRe = regexp.MustCompile(`(?i)(更正|纠正|不对|其实应该)`)
 )
 
@@ -76,7 +82,7 @@ func (f *FormationPolicy) Evaluate(ctx context.Context, sessionID string, transc
 		}
 	}
 	if score >= f.thresholds.Semantic {
-		res.Semantic = f.extractFacts(transcript)
+		res.Semantic = f.extractFacts(sessionID, transcript)
 	}
 	if score >= f.thresholds.Procedural {
 		if pp := f.extractProcedure(transcript); pp != nil {
@@ -87,16 +93,17 @@ func (f *FormationPolicy) Evaluate(ctx context.Context, sessionID string, transc
 }
 
 // extractFacts 确定性提取语义事实：用户表达偏好 / 明确要记住 → subject=user。
-func (f *FormationPolicy) extractFacts(transcript []llm.Message) []FactProposal {
+// sessionID 落 MemoryFactDO.Source，记忆面板据此溯源。
+func (f *FormationPolicy) extractFacts(sessionID string, transcript []llm.Message) []FactProposal {
 	for _, m := range transcript {
 		if m.Role != llm.RoleUser || m.Content == "" {
 			continue
 		}
 		switch {
 		case preferRe.MatchString(m.Content):
-			return []FactProposal{{Subject: "user", Key: "preference", Value: snippet(m.Content, 200), Confidence: 0.7}}
+			return []FactProposal{{Subject: "user", Key: "preference", Value: snippet(m.Content, 200), Confidence: 0.7, SessionID: sessionID}}
 		case rememberRe.MatchString(m.Content):
-			return []FactProposal{{Subject: "user", Key: "remembered", Value: snippet(m.Content, 200), Confidence: 0.8}}
+			return []FactProposal{{Subject: "user", Key: "remembered", Value: snippet(m.Content, 200), Confidence: 0.8, SessionID: sessionID}}
 		}
 	}
 	return nil

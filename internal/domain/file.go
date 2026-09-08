@@ -124,3 +124,23 @@ type WorkspaceFileItem struct {
 	URL        string `json:"url"`
 	ModifiedAt int64  `json:"modified_at"`
 }
+
+// WorkspaceEntry 工作区真实目录的单层条目（懒加载文件树用）。
+//
+// 区别于 WorkspaceFileItem（托管产物清单）：这是真实磁盘目录的懒加载一层，
+// 前端点开文件夹再请求下一层，避免大目录一次性全量返回。
+type WorkspaceEntry struct {
+	Path  string `json:"path"` // 相对工作区根，slash 分隔；目录以 / 结尾便于前端判型
+	Name  string `json:"name"`
+	IsDir bool   `json:"is_dir"`
+	Size  int64  `json:"size"`
+	Ext   string `json:"ext"`  // 小写去点；目录为空
+	Kind  string `json:"kind"` // 复用 WorkspaceFileItem 的 kind 口径
+}
+
+// WorkspaceListRESP 单层目录列目录出参。
+type WorkspaceListRESP struct {
+	Items     []WorkspaceEntry `json:"items"`
+	Truncated bool             `json:"truncated"` // 单层超过上限被截断
+	Root      string           `json:"root"`      // 工作区根绝对路径（前端拼绝对路径引用用）
+}

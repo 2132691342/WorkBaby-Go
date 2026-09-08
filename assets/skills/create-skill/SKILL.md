@@ -1,6 +1,13 @@
 ---
 name: create-skill
 version: 1.2.0
+when_to_use:
+  - 创建 skill
+  - 新建 skill
+  - 写一个 skill
+  - 编写 skill
+  - skill.md 格式
+  - create skill
 description: Guides users through creating effective Agent Skills for QwenWork. Use when the user wants to create, write, or author a new skill, or asks about skill structure, best practices, or SKILL.md format.
 description_zh: 引导用户为 QwenWork 创建有效的 Agent 技能。当用户想要创建、编写或制作新技能，或询问技能结构、最佳实践或 SKILL.md 格式时使用。
 ---

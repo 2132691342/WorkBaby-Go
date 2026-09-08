@@ -66,8 +66,11 @@ func (r *Registry) List() []*LoadedSkill {
 	return out
 }
 
-// Match 关键词确定性匹配。
-// 命中返回 skill name；未命中返回空串。
+// Match 关键词确定性匹配：命中触发词最长者优先（更具体），等长按 skill 名字典序。
+//
+// 旧实现遍历 map 命中即返回——Go map 遍历顺序随机，多个 Skill 同时命中时
+// 每次结果可能不同。长触发词语义更具体（"合并 pdf" 优于 "pdf"），取最长命中
+// 让路由结果确定且更符合意图。
 func (r *Registry) Match(content string) string {
 	if content == "" {
 		return ""
@@ -75,19 +78,21 @@ func (r *Registry) Match(content string) string {
 	lower := strings.ToLower(content)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	bestName := ""
+	bestLen := 0
 	for _, sk := range r.skills {
 		for _, trig := range sk.Triggers {
 			t := strings.ToLower(trig)
-			if t == "" {
+			if t == "" || !strings.Contains(lower, t) {
 				continue
 			}
-			// 中英文关键词：非 ASCII 用包含匹配，ASCII 用子串匹配（均为包含语义）
-			if strings.Contains(lower, t) {
-				return sk.Skill.Name
+			if len(t) > bestLen || (len(t) == bestLen && (bestName == "" || sk.Skill.Name < bestName)) {
+				bestName = sk.Skill.Name
+				bestLen = len(t)
 			}
 		}
 	}
-	return ""
+	return bestName
 }
 
 // splitTriggers 按行拆分触发词，过滤空行与前后空白。

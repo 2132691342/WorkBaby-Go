@@ -77,15 +77,15 @@ async function createWorkflow(): Promise<void> {
 /** 状态徽标：el-tag type。 */
 function statusType(s: string): 'success' | 'danger' | 'warning' | 'info' | 'primary' {
   switch (s) {
-    case 'COMPLETED':
+    case 'completed':
       return 'success'
-    case 'FAILED':
+    case 'failed':
       return 'danger'
-    case 'RUNNING':
+    case 'running':
       return 'warning'
-    case 'PAUSED':
+    case 'paused':
       return 'info'
-    case 'CANCELLED':
+    case 'cancelled':
       return 'primary'
     default:
       return 'primary'
@@ -311,18 +311,18 @@ onMounted(loadList)
                       <div class="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-wb-ink">{{ row.value }}</div>
                     </div>
                   </div>
-                  <div v-else-if="currentExec.status === 'COMPLETED'" class="text-wb-muted">
+                  <div v-else-if="currentExec.status === 'completed'" class="text-wb-muted">
                     {{ t('workflow.noOutput') }}
                   </div>
                   <div class="mt-3 flex gap-2">
                     <el-button v-if="currentExec.status === 'PAUSED'" type="primary" size="small" @click="doResume">
                       {{ t('workflow.resume') }}
                     </el-button>
-                    <el-button v-if="currentExec.status === 'RUNNING'" size="small" @click="doPause">
+                    <el-button v-if="currentExec.status === 'running'" size="small" @click="doPause">
                       {{ t('workflow.pause') }}
                     </el-button>
                     <el-button
-                      v-if="!['COMPLETED', 'FAILED', 'CANCELLED'].includes(currentExec.status)"
+                      v-if="!['completed', 'failed', 'cancelled'].includes(currentExec.status)"
                       type="danger"
                       size="small"
                       @click="doCancel"

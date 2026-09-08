@@ -427,6 +427,8 @@ export interface ContextUsageRESP {
   session_id: string
   model: string
   context_window: number
+  /** 压缩触发预算（窗口 × 压缩比例；0 = 未启用） */
+  context_budget: number
   used_tokens: number
   free_tokens: number
   used_ratio: number
@@ -435,6 +437,51 @@ export interface ContextUsageRESP {
   tool_count: number
   /** true 表示历史段为字符近似估算（未拿到 provider 实测 input_tokens） */
   estimated: boolean
+}
+
+// ===== 工作区文件树（真实磁盘目录，懒加载） =====
+
+/** 工作区单层目录条目（GET /api/v1/chat/workspace/:id/ls）。 */
+export interface WorkspaceEntry {
+  /** 相对工作区根，slash 分隔；目录以 / 结尾便于判型 */
+  path: string
+  name: string
+  is_dir: boolean
+  size: number
+  ext: string
+  kind: string
+}
+
+/** 单层列目录响应。 */
+export interface WorkspaceListRESP {
+  items: WorkspaceEntry[]
+  truncated: boolean
+  /** 工作区根绝对路径（「添加到聊天」拼绝对路径引用用）。 */
+  root: string
+}
+
+// ===== 运行历史 =====
+
+/** 单次 run 的索引记录（GET /api/v1/chat/runs）。 */
+export interface RunRecord {
+  run_id: string
+  session_id: string
+  model: string
+  status: 'running' | 'done' | 'error'
+  reason: string
+  turns: number
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  total_tokens: number
+  started_at: number
+  ended_at: number
+}
+
+/** 运行历史分页响应。 */
+export interface RunRecordList {
+  items: RunRecord[]
+  total: number
 }
 
 // ===== 工作目录信任 =====
@@ -929,6 +976,12 @@ export interface PetConfig {
   scale: number
   bubble_enabled: boolean
   bubble_duration_ms: number
+  /** 同一 sprite 复用为聊天区背景（与桌宠共享形象来源） */
+  chat_background: boolean
+  /** 背景不透明度百分比（0~100） */
+  background_opacity: number
+  /** 背景模糊像素（0 = 不模糊） */
+  background_blur_px: number
   updated_at: number | null
 }
 
@@ -942,6 +995,9 @@ export interface PetConfigReq {
   scale?: number
   bubble_enabled?: boolean
   bubble_duration_ms?: number
+  chat_background?: boolean
+  background_opacity?: number
+  background_blur_px?: number
 }
 
 /** 桌宠 sprite（GET /api/v1/pet/sprites）。 */

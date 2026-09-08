@@ -1,6 +1,15 @@
 ---
 name: media-generation
 version: 1.2.1
+when_to_use:
+  - 生成图片
+  - 生成视频
+  - 文生图
+  - 文生视频
+  - ai 绘图
+  - 生成 3d
+  - 图片特效
+  - 生成音乐
 description: Generate or edit images with automatic model selection or a supported model explicitly requested by the user, generate videos, or create music as asynchronous media artifacts. Use this skill when the user asks for text-to-image, image editing, image variations, choosing a supported model for image generation or editing, text-to-video, image-to-video, first-and-last-frame video, multi-reference-image video, music, a song, a soundtrack, or background music. This skill creates image/video/music files; it is not for text-to-speech.
 description_zh: 支持自动选模，也支持按用户明确指定的已支持模型生成或编辑图片，以及生成异步视频或音乐产物。当用户要求文生图、编辑图片、图片变体、为生图或编辑图选择已支持模型、文生视频、单图生视频、首尾帧生视频、多参考图生视频、音乐、歌曲、配乐或背景音乐时使用此技能。本技能生成图片、视频或音乐文件，不用于文字转语音。
 license: Proprietary

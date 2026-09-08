@@ -97,6 +97,7 @@ function fmtTokens(n: number): string {
     <!-- 缓存命中率（真实数据：token-trend 聚合） -->
     <div class="card p-sm dash-card">
       <h3 class="mb10">{{ t('dashboard.cacheRate') }}</h3>
+      <p v-if="cacheSummary" class="fs11 muted" style="margin: -6px 0 8px">{{ t('dashboard.cacheScopeHint') }}</p>
       <div v-if="cacheSummary" class="dash-card__body">
         <div class="ring" :style="{
           width: '66px',

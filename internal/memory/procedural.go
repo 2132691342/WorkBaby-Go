@@ -52,15 +52,31 @@ func (p *procedural) Count(ctx context.Context) (int64, error) {
 	return p.repo.Count(ctx)
 }
 
-// Search 召回：名称/步骤子串命中即返回。
+// Search 召回：query 切词后任一 token 命中 name/steps 即返回。
+//
+// 旧实现用整条 query 做子串匹配——「帮我总结 xxx」永远匹配不到 "tool-flow-read_file"；
+// 切词后「读文件」「整理」等词才能关联到对应程序。
 func (p *procedural) Search(ctx context.Context, query string, topK int) []RecallHit {
 	rows, err := p.repo.List(ctx, 200)
 	if err != nil || query == "" {
 		return nil
 	}
+	toks := pkg.SplitTokens(query)
 	out := make([]RecallHit, 0, len(rows))
 	for i := range rows {
-		if !containsFold(rows[i].Name, query) && !containsFold(rows[i].Steps, query) {
+		name, steps := strings.ToLower(rows[i].Name), strings.ToLower(parseSteps(rows[i].Steps))
+		hit := false
+		for _, t := range toks {
+			t = strings.ToLower(t)
+			if t == "" {
+				continue
+			}
+			if strings.Contains(name, t) || strings.Contains(steps, t) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
 			continue
 		}
 		out = append(out, RecallHit{

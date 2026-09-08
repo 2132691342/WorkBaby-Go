@@ -169,6 +169,16 @@ func (s *Server) registerRoutes() {
 		v, err := h.ResumeChat(c.Param("id"))
 		unwrap(c, v, err)
 	})
+	// 运行历史索引（事件明细回放走 /chat/runs/:id/events）
+	v1.GET("/chat/runs", func(c *gin.Context) {
+		var req domain.RunRecordListREQ
+		if err := c.ShouldBindQuery(&req); err != nil {
+			Fail(c, pkg.Wrap(1001, "invalid query", err))
+			return
+		}
+		v, err := h.ListRuns(req)
+		unwrap(c, v, err)
+	})
 	// run 事件 JSONL 无头导出
 	v1.GET("/chat/runs/:id/events", func(c *gin.Context) {
 		v, err := h.ExportRunEvents(c.Param("id"))
@@ -293,8 +303,48 @@ func (s *Server) registerRoutes() {
 		v, err := h.ListWorkspaceFiles(c.Param("id"))
 		unwrap(c, v, err)
 	})
+	// 懒加载列工作区单层目录（真实磁盘内容；path 相对工作区根）
+	v1.GET("/chat/workspace/:id/ls", func(c *gin.Context) {
+		v, err := h.ListWorkspaceDir(c.Param("id"), c.Query("path"))
+		unwrap(c, v, err)
+	})
 	v1.GET("/chat/workspace/:id/file", func(c *gin.Context) {
 		v, err := h.ReadWorkspaceFile(c.Param("id"), c.Query("path"))
+		unwrap(c, v, err)
+	})
+	// 工作区文件管理：重命名 / 副本 / 删除（沙箱校验；面板右键菜单消费）
+	v1.POST("/chat/workspace/:id/rename", func(c *gin.Context) {
+		var req struct {
+			Path    string `json:"path"`
+			NewName string `json:"new_name"`
+		}
+		if err := BindJSON(c, &req); err != nil {
+			Fail(c, err)
+			return
+		}
+		v, err := h.RenameWorkspaceEntry(c.Param("id"), req.Path, req.NewName)
+		unwrap(c, v, err)
+	})
+	v1.POST("/chat/workspace/:id/copy", func(c *gin.Context) {
+		var req struct {
+			Path string `json:"path"`
+		}
+		if err := BindJSON(c, &req); err != nil {
+			Fail(c, err)
+			return
+		}
+		v, err := h.CopyWorkspaceEntry(c.Param("id"), req.Path)
+		unwrap(c, v, err)
+	})
+	v1.POST("/chat/workspace/:id/remove", func(c *gin.Context) {
+		var req struct {
+			Path string `json:"path"`
+		}
+		if err := BindJSON(c, &req); err != nil {
+			Fail(c, err)
+			return
+		}
+		v, err := h.DeleteWorkspaceEntry(c.Param("id"), req.Path)
 		unwrap(c, v, err)
 	})
 

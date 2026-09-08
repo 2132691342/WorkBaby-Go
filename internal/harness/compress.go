@@ -1,6 +1,11 @@
 package harness
 
-import "WorkBaby/internal/llm"
+import (
+	"encoding/json"
+
+	"WorkBaby/internal/llm"
+	"WorkBaby/internal/pkg"
+)
 
 // Compressor 上下文压缩器。
 //
@@ -76,19 +81,95 @@ func safeTailStart(ms []*llm.Message, want int) int {
 	return 1
 }
 
-// EstimateTokens 估算消息 token 总量（utf8 rune 数 / 4，轻量近似；无 tokenizer）。
+// EstimateTokens 估算消息 token 总量（加权近似；无 tokenizer）。
+//
+// 口径：CJK 字符按 1 token/字（主流分词器对中文约 0.6~1.5 token/字，取 1 偏保守），
+// 其余按 4 字符/token 向上取整；每条消息另计角色与分隔开销。
+// 约束：按字符均摊的估算对中文会低估数倍，直接导致压缩永不触发、上游上下文超限。
 func EstimateTokens(ms []*llm.Message) int {
 	n := 0
 	for _, m := range ms {
 		if m == nil {
 			continue
 		}
-		n += len([]rune(m.Content)) + len([]rune(m.Thinking))
-		if len(m.ToolCalls) > 0 {
-			for _, tc := range m.ToolCalls {
-				n += len([]rune(tc.Function.Name)) + len([]rune(tc.Function.Arguments))
+		n += pkg.EstimateTextTokens(m.Content) + pkg.EstimateTextTokens(m.Thinking)
+		for _, tc := range m.ToolCalls {
+			n += pkg.EstimateTextTokens(tc.Function.Name) + pkg.EstimateTextTokens(tc.Function.Arguments)
+		}
+		n += MessageOverheadTokens
+	}
+	return n
+}
+
+// EstimateToolTokens 估算工具定义的 token 占用（名称 + 描述 + 参数 schema）。
+//
+// 工具定义同样计入上游 prompt_tokens，估算时必须与消息一起纳入，
+// 否则实测回推校准会把固定的工具开销误算成文本密度偏差。
+func EstimateToolTokens(defs []llm.ToolDefinition) int {
+	n := 0
+	for _, d := range defs {
+		n += pkg.EstimateTextTokens(d.Name) + pkg.EstimateTextTokens(d.Description) + MessageOverheadTokens
+		if d.Parameters != nil {
+			if b, err := json.Marshal(d.Parameters); err == nil {
+				n += pkg.EstimateTextTokens(string(b))
 			}
 		}
 	}
-	return n / 4
+	return n
+}
+
+// MessageOverheadTokens 每条消息/工具定义的固定开销（role 标记 + 分隔 + 结束符）。
+const MessageOverheadTokens = 7
+
+// 校准系数边界：单轮样本可能极端（首轮全缓存命中 / 大工具结果），限幅避免系数被打飞。
+const (
+	minTokenScale     = 0.5
+	maxTokenScale     = 8.0
+	tokenScaleInertia = 0.5 // EMA 惯性：历史系数权重
+)
+
+// calibratedBudget 把真实预算折算成「估算口径」的预算交给压缩器。
+//
+// 压缩器内部以 EstimateTokens(out) <= budget 判定，折算后等价于
+// 「估算 × 系数 ≤ 真实预算」。另外：上一轮实测已超预算时，估算再低也必须压缩——
+// 实测值比估算可靠，这条硬触发是「估算低估 → 上游 Prompt exceeds max length」的兜底。
+func (r *Runner) calibratedBudget(budgetTokens int) int {
+	if budgetTokens <= 0 {
+		return 0
+	}
+	if r.tokenScale <= 0 {
+		r.tokenScale = 1
+	}
+	if r.lastMeasuredIn >= budgetTokens {
+		return 1
+	}
+	scaled := int(float64(budgetTokens) / r.tokenScale)
+	if scaled < 1 {
+		scaled = 1
+	}
+	return scaled
+}
+
+// updateTokenScale EMA 更新校准系数：新样本与历史各占一半，并对单个样本先限幅。
+func updateTokenScale(cur, ratio float64) float64 {
+	if cur <= 0 {
+		cur = 1
+	}
+	if ratio <= 0 {
+		return cur
+	}
+	if ratio < minTokenScale {
+		ratio = minTokenScale
+	}
+	if ratio > maxTokenScale {
+		ratio = maxTokenScale
+	}
+	next := cur*tokenScaleInertia + ratio*(1-tokenScaleInertia)
+	if next < minTokenScale {
+		return minTokenScale
+	}
+	if next > maxTokenScale {
+		return maxTokenScale
+	}
+	return next
 }

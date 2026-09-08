@@ -92,7 +92,15 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
     case 'chat:tool-result':
       return {
         type: 'tool_result',
-        data: { id: p.id, name: p.name, output: p.content ?? '', state: p.error ? 'error' : 'success', agent: p.agent ?? '' }
+        data: {
+          id: p.id,
+          name: p.name,
+          output: p.content ?? '',
+          state: p.error ? 'error' : 'success',
+          agent: p.agent ?? '',
+          // 后端计量的真实执行耗时；缺失时 decoder 退回本地 started_at 差值
+          duration_ms: typeof p.duration_ms === 'number' ? p.duration_ms : undefined
+        }
       }
     case 'chat:subagent-start':
       return { type: 'subagent_start', data: { sub_run_id: p.sub_run_id, agent: p.agent ?? '' } }
@@ -186,6 +194,13 @@ const RECONNECT_MAX_MS = 8000
  */
 const WATCHDOG_MS = 75_000
 
+/**
+ * 整轮 run 的总超时兜底：后端 runLLM 墙钟上限 10 分钟（default Agent 未配 MaxWallTime），
+ * 这里留足余量。chat:done 一旦丢失（且重放窗口覆盖不到）前端会永远停在「正在输入」，
+ * 总超时是最后一道防线——超时后由调用方拉取权威快照收尾。
+ */
+const MAX_RUN_MS = 15 * 60_000
+
 export function streamChat(
   req: ChatStreamReq,
   onEvent: (event: ChatStreamEvent) => void,
@@ -200,6 +215,8 @@ export function streamChat(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   const promise = (async (): Promise<void> => {
+    // 计时起点必须在 POST 之前：run 在 POST 返回时就已在后端 goroutine 里开跑
+    const startedAt = Date.now()
     // 1) 发起 run：POST /api/v1/chat/stream → {run_id, session_id, ...}；续跑走 /chat/stream/{id}/resume
     let runID: string
     try {
@@ -285,7 +302,10 @@ export function streamChat(
         }
         const ev = mapSSEEvent(name, data)
         if (ev) onEvent(ev)
-        if (name === 'chat:done' || name === 'chat:error') {
+        // 只有 chat:done 结束流：chat:error 可能是非致命错误（如检查点保存失败），
+        // run 会继续并最终补发 chat:done——此时断流会丢掉后续全部增量与最终结果。
+        // 终态缺失的风险由 MAX_RUN_MS 总超时兜底。
+        if (name === 'chat:done') {
           finished = true
           clearWatchdog()
           es?.close()
@@ -308,14 +328,23 @@ export function streamChat(
 
     openStream()
 
-    // 3) 等待终态（chat:done / chat:error 置 finished）
+    // 3) 等待终态（chat:done 置 finished；总超时兜底防永久挂起）
+    let timedOut = false
     while (!finished && !cancelled) {
+      if (Date.now() - startedAt > MAX_RUN_MS) {
+        timedOut = true
+        finished = true
+        break
+      }
       await new Promise((r) => setTimeout(r, 100))
     }
     clearWatchdog()
     if (reconnectTimer !== null) clearTimeout(reconnectTimer)
     // es 经 openStream() 闭包赋值；TS 跨函数不追踪外部 let，静态推断仍为 null → 显式断言恢复类型
     if (es !== null) (es as EventSource).close()
+    if (timedOut) {
+      onEvent({ type: 'error', data: { message: '响应超时，已按当前进度收尾' } })
+    }
   })()
 
   const cancel = (): void => {

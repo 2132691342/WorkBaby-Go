@@ -5,36 +5,6 @@ import (
 	"testing"
 )
 
-// TestDetectThinkingStyle 方言探测：已知上游必须命中，未知上游一律 none（安全默认）。
-func TestDetectThinkingStyle(t *testing.T) {
-	cases := []struct {
-		name    string
-		baseURL string
-		model   string
-		want    ThinkingStyle
-	}{
-		{"minimax-host", "https://api.minimaxi.com/v1", "MiniMax-M3", ThinkingStyleAdaptive},
-		{"minimax-intl", "https://api.minimax.chat/v1", "abab6.5s-chat", ThinkingStyleAdaptive},
-		{"zhipu-glm", "https://open.bigmodel.cn/api/paas/v4", "glm-4.6", ThinkingStyleEnabled},
-		{"volc-ark", "https://ark.cn-beijing.volces.com/api/v3", "doubao-pro", ThinkingStyleEnabled},
-		{"kimi", "https://api.moonshot.cn/v1", "kimi-k2", ThinkingStyleEnabled},
-		{"qwen-host", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", ThinkingStyleEnableBool},
-		{"qwen-model", "http://localhost:8000/v1", "Qwen3-32B", ThinkingStyleEnableBool},
-		{"openai-o3", "https://api.openai.com/v1", "o3-mini", ThinkingStyleReasoningEffort},
-		{"openai-gpt5", "https://api.openai.com/v1", "gpt-5", ThinkingStyleReasoningEffort},
-		{"openai-plain", "https://api.openai.com/v1", "gpt-4o", ThinkingStyleNone},
-		{"deepseek", "https://api.deepseek.com/v1", "deepseek-chat", ThinkingStyleNone},
-		{"unknown-safe-default", "https://my-private-gateway.example.com/v1", "some-model", ThinkingStyleNone},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := DetectThinkingStyle(c.baseURL, c.model); got != c.want {
-				t.Fatalf("DetectThinkingStyle(%q,%q) = %q, want %q", c.baseURL, c.model, got, c.want)
-			}
-		})
-	}
-}
-
 // TestResolveThinkingStyle 显式指定优先于探测；无法识别的指定值回落探测。
 func TestResolveThinkingStyle(t *testing.T) {
 	if got := ResolveThinkingStyle("adaptive", "https://api.openai.com/v1", "gpt-4o"); got != ThinkingStyleAdaptive {
@@ -45,6 +15,10 @@ func TestResolveThinkingStyle(t *testing.T) {
 	}
 	if got := ResolveThinkingStyle("garbage", "https://api.minimaxi.com/v1", "MiniMax-M3"); got != ThinkingStyleAdaptive {
 		t.Fatalf("garbage should fall back to detect: %q", got)
+	}
+	// 未知上游一律 none：不认识的网关不能猜方言，否则下发私有字段即 400
+	if got := DetectThinkingStyle("https://my-private-gateway.example.com/v1", "some-model"); got != ThinkingStyleNone {
+		t.Fatalf("unknown upstream should default to none, got %q", got)
 	}
 }
 

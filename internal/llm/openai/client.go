@@ -30,15 +30,8 @@ func (c *Client) WithThinkingStyle(s llm.ThinkingStyle) *Client {
 	return c
 }
 
-// New 构造 OpenAI 兼容客户端。
-//
-// BaseURL 必须由调用方/用户在 AiProviderDO.baseUrl 里完整提供，含版本段：
-//   - OpenAI / DeepSeek / Moonshot → 以 `/v1` 结尾
-//   - 智谱 GLM                     → `https://open.bigmodel.cn/api/paas/v4`
-//   - LM Studio / Ollama 兼容层    → `http://localhost:1234/v1`
-//
-// client 层不做任何 baseURL 补全或关键字嗅探：路径不合规会得到 provider
-// 的明确错误（如 404 / 400），便于排查。
+// New 构造 OpenAI 兼容客户端。BaseURL 由调用方完整提供（含版本段，如 /v1）；
+// client 层不做补全或关键字嗅探，路径不合规由上游明确报错便于排查。
 func New(name, baseURL, apiKey string) *Client {
 	return &Client{
 		providerName: name,

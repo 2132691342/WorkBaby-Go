@@ -51,6 +51,11 @@ func (h *Handler) ExportRunEvents(runID string) (string, error) {
 	return string(bs), nil
 }
 
+// ListRuns 运行历史索引（倒序分页）；单 run 的事件明细回放走 /chat/runs/:id/events。
+func (h *Handler) ListRuns(req domain.RunRecordListREQ) (domain.RunRecordListRESP, error) {
+	return h.chatSvc.ListRunRecords(h.ctx, req.SessionID, req.Limit, req.Offset)
+}
+
 // SteerSession run 进行中插入一条用户指令（steering / follow-up 注入缝）。
 // 会话当前没有活动 run 时返回 5010，前端退回普通发送。
 func (h *Handler) SteerSession(sessionID string, req domain.SteerREQ) (domain.SteerResultRESP, error) {

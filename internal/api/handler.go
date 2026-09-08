@@ -155,11 +155,13 @@ func (h *Handler) Startup(ctx context.Context) error {
 	// 事件 JSONL 无头导出：每 run 一文件，供回放/测试/自动化消费
 	h.eventLog.WithFileSink(filepath.Join(paths.Home, "runs"))
 	h.runtimeMgr = rt
-	go func() {
-		if err := rt.Ensure(); err != nil {
-			pkg.L.Warn("runtime ensure failed", "err", err)
-		}
-	}()
+	// 同步等待内置运行时解压完成：MCP.Sync 在下方接着调用，子进程 PATH 注入依赖
+	// rt.BinDirs()；解压异步时 MCP server 启动时 node/python 路径尚未就绪，导致
+	// npx / uvx 类 server 只能依赖系统 PATH。Ensure 失败仅告警（解包失败不应阻断
+	// 启动，但要让用户在日志里看到）。
+	if err := rt.Ensure(); err != nil {
+		pkg.L.Warn("runtime ensure failed", "err", err)
+	}
 
 	cfg, err := config.Init(paths.Cfg)
 	if err != nil {
@@ -366,7 +368,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 
 	// 记忆系统：短期(chat_messages 窗口) + 长期(MEMORY.md) + 情景(episodes + FTS5)
 	memRepo := repo.NewMemoryEpisodeRepo(gdb)
-	h.memSvc = memory.NewService(h.msgRepo, memRepo, repo.NewMemoryFactRepo(gdb), repo.NewMemoryProcedureRepo(gdb), paths.Home)
+	h.memSvc = memory.NewService(memRepo, repo.NewMemoryFactRepo(gdb), repo.NewMemoryProcedureRepo(gdb), paths.Home)
 	// 长期记忆落点跟随会话工作区：绑定本地目录 → {dir}/.workbaby/memory/；默认 → {home}/memory/
 	h.memSvc.WithMemoryPath(func(sessionID string) string {
 		if h.chatSvc != nil {
@@ -387,7 +389,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 
 	// MCP：外部工具源；启动失败只标记 unready，不阻断
 	mcpRepo := repo.NewMcpServerRepo(gdb)
-	h.mcpSvc = service.NewMcpService(mcpRepo, mcp.NewManager(toolReg), h.cipher).
+	h.mcpSvc = service.NewMcpService(mcpRepo, mcp.NewManager(toolReg).WithPathDirs(rt.BinDirs), h.cipher).
 		WithConfigPath(service.McpRawPath(paths.Home))
 	// mcp.json 文件为源：存在则同步进 mcp_servers 表后再对齐子进程
 	if mcpPath := service.McpRawPath(paths.Home); isRegularFile(mcpPath) {
@@ -406,6 +408,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 		WithCheckpointStore(service.NewSQLCheckpointStore(repo.NewAgentCheckpointRepo(gdb))).
 		WithEventLog(h.eventLog).
 		WithMessageBlocks(repo.NewMessageBlockRepo(gdb)).
+		WithRunRecords(repo.NewRunRecordRepo(gdb)).
 		WithExecutionRegistry(h.execs).
 		WithApprovalService(h.approvalSvc)
 
@@ -472,8 +475,13 @@ func (h *Handler) Startup(ctx context.Context) error {
 		Resolver: wiResolver,
 		Sender:   h.channelSvc,
 		Nodes: []wnodes.Node{
-			// LLM 节点注入 ReAct 执行器：配了 tools 即走多轮工具循环（与聊天同一主循环）
-			wnodes.NewLLMNode(h.reg).WithReactor(service.NewWorkflowReactor(h.reg, h.toolSvc).React),
+			// LLM 节点注入 ReAct 执行器：配了 tools 即走多轮工具循环（与聊天同一主循环）。
+			// 计量：ReAct 与补全两条路径统一落 token_usages（Source=workflow），
+			// 此前工作流 LLM 调用完全不计量，仪表盘总消耗系统性偏低。
+			wnodes.NewLLMNode(h.reg).
+				WithReactor(service.NewWorkflowReactor(h.reg, h.toolSvc).
+					WithUsageSink(service.WorkflowUsageSink(h.usageRepo)).React).
+				WithUsageSink(service.WorkflowUsageSink(h.usageRepo)),
 			wnodes.NewToolNode(toolReg),
 			wnodes.NewCodeNode(),
 			wnodes.NewConditionNode(),
@@ -493,7 +501,9 @@ func (h *Handler) Startup(ctx context.Context) error {
 		}
 	}
 	registerCap(capability.NewPersona(), capability.OrderPersona)
+	registerCap(capability.NewEnvironment(), capability.OrderEnvironment)
 	registerCap(capability.NewWorkspace(), capability.OrderWorkspace)
+	registerCap(capability.NewTodo(h.todoStore), capability.OrderTodo)
 	registerCap(capability.NewMemory(h.memSvc, h.chatSvc.MemoryEnabled), capability.OrderMemory)
 	registerCap(capability.NewKnowledge(retriever), capability.OrderKnowledge)
 	registerCap(capability.NewSkill(capability.NewSkillSource(
@@ -612,15 +622,12 @@ func (h *Handler) Shutdown(_ context.Context) {
 	}
 }
 
-// bindEventBridge 应用内事件总线 → Wails 前端事件总线。
-// 事件名统一为冒号命名空间（chat:stream / chat:approval / app:ready），前缀匹配必须用冒号。
+// bindEventBridge 应用内事件总线 → Wails 前端事件总线（仅系统级事件）。
+//
+// chat:* 不经此桥接：前端消费统一走 SSE（server/sse.go），Wails 通道零订阅者，
+// 而且每条 chat:stream 增量都会在 run goroutine 上同步执行一次 EventsEmit（序列化 + IPC），
+// 纯开销。保留 app:*（app:ready / app:open-file 是前端启动依赖）。
 func (h *Handler) bindEventBridge() {
-	h.bus.Subscribe(event.MatchPrefix("chat:"), func(event string, payload any) {
-		if h.ctx == nil {
-			return
-		}
-		wruntime.EventsEmit(h.ctx, event, payload)
-	})
 	h.bus.Subscribe(event.MatchPrefix("app:"), func(event string, payload any) {
 		if h.ctx == nil {
 			return

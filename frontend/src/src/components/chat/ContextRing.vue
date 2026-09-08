@@ -81,14 +81,15 @@ const hovered = ref(false)
             :transform="`rotate(-90 ${SIZE / 4.8} ${SIZE / 4.8})`"
           />
         </svg>
-        <span class="tabular-nums">{{ usedPercentDisplay }}%</span>
+        <!-- 估算态用 ~ 前缀：百分比本身只是字符估算量级，不能当成实测占用读 -->
+        <span class="tabular-nums">{{ usage?.estimated ? '~' : '' }}{{ usedPercentDisplay }}%</span>
       </button>
     </template>
 
     <div v-if="usage" class="space-y-3">
       <div class="flex items-baseline justify-between">
         <div class="text-sm font-medium text-wb-ink">{{ t('chat.contextUsageTitle') }}</div>
-        <div class="text-[11px] text-wb-muted">
+        <div class="text-[11px]" :class="usage.estimated ? 'text-wb-warning' : 'text-wb-muted'">
           {{ usage.estimated ? t('chat.contextEstimated') : t('chat.contextMeasured') }}
         </div>
       </div>

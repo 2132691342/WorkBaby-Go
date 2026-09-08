@@ -19,24 +19,39 @@ type ExecPolicy struct {
 	Timeout         time.Duration // 默认单次执行超时
 }
 
-// DefaultExecPolicy 安全默认：白名单为空（任何命令都需先在设置面板显式放行），
-// 危险命令默认拦截；审批门槛 = exec 级。
+// DefaultExecPolicy 开箱可用默认：内置 Windows 常用工具链白名单（设置页 exec.whitelist 可整体覆盖），
+// 破坏性命令正则拦截；审批门槛 = exec 级。
+//
+// 白名单非空是「Agent 能干活」的前提——空白名单会让每条命令都弹审批，
+// 长任务在人工响应前就被墙钟预算砍断。安全由「白名单 basename + 破坏性正则 + 审批」三重叠加保证。
 func DefaultExecPolicy() ExecPolicy {
 	return ExecPolicy{
-		AllowedBinaries: []string{},
+		AllowedBinaries: []string{
+			// Windows shell：内建命令（dir/type/copy…）与管道/重定向必须经它
+			"cmd", "powershell", "pwsh",
+			// 版本管理与构建工具链
+			"git", "go", "node", "npm", "npx", "pnpm", "yarn",
+			"python", "python3", "py", "uv", "uvx",
+			"dotnet", "java", "javac", "mvn", "gradle", "make",
+			// 网络与归档
+			"curl", "wget", "tar", "unzip",
+			// 文件与文本检索（cmd 内建，无独立 exe，执行时由 cmd /c 兜底）
+			"dir", "type", "echo", "copy", "move", "mkdir", "rmdir", "find", "findstr", "where", "set",
+		},
 		DeniedPatterns: []string{
-			`(?i)rm\s+(-rf|/s)\s+/`,             // 删根
+			`(?i)\brm\s+(-rf|-fr|-r)\b`,         // 递归强删
 			`(?i)del\s+/f\s+/s`,                 // 批量强制删
+			`(?i)del\s+/s`,                      // 静默删目录树
 			`(?i)rd\s+/s\s+/q`,                  // 静默删目录树
 			`(?i)rmdir\s+/s`,                    // 删目录树
 			`(?i)format\s+[a-z]:`,               // 格式化盘符
+			`(?i)mkfs`,                          // 格式化
 			`(?i)diskpart`,                      // 磁盘分区
 			`(?i)cleanmgr`,                      // 磁盘清理（交互破坏）
+			`(?i)cipher\s+/w`,                   // 空闲空间擦除
 			`(?i)reg\s+delete`,                  // 注册表删除
 			`(?i)shutdown\s*$|(?i)shutdown\s+-`, // 关机
 			`(?i)taskkill\s+/f`,                 // 强杀进程
-			`(?i)>|(?i)\|`,                      // 重定向 / 管道（防组合）
-			`(?i)&&`,                            // 命令串联
 		},
 		ApprovalLevel: RiskExec,
 		Timeout:       5 * time.Minute,

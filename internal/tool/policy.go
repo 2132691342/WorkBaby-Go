@@ -98,6 +98,17 @@ func (g *Gate) Set(name string, d Decision) *Gate {
 	return g
 }
 
+// Mode 返回策略门的会话权限模式；nil 门按 default 处理。
+//
+// YOLO（完全访问）下用户已授权全部动作，调用方据此连命令级裁决一起跳过——
+// 否则 Allow 与 YOLO 无法区分（两者 Decide 都返回 DecisionAllow）。
+func (g *Gate) Mode() SessionMode {
+	if g == nil {
+		return SessionModeDefault
+	}
+	return g.mode
+}
+
 // Decide 返回该工具本轮决策：先精确/glob 显式规则，无规则走模式默认。
 func (g *Gate) Decide(name string, risk RiskLevel) Decision {
 	if g == nil {

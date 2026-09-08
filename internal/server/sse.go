@@ -52,10 +52,11 @@ func NewSSEHub(bus *event.Bus, log *event.RunEventLog) *SSEHub {
 		log:     log,
 		clients: make(map[*sseClient]struct{}),
 	}
-	// 桥接 chat:*/pet:*/app:* 三类事件（前端订阅范围）
+	// 桥接 chat:*/pet:*/app:*/workflow:* 四类事件（前端订阅范围）
 	h.bus.Subscribe(event.MatchPrefix("chat:"), h.onEvent)
 	h.bus.Subscribe(event.MatchPrefix("pet:"), h.onEvent)
 	h.bus.Subscribe(event.MatchPrefix("app:"), h.onEvent)
+	h.bus.Subscribe(event.MatchPrefix("workflow:"), h.onEvent)
 	return h
 }
 
@@ -86,10 +87,16 @@ func (h *SSEHub) onEvent(name string, payload any) {
 	}
 }
 
-// extractRunID 从事件载荷中提取 run_id 用于按 run 过滤；载荷为 map 或 struct。
+// extractRunID 从事件载荷中提取订阅键：run_id 优先，缺失则退到 executionID（workflow 事件）。
+//
+// workflow 事件不带 run_id（不属于某个 chat run），但前端按 executionID 订阅工作流进度，
+//  这里把 executionID 视为订阅键，复用同一套过滤逻辑。
 func extractRunID(payload any) string {
 	if m, ok := payload.(map[string]any); ok {
-		if v, ok := m["run_id"].(string); ok {
+		if v, ok := m["run_id"].(string); ok && v != "" {
+			return v
+		}
+		if v, ok := m["executionID"].(string); ok && v != "" {
 			return v
 		}
 	}
@@ -171,8 +178,12 @@ func (h *SSEHub) Serve(c *gin.Context) {
 		return
 	}
 
-	// 重连场景：先补发断线期间错过的事件
-	if afterSeq > 0 && runID != "" && h.log != nil {
+	// 重放（afterSeq 之后补齐）：首连时 afterSeq=0，等价于补发该 run 已缓存的全部事件。
+	//
+	// 首连也必须重放：run 在 POST /chat/stream 返回时就已在 goroutine 里开跑，
+	// 「HTTP 响应 → SSE 握手」窗口内发出的 chat:stream.start 乃至 chat:done
+	// 若不补回，前端会永远等不到终态。
+	if runID != "" && h.log != nil {
 		events, covered := h.log.Replay(runID, afterSeq)
 		if !covered {
 			fmt.Fprintf(c.Writer, "event: chat:gap\ndata: {\"run_id\":%q,\"last_seq\":%d}\n\n", runID, afterSeq)

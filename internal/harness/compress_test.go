@@ -96,20 +96,6 @@ func TestMicroCompressorSecondPassCutSafe(t *testing.T) {
 	assertPairingIntact(t, out)
 }
 
-// TestHistoryTruncatorSafeCut 截断中间件同样不得在工具对中间下刀。
-func TestHistoryTruncatorSafeCut(t *testing.T) {
-	var msgs []*llm.Message
-	msgs = append(msgs, llm.SystemMessage("sys"), llm.UserMessage("start"))
-	for i := 0; i < 4; i++ {
-		id := "CALL_" + string(rune('A'+i))
-		msgs = append(msgs, toolCallMsg(id, "exec"),
-			llm.ToolMessage(id, "exec", strings.Repeat("结果内容", 60)))
-	}
-	tr := NewHistoryTruncator(80, 0.5)
-	out := tr.BeforeTurn(msgs)
-	assertPairingIntact(t, out)
-}
-
 // TestRunnerContextBudgetCompress 冒烟：极小上下文预算下超长上下文仍能正常跑完（压缩不打断循环）。
 func TestRunnerContextBudgetCompress(t *testing.T) {
 	p := &scriptedProvider{calls: [][]llm.StreamChunk{

@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"strings"
+	"time"
 
+	"WorkBaby/internal/domain"
 	"WorkBaby/internal/harness"
 	"WorkBaby/internal/llm"
 	"WorkBaby/internal/llm/registry"
@@ -21,11 +23,18 @@ import (
 type WorkflowReactor struct {
 	providers *registry.Registry
 	tools     *ToolService
+	usageSink wnodes.UsageSink // 计量回调；nil = 不落 token_usages
 }
 
 // NewWorkflowReactor 构造工作流 ReAct 执行器。
 func NewWorkflowReactor(providers *registry.Registry, tools *ToolService) *WorkflowReactor {
 	return &WorkflowReactor{providers: providers, tools: tools}
+}
+
+// WithUsageSink 注入计量回调：每轮 turn 明细落 token_usages（Source=workflow）。
+func (w *WorkflowReactor) WithUsageSink(s wnodes.UsageSink) *WorkflowReactor {
+	w.usageSink = s
+	return w
 }
 
 // React 实现 wnodes.ReactFunc：跑一次带工具的 ReAct 循环。
@@ -69,10 +78,43 @@ func (w *WorkflowReactor) React(ctx context.Context, req wnodes.ReactRequest) (w
 	if res.Err != nil {
 		return wnodes.ReactResult{}, pkg.Wrap(9105, "ReAct 执行失败", res.Err)
 	}
+	// 逐轮落 token_usages：工作流 LLM 节点此前完全不计量，总消耗统计系统性偏低
+	if w.usageSink != nil {
+		for _, t := range res.Turns {
+			w.usageSink(req.ExecutionID, req.ProviderID, req.Model, t.Usage)
+		}
+	}
 	return wnodes.ReactResult{
 		Text:       res.Content,
 		Usage:      res.Usage,
 		Turns:      len(res.Turns), // 每轮一条用量记录，长度即实际轮数
 		StopReason: res.StopReason,
 	}, nil
+}
+
+// WorkflowUsageSink 工作流 LLM 计量落库（handler 装配为闭包；repo 不进 nodes 包）。
+func WorkflowUsageSink(usages interface {
+	BatchCreate(ctx context.Context, rows []domain.TokenUsageDO) error
+}) wnodes.UsageSink {
+	if usages == nil {
+		return nil
+	}
+	return func(executionID, providerID, model string, usage llm.TokenUsage) {
+		row := domain.TokenUsageDO{
+			ID:               pkg.NewID("USAGE"),
+			RunID:            executionID,
+			ProviderID:       providerID,
+			Model:            model,
+			Source:           domain.UsageSourceWorkflow,
+			InputTokens:      usage.InputTokens,
+			OutputTokens:     usage.OutputTokens,
+			CacheReadTokens:  usage.CacheReadTokens,
+			CacheWriteTokens: usage.CacheWriteTokens,
+			TotalTokens:      usage.TotalTokens,
+			CreatedAt:        time.Now().UnixMilli(),
+		}
+		if err := usages.BatchCreate(context.Background(), []domain.TokenUsageDO{row}); err != nil {
+			pkg.L.Warn("persist workflow usage failed", "executionID", executionID, "err", err.Error())
+		}
+	}
 }

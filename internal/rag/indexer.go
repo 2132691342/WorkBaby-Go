@@ -60,7 +60,7 @@ func (ix *Indexer) Index(ctx context.Context, docID string) error {
 			DocID:     docID,
 			Sequence:  i,
 			Content:   ch.Content,
-			Tokens:    estimateTokens(ch.Content),
+			Tokens:    pkg.EstimateTextTokens(ch.Content),
 			MetaJSON:  marshalMeta(ch.Meta),
 			CreatedAt: time.Now().UnixMilli(),
 		})
@@ -153,5 +153,3 @@ func metaTitle(metaJSON string) string {
 	return m["title"]
 }
 
-// estimateTokens 粗估：中英混合按 2 rune/token 折中。
-func estimateTokens(s string) int { return runeLen(s)/2 + 1 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { t } from '@/i18n'
 
 /**
  * 消息用量徽标：从 MessageList 抽出的小型纯展示组件。
@@ -77,7 +78,11 @@ function usageDetail(u: UsageShape | null | undefined): string {
   const rows: string[] = []
   if (u.input_tokens != null) rows.push(`输入 ${u.input_tokens}`)
   if (u.output_tokens != null) rows.push(`输出 ${u.output_tokens}`)
-  if ((u.cache_read_tokens ?? 0) > 0) rows.push(`缓存命中 ${u.cache_read_tokens}（${cacheHitRate(u)}%）`)
+  // 命中率必须与分母一起给：只显示「缓存 99%」会被误读成全局口径，
+  // 而它实际是「本轮」——与仪表盘的窗口聚合值天然不同。
+  if ((u.cache_read_tokens ?? 0) > 0) {
+    rows.push(`${t('chat.usageCacheRead')} ${u.cache_read_tokens} / ${t('chat.usageInput')} ${u.input_tokens}（${t('chat.usageThisTurn')} ${cacheHitRate(u)}%）`)
+  }
   if (u.total_tokens != null) rows.push(`合计 ${u.total_tokens}`)
   const dur = fmtDuration(u.latency_ms)
   if (dur) rows.push(`耗时 ${dur}`)

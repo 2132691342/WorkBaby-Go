@@ -36,7 +36,7 @@ func TestMain(m *testing.M) {
 // dialFixture 以 fixture 模式拉起测试二进制自身作为 MCP server。
 func dialFixture(t *testing.T, mode string) *StdioClient {
 	t.Helper()
-	c, err := DialStdio("fixture", os.Args[0], []string{"-test.run=^$"}, []string{fixtureEnv + "=" + mode})
+	c, err := DialStdio("fixture", os.Args[0], []string{"-test.run=^$"}, []string{fixtureEnv + "=" + mode}, nil)
 	if err != nil {
 		t.Fatalf("dial fixture: %v", err)
 	}

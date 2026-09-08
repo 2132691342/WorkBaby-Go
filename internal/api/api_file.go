@@ -46,6 +46,11 @@ func (h *Handler) ListWorkspaceFiles(sessionID string) ([]domain.WorkspaceFileIt
 	return h.workspaceSvc.ListFiles(h.ctx, sessionID)
 }
 
+// ListWorkspaceDir 懒加载列工作区单层目录（真实磁盘内容；路径相对工作区根）。
+func (h *Handler) ListWorkspaceDir(sessionID, path string) (domain.WorkspaceListRESP, error) {
+	return h.workspaceSvc.ListDir(h.ctx, sessionID, path)
+}
+
 // ReadWorkspaceFile 读取工作区单文件内容（沙箱校验；返回 base64 便于绑定跨边界传输）。
 func (h *Handler) ReadWorkspaceFile(sessionID, path string) (string, error) {
 	bs, _, err := h.workspaceSvc.ReadFile(h.ctx, sessionID, path)
@@ -53,4 +58,29 @@ func (h *Handler) ReadWorkspaceFile(sessionID, path string) (string, error) {
 		return "", err
 	}
 	return url.PathEscape(string(bs)), nil
+}
+
+// RenameWorkspaceEntry 工作区内同级重命名（文件/目录）。
+func (h *Handler) RenameWorkspaceEntry(sessionID, path, newName string) (map[string]any, error) {
+	if err := h.workspaceSvc.RenameEntry(h.ctx, sessionID, path, newName); err != nil {
+		return nil, err
+	}
+	return map[string]any{"renamed": true}, nil
+}
+
+// CopyWorkspaceEntry 复制文件为同级副本，返回新相对路径。
+func (h *Handler) CopyWorkspaceEntry(sessionID, path string) (map[string]any, error) {
+	newPath, err := h.workspaceSvc.CopyEntry(h.ctx, sessionID, path)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"path": newPath}, nil
+}
+
+// DeleteWorkspaceEntry 删除文件/目录（目录递归；沙箱校验）。
+func (h *Handler) DeleteWorkspaceEntry(sessionID, path string) (map[string]any, error) {
+	if err := h.workspaceSvc.DeleteEntry(h.ctx, sessionID, path); err != nil {
+		return nil, err
+	}
+	return map[string]any{"deleted": true}, nil
 }

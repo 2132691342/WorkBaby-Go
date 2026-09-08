@@ -179,6 +179,7 @@ func (s *WorkflowService) Resume(ctx context.Context, executionID string) error 
 // 双向语义：
 //   - NodeDef.Pos → DAGNode.Pos（画布坐标）
 //   - NodeDef.Branch → 指向 condition 上游的边的 SourceHandle（分支出口）
+//   - NodeDef.Inputs / Graph.Inputs → DAGNode.Inputs / WorkflowDAGRESP.Inputs
 func (s *WorkflowService) GraphToDAG(ctx context.Context, id string) (*domain.WorkflowDAGRESP, error) {
 	wf, err := s.wfRepo.GetByID(ctx, id)
 	if err != nil {
@@ -192,13 +193,14 @@ func (s *WorkflowService) GraphToDAG(ctx context.Context, id string) (*domain.Wo
 	for _, n := range g.Nodes {
 		condOf[n.ID] = n.Type == domain.WorkflowNodeCondition
 	}
-	out := &domain.WorkflowDAGRESP{Name: g.Name, Outputs: g.Outputs}
+	out := &domain.WorkflowDAGRESP{Name: g.Name, Inputs: g.Inputs, Outputs: g.Outputs}
 	for _, n := range g.Nodes {
 		node := domain.WorkflowDAGNode{
 			ID:     n.ID,
 			Type:   string(n.Type),
 			Params: n.Config,
 			Branch: n.Branch,
+			Inputs: n.Inputs,
 		}
 		if n.Pos != nil {
 			node.Pos = &domain.WorkflowPos{X: n.Pos.X, Y: n.Pos.Y}
@@ -241,13 +243,14 @@ func (s *WorkflowService) SaveGraph(ctx context.Context, id string, req *domain.
 		nodeTypes[n.ID] = domain.WorkflowNodeType(n.Type)
 	}
 
-	g := &workflow.Graph{Name: req.Name, Nodes: []*workflow.NodeDef{}, Outputs: req.Outputs}
+	g := &workflow.Graph{Name: req.Name, Inputs: req.Inputs, Nodes: []*workflow.NodeDef{}, Outputs: req.Outputs}
 	for _, n := range req.Nodes {
 		nd := &workflow.NodeDef{
 			ID:     n.ID,
 			Type:   workflow.NodeType(n.Type),
 			Config: n.Params,
 			Branch: n.Branch,
+			Inputs: n.Inputs,
 		}
 		if n.Pos != nil {
 			nd.Pos = &workflow.Pos{X: n.Pos.X, Y: n.Pos.Y}

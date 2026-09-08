@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"time"
 
@@ -28,17 +27,9 @@ func BuiltinCommands() []domain.SlashCommand {
 	}
 }
 
-// CompactSession 确定性压缩历史（/compact 的后端实现）。
-//
-// 策略与 harness.MicroCompressor 一致但作用于落库消息：清掉较早轮次的推理文本、
-// 折叠工具结果正文，保留最近 keep 条完整不动。无需 LLM、幂等、可反复执行。
-//
-// 保留指示（req.Instructions）不落进消息表——它写进会话元数据，由上下文装配期
-// 作为常驻 system 段注入（见 executeAgent）。这样指示不受任何历史折叠影响，
-// 也不会因插入消息而打乱会话 seq。
-//
-// 单条更新失败只计数不中断（部分成功仍返回可用结果），整体才可观测：
-// 失败数与释放量都回到出参，前端按 Failed>0 提示「部分压缩失败」。
+// CompactSession 确定性压缩历史（/compact 的后端实现）：早期轮次标 archived 剔出
+// LLM 上下文并生成逐轮摘要进会话元数据（buildSystem 常驻注入），最近 keep 条保留。
+// 幂等可反复执行；归档边界不落在 assistant(tool_calls) 与其 tool 结果之间（防孤儿 tool）。
 func (s *ChatService) CompactSession(ctx context.Context, sessionID string, req domain.CompactREQ) (domain.CompactResultRESP, error) {
 	ses, err := s.sessions.GetByID(ctx, sessionID)
 	if err != nil {
@@ -62,36 +53,50 @@ func (s *ChatService) CompactSession(ctx context.Context, sessionID string, req 
 		return out, nil
 	}
 
+	// 归档边界：rows[:cut] 归档，rows[cut:] 保留。边界前移到最近的非 tool 行，
+	// 保证「assistant + 其连续 tool 结果」整体同侧（协议铁律）。
 	cut := len(rows) - keep
+	for cut > 0 && cut < len(rows) && rows[cut].Role == domain.MessageRoleTool {
+		cut--
+	}
+	if cut <= 0 {
+		return out, nil
+	}
+
+	// 逐行标 archived（幂等：已归档行跳过），同时统计释放量与生成归档摘要
 	now := time.Now().UnixMilli()
+	var digest []string
+	freedChars := 0
 	for i := 0; i < cut; i++ {
 		row := rows[i]
-		fields := map[string]any{}
-		switch row.Role {
-		case domain.MessageRoleTool:
-			if row.Content == "" || isFolded(row.Content) {
-				continue
-			}
-			out.FreedChars += len(row.Content)
-			fields["content"] = foldToolResult(len(row.Content))
-		case domain.MessageRoleAssistant:
-			if row.Thinking == "" {
-				continue
-			}
-			out.FreedChars += len(row.Thinking)
-			fields["thinking"] = ""
-		default:
+		if row.Status == domain.MessageStatusArchived {
 			continue
 		}
-		fields["updated_at"] = now
-		if err := s.messages.UpdateStatus(ctx, row.ID, fields); err != nil {
+		if err := s.messages.UpdateStatus(ctx, row.ID, map[string]any{
+			"status":     domain.MessageStatusArchived,
+			"updated_at": now,
+		}); err != nil {
 			out.Failed++
-			pkg.L.Warn("compact message failed", "sessionID", sessionID, "messageID", row.ID, "err", err.Error())
+			pkg.L.Warn("archive message failed", "sessionID", sessionID, "messageID", row.ID, "err", err.Error())
 			continue
 		}
 		out.Compacted++
+		freedChars += len(row.Content) + len(row.Thinking)
+		if line := archiveDigestLine(row); line != "" && len(digest) < compactDigestLines {
+			digest = append(digest, line)
+		}
 	}
-	out.FreedTokens = estimateTokensFromChars(out.FreedChars)
+	out.FreedChars = freedChars
+	out.FreedTokens = estimateTokensFromChars(freedChars)
+
+	// 归档摘要写会话元数据（buildSystem 每轮注入）；本轮没有新归档行则不覆盖旧摘要
+	if len(digest) > 0 {
+		meta := readSessionMeta(ses)
+		meta[sessionMetaKeyArchiveSummary] = strings.Join(digest, "\n")
+		if err := s.writeSessionMeta(ctx, ses, meta); err != nil {
+			pkg.L.Warn("write archive summary failed", "sessionID", sessionID, "err", err.Error())
+		}
+	}
 	return out, nil
 }
 
@@ -109,18 +114,33 @@ func (s *ChatService) pinCompactInstructions(ctx context.Context, ses *domain.Ch
 // estimateTokensFromChars 字符数 → 估算 token（rune/4 近似，与 harness.EstimateTokens 同口径）。
 func estimateTokensFromChars(chars int) int { return chars / 4 }
 
-// 压缩参数：扫描上限与保留窗口。
+// 压缩参数：扫描上限、保留窗口与摘要规模。
 const (
-	compactScanLimit  = 1000
-	compactKeepRecent = 20
+	compactScanLimit   = 1000
+	compactKeepRecent  = 20
+	compactDigestLines = 40   // 归档摘要最多行数（超出部分以「…」收尾）
+	compactDigestWidth = 60   // 每行摘要取内容前缀的 rune 数
 )
 
-// isFolded 该工具结果是否已折叠（幂等：重复压缩不重复计数）。
-func isFolded(content string) bool {
-	return strings.Contains(content, "[已折叠]")
-}
-
-// foldToolResult 折叠占位文本（保留原始体积信息，便于回看规模）。
-func foldToolResult(n int) string {
-	return "[已折叠] 工具结果正文已压缩，原 " + strconv.Itoa(n) + " 字符。"
+// archiveDigestLine 归档摘要的一行：role + 内容前缀（确定性、无 LLM）。
+// tool 消息不出现在摘要里（其结论已由 assistant 行代表）；空行跳过。
+func archiveDigestLine(row domain.MessageDO) string {
+	var role string
+	switch row.Role {
+	case domain.MessageRoleUser:
+		role = "用户"
+	case domain.MessageRoleAssistant:
+		role = "助手"
+	default:
+		return ""
+	}
+	text := strings.TrimSpace(row.Content)
+	if text == "" {
+		return ""
+	}
+	r := []rune(text)
+	if len(r) > compactDigestWidth {
+		r = append(r[:compactDigestWidth], []rune("…")...)
+	}
+	return role + "：" + string(r)
 }

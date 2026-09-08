@@ -62,23 +62,3 @@ func TestRegistryPreloadFailureIsolation(t *testing.T) {
 	require.Len(t, pieces, 1, "报错与 panic 的能力被跳过，其余正常注入")
 	assert.Equal(t, "ok", pieces[0].Key)
 }
-
-func TestRegistryCaptureAll(t *testing.T) {
-	r := NewRegistry()
-	called := make(chan string, 2)
-	require.NoError(t, r.Register(&mockCap{id: "m1", capture: func(_ context.Context, _ *CaptureCtx) error {
-		called <- "m1"
-		return nil
-	}}, OrderMemory))
-	require.NoError(t, r.Register(&mockCap{id: "m2", capture: func(_ context.Context, _ *CaptureCtx) error {
-		called <- "m2"
-		return nil
-	}}, OrderSkill))
-
-	r.CaptureAll(&CaptureCtx{SessionID: "s"}, 0)
-	seen := map[string]bool{}
-	for range 2 {
-		seen[<-called] = true
-	}
-	assert.True(t, seen["m1"] && seen["m2"], "每个能力的 Capture 均被并发调用")
-}

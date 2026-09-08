@@ -133,7 +133,7 @@
 | `stop_reason` | string | `end_turn` / `length` / `cancelled` / ... |
 | `model` | string | — |
 | `input_tokens` / `output_tokens` / `cache_read_tokens` / `total_tokens` | int | 最终落库 |
-| `latency_ms` / `cost` | int64 / float64 | — |
+| `latency_ms` | int64 | run 端到端耗时 |
 | `created_at` / `updated_at` | int64 | 毫秒 |
 
 ### ArtifactPayload（chat:artifact 事件）

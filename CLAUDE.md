@@ -299,6 +299,17 @@ FTS5 虚拟表与触发器用 raw SQL 启动期单独创建。
 - 依赖真实外网的用例 `testing.Short()` 跳过；
 - service 层测试不引入 gin / Wails；server 层用 httptest。
 
+**保留判据（决定一个测试写不写）**——写之前先问：这个测试失败时，是否意味着某个**跨模块/跨轮次/跨协议**的行为坏了？是 → 写；否 → 不写。
+
+| 保留 | 删除 |
+|---|---|
+| ReAct 多轮循环 / 检查点续跑 / 子 Agent 隔离等**多轮次链路** | 单个纯函数（解析器、格式化、getter）的输入输出 |
+| 压缩不拆散 assistant+tool 对等**协议硬约束** | 简单 CRUD、字段映射、枚举转换 |
+| 审批 / 信任 / 注入防护 / 路径穿越等**安全护栏** | 幂等的 setter 覆盖、构造函数冒烟 |
+| SSE 断线重放 / 文件变更快照回滚等**集成编排** | 同一行为在不同文件里的重复断言 |
+
+**规模约束**：单个测试文件 ≤ 6 个测试函数；同类行为用 table-driven 合并进一个函数（子测试 `t.Run` 区分场景），禁止为每个边界单开一个 `TestXxx`。环境依赖（系统 shell、真实网络）用 `exec.LookPath` / `testing.Short()` 守卫后跳过，不得让整个包变红。
+
 ```go
 func TestRunnerNormalReactLoop(t *testing.T) {
     mockLLM := &mockLLM{responses: []llm.ChatResponse{

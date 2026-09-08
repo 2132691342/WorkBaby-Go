@@ -44,7 +44,7 @@ export interface StreamEventUpdate {
   appendContent?: string
   appendThinking?: string
   addTool?: ToolCallInfo
-  updateTool?: { id: string; name?: string; argsDelta?: string; result?: string; success: boolean; agent?: string }
+  updateTool?: { id: string; name?: string; argsDelta?: string; result?: string; success: boolean; agent?: string; duration_ms?: number }
   setStats?: ChatStats
   setArtifacts?: ArtifactPayload
   setGenUi?: UiNode
@@ -99,9 +99,16 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
     }
     case 'tool_result': {
       if (!data || typeof data !== 'object') return null
-      const d = data as { id: string; name: string; output: string; state: string; agent?: string }
+      const d = data as { id: string; name: string; output: string; state: string; agent?: string; duration_ms?: number }
       const update: StreamEventUpdate = {
-        updateTool: { id: d.id, name: d.name, result: d.output, success: d.state === 'success', agent: d.agent || undefined }
+        updateTool: {
+          id: d.id,
+          name: d.name,
+          result: d.output,
+          success: d.state === 'success',
+          agent: d.agent || undefined,
+          duration_ms: d.duration_ms
+        }
       }
       // 修复：gen_ui 工具结果同步解析 UiTree（避免 store 二次解析）
       if (d.name === 'gen_ui' && d.output) {
@@ -263,7 +270,12 @@ export function applyStreamUpdate(
         t.agent = update.updateTool.agent
       }
       t.state = update.updateTool.success ? 'success' : 'error'
-      if (t.started_at) t.duration_ms = now - t.started_at
+      // 后端计量的真实执行耗时优先（本地 started_at 差值会把审批等待时间算进去）
+      if (update.updateTool.duration_ms != null) {
+        t.duration_ms = update.updateTool.duration_ms
+      } else if (t.started_at) {
+        t.duration_ms = now - t.started_at
+      }
     } else {
       // tool_result 在 tool_call 之前到达（理论可能）— 仍插入
       state.streamingTools.value.push({

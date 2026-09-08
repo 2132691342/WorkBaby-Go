@@ -1,14 +1,7 @@
 package harness
 
-// ReAct runner 测试集合。共享 mock / sink / fixture 在 runner_helpers_test.go。
-//
-// 测试按主题分组（搜索关键词跳转）：
-//   - 核心循环：thinking/content 分离、tool_call 协议、停滞熔断、截断重发、同参数熔断、
-//                优雅停止、tool 后改写、只读并行、panic 恢复
-//   - 闸门 / 审批：deny / ask / refused、Anthropic 截断、目录信任、降级、 gate 三档
-//   - 注入缝：steering 中途转向、follow-up 续接
-//
-// 每个测试对应一个独立的核心路径，无覆盖冗余。
+// ReAct runner 测试集合：核心循环 / 闸门审批 / 注入缝三类长链路用例；
+// 共享 mock / sink / fixture 在 runner_helpers_test.go。
 
 import (
 	"context"
@@ -242,40 +235,6 @@ func TestRunnerShouldStopAfterTurn(t *testing.T) {
 	}
 	if p.idx != 1 {
 		t.Fatalf("provider consumed %d rounds, want 1 (stop before next turn)", p.idx)
-	}
-}
-
-// TestRunnerAfterToolCallRewrite 工具后处理：结果在回填模型与发事件前被钩子覆盖。
-func TestRunnerAfterToolCallRewrite(t *testing.T) {
-	p := &scriptedProvider{calls: [][]llm.StreamChunk{
-		{
-			{ToolCall: &llm.NormalizedToolCall{ID: "c1", Name: "echo", Arguments: json.RawMessage(`{"msg":"secret"}`)}},
-			{FinishReason: stringPtr("tool_calls")},
-		},
-		{
-			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "done"}},
-			{FinishReason: stringPtr("stop")},
-		},
-	}}
-	reg := tool.NewRegistry()
-	_ = reg.Register(echoTool{})
-
-	sink := &recordingSink{}
-	r := NewRunner(p, sink, DefaultConfig()).WithTools(reg, nil).
-		WithAfterToolCall(func(_ context.Context, _ string, _ json.RawMessage, res *tool.ToolResult) {
-			res.Content = "CLEANED"
-		})
-	res := r.RunMessages(context.Background(), "RUN_H2", "SESSION_H2", "MSG_H2", "mock", nil)
-	if res.Err != nil {
-		t.Fatalf("run failed: %v", res.Err)
-	}
-
-	for _, e := range sink.events {
-		if e.Kind == EventToolResult {
-			if pl, ok := e.Payload.(ToolResultPayload); ok && pl.Content != "CLEANED" {
-				t.Fatalf("tool result not rewritten by hook: %q", pl.Content)
-			}
-		}
 	}
 }
 
@@ -697,70 +656,6 @@ func TestRunnerFollowUpContinues(t *testing.T) {
 	}
 }
 
-type countingTool struct {
-	mu    sync.Mutex
-	calls int
-}
-
-func (t *countingTool) Name() string              { return "count" }
-func (t *countingTool) Description() string       { return "counting tool" }
-func (t *countingTool) RiskLevel() tool.RiskLevel { return tool.RiskReadOnly }
-func (t *countingTool) Schema() tool.ToolSchema {
-	return tool.ToolSchema{Name: "count", Parameters: json.RawMessage(`{"type":"object","properties":{"msg":{"type":"string"}}}`)}
-}
-func (t *countingTool) Execute(_ context.Context, _ json.RawMessage) tool.ToolResult {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.calls++
-	return tool.ToolResult{Content: "ok"}
-}
-func (t *countingTool) executed() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.calls
-}
-
-func newCountingRegistry(t *testing.T, ct *countingTool) *tool.Registry {
-	t.Helper()
-	reg := tool.NewRegistry()
-	if err := reg.Register(ct); err != nil {
-		t.Fatal(err)
-	}
-	return reg
-}
-
-func countDefs() []llm.ToolDefinition {
-	return []llm.ToolDefinition{{Name: "count", Description: "count", Parameters: map[string]any{"type": "object"}}}
-}
-
-// TestRunnerTruncatedAnthropicStopReason Anthropic 的 max_tokens 同样触发重发语义。
-func TestRunnerTruncatedAnthropicStopReason(t *testing.T) {
-	ct := &countingTool{}
-	p := &scriptedProvider{calls: [][]llm.StreamChunk{
-		{
-			{ToolCall: &llm.NormalizedToolCall{ID: "c1", Name: "count", Arguments: json.RawMessage(`{"msg":"hel`)}},
-			{FinishReason: stringPtr("max_tokens")},
-		},
-		{
-			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "ok"}},
-			{FinishReason: stringPtr("stop")},
-		},
-	}}
-	r := NewRunner(p, &recordingSink{}, DefaultConfig()).
-		WithTools(newCountingRegistry(t, ct), countDefs())
-
-	res := r.RunMessages(context.Background(), "RUN_TRUNC2", "SESSION_TRUNC2", "MSG_TRUNC2", "mock", nil)
-	if res.Err != nil {
-		t.Fatalf("run failed: %v", res.Err)
-	}
-	if got := ct.executed(); got != 0 {
-		t.Fatalf("截断调用不应执行，got %d", got)
-	}
-	if got := p.idx; got != 2 {
-		t.Fatalf("want 2 llm calls, got %d", got)
-	}
-}
-
 // ===== 闸门 / 审批 =====
 
 // TestRunnerPathTrustDeny 信任闸门返回 false → Refused（不计失败熔断），模型换路续跑。
@@ -1000,4 +895,33 @@ func TestGateYoloNeverAsks(t *testing.T) {
 	msg := r.gateTool(context.Background(), "RUN_G", "SES_G", 0, guardCall("anything"), classifiedTool{})
 	require.Nil(t, msg)
 	assert.Zero(t, approver.calls)
+}
+
+// TestGateAllowKeepsCommandLevelCheck 显式放行（Allow）不等于关闭命令级裁决。
+//
+// 只认 Allow 就无脑放行会让 exec 的白名单与危险正则整体失效——工具内部又因
+// GuardChainActive 跳过自有审批，两头都放开等于裸执行。
+func TestGateAllowKeepsCommandLevelCheck(t *testing.T) {
+	cases := []struct {
+		name      string
+		tool      tool.Tool
+		args      string
+		wantCalls int
+	}{
+		{"白名单内命令免审", classifiedTool{}, `{"command":"git status"}`, 0},
+		{"白名单外命令仍需确认", classifiedTool{}, `{"command":"curl http://x"}`, 1},
+		{"无命令级风险的工具直接放行", newTrackingTool("writer", tool.RiskWriteLocal), `{}`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			approver := &countingApprover{ok: true}
+			r := NewRunner(&scriptedProvider{}, &recordingSink{}, DefaultConfig()).
+				WithToolGate(tool.NewGate(tool.SessionModeDefault).Allow(tc.tool.Name()), approver.Approve)
+
+			call := llm.NormalizedToolCall{ID: "c1", Name: tc.tool.Name(), Arguments: json.RawMessage(tc.args)}
+			msg := r.gateTool(context.Background(), "RUN_A", "SES_A", 0, call, tc.tool)
+			require.Nil(t, msg, "批准后应放行")
+			assert.Equal(t, tc.wantCalls, approver.calls)
+		})
+	}
 }

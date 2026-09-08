@@ -39,6 +39,7 @@ type ChatService struct {
 	runs        *runRegistry               // 活动 run 注册中心（按 sessionID → cancel）；用于前端「停止」按钮
 	checkpoints harness.CheckpointStore    // 检查点存储（SQL 默认；nil = 关闭）
 	events      *event.RunEventLog         // run 事件日志：分配序号 + 缓存，供 SSE 断线重放
+	runRec      *repo.RunRecordRepo        // 运行历史索引；nil = 不记录
 	execs       *harness.ExecutionRegistry // 执行平面
 	blocks      *repo.MessageBlockRepo     // 消息块持久化；nil = 不落块
 	approval    *ApprovalService           // 工具策略门 ask 决策的人工审批；nil = 策略门不启用
@@ -127,18 +128,8 @@ func (s *ChatService) memoryEnabled(ctx context.Context) bool {
 // MemoryEnabled 记忆全局开关（能力装配方回调用）。
 func (s *ChatService) MemoryEnabled(ctx context.Context) bool { return s.memoryEnabled(ctx) }
 
-// SessionDataDirs 某会话的目录布局（目录策略唯一数据源）：
-//
-//	绑定本地工作区 {dir}：
-//	  memory   → {dir}/.workbaby/memory/{sessionID}/MEMORY.md
-//	  snapshot → {dir}/.workbaby/snapshots/{sessionID}
-//	默认工作区（未绑定）：
-//	  memory   → {dataHome}/memory/{sessionID}/MEMORY.md
-//	  snapshot → {dataHome}/snapshots/{sessionID}
-//
-// 会话记忆与写前快照是与该工作区强绑定的「过程数据」，跟工作区走（如同 .git）；
-// 系统级数据（知识库 / 日志 / 全局记忆）不受影响，始终在用户数据目录。
-// 目录按需创建（只有真正写记忆 / 快照时才建），绑定工作区不预建空目录树。
+// SessionDataDirs 某会话的记忆文件与快照目录（目录策略唯一数据源）。
+// 绑定本地工作区 → {dir}/.workbaby/ 下（过程数据跟工作区走）；未绑定 → {dataHome} 下。
 func (s *ChatService) SessionDataDirs(ctx context.Context, sessionID string) (memoryFile, snapshotDir string) {
 	home := s.dataHome
 	if home == "" {
@@ -161,12 +152,16 @@ func (s *ChatService) SessionDataDirs(ctx context.Context, sessionID string) (me
 	return
 }
 
-// gateInternalAllowTools 工具策略门显式放行清单：内部自带 fail-closed 审批（exec / skill 命令级门）
-// 或纯只读/信息型工具，避免与命令级审批双重弹窗；其余工具按 SessionMode × 风险默认裁决。
+// gateInternalAllowTools 工具策略门显式放行清单（default 模式下本会走 ask 的那些）。
+//
+// 放行不等于无护栏：实现了 tool.RiskClassifier 的工具（exec / run_skill_script）仍由
+// runner 拿 ClassifyArgs 的 per-call 风险做命令级裁决——白名单外与危险正则命中照样弹审批。
+// 工作区内的本地写已由会话工作区沙箱 + 目录信任约束，再弹一次确认只会打断长任务。
 var gateInternalAllowTools = []string{
-	"exec", "run_skill_script", "delegate_task", // 命令级白名单/危险正则 + 审批已在工具内 fail-closed
+	"exec", "run_skill_script", "delegate_task", "run_workflow", // 命令级裁决走 RiskClassifier
 	"websearch", "webfetch", "http", // 信息型网络读取
 	"knowledge_search", "doc_reader", "todo", // 只读 / 会话内计划
+	"file_write", "archive_manager", "memory_write", // 工作区沙箱内的本地写
 }
 
 // turnAdjuster 自动降级策略：本轮 LLM 建流失败 → 切到 chat.fallback_model 重试。
@@ -1019,6 +1014,7 @@ type AgentRunOutcome struct {
 // runLLM 异步跑 LLM（多轮 ReAct）：墙钟预算 + 结果落库 + 发 chat:done / chat:error。
 // resume=true 时从检查点续跑同一 runID（中断/崩溃后恢复）。
 func (s *ChatService) runLLM(parentCtx context.Context, ses *domain.ChatSessionDO, runID, assistantMsgID, userInput string, params harness.RequestParams, def harness.Definition, resume bool) {
+	s.startRunRecord(parentCtx, runID, ses)
 	wall := 10 * time.Minute
 	if def.Budget.MaxWallTime > 0 {
 		wall = def.Budget.MaxWallTime
@@ -1096,26 +1092,10 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 		return harness.RunResult{Reason: harness.ReasonError, Err: err}
 	}
 
-	// 上下文装配：能力注册表按序注入（人格 → 工作区 → 记忆 → 知识库 → Skill → 工作流）。
-	// 新增能力只需实现 Capability 并注册，装配代码不随能力增加而膨胀。
-	asm := harness.NewContextAssembler()
-	preload := &capability.PreloadCtx{
-		SessionID: ses.ID,
-		RunID:     runID,
-		UserInput: userInput,
-		Session:   ses,
-		Def:       def,
-	}
-	for _, piece := range s.caps.PreloadAll(ctx, preload) {
-		asm.Add(piece)
-	}
-	activeSkillTools := preload.State.SkillTools
-	// 压缩保留指示：写进会话元数据，每次 run 都装进 system——不受历史折叠影响；
-	// 置于末段，优先级高于各能力注入的内容
-	if ins := compactInstructions(ses); ins != "" {
-		asm.Add(harness.ContextPiece{Key: "compact", Title: "压缩保留指示", Body: ins})
-	}
-	if sys := asm.Build(); sys != nil {
+	// system 装配（真实请求口径，与 ContextUsage 透视同源——见 buildSystem）
+	sys, runState := s.buildSystem(ctx, ses, runID, userInput, def)
+	activeSkillTools := runState.SkillTools
+	if sys != nil {
 		llmMsgs = append([]*llm.Message{sys}, llmMsgs...)
 	}
 
@@ -1325,6 +1305,10 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 		pkg.L.Info("context compressed", "runID", runID, "removed", removed)
 		s.emit(runID, ses.ID, "chat:compressed", map[string]any{"removed_messages": removed, "summary_head": head})
 	}
+	// 压缩摘要也计量：Turn 记 -1 与主循环轮次区分（不进「按轮次」图表，但进总消耗）
+	auto.OnUsage = func(u llm.TokenUsage) {
+		s.persistUsageRow(ctx, ses, runID, assistantMsgID, -1, u)
+	}
 	r := harness.NewRunner(prov, sink, cfg).
 		WithCompressor(auto).
 		WithRequestParams(params).
@@ -1378,6 +1362,8 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 			"input", res.Usage.InputTokens, "output", res.Usage.OutputTokens,
 			"cacheRead", res.Usage.CacheReadTokens, "total", res.Usage.TotalTokens)
 	}
+	// 运行历史落库：事件明细走 JSONL，这里只回填可列表 / 可跳转回放的索引。
+	s.finishRunRecord(ctx, runID, res)
 
 	nowMs := time.Now().UnixMilli()
 	// 终止原因统一口径：harness 枚举 → 领域 stop_reason，
@@ -1451,6 +1437,7 @@ func captureTranscript(sent []*llm.Message, userInput, reply string) []llm.Messa
 // persistUsage 把每次 LLM 调用的用量落 token_usages。
 //
 // 先落明细再统计：明细是仪表盘三线图的唯一数据源，失败只告警不阻断（不因计量丢回答）。
+// 计费是供应商侧的事，这里只做中立的 token 计量与耗时记录。
 func (s *ChatService) persistUsage(ctx context.Context, ses *domain.ChatSessionDO, runID, assistantMsgID string, res harness.RunResult) {
 	if s.usages == nil || len(res.Turns) == 0 {
 		return
@@ -1472,6 +1459,7 @@ func (s *ChatService) persistUsage(ctx context.Context, ses *domain.ChatSessionD
 			CacheReadTokens:  t.Usage.CacheReadTokens,
 			CacheWriteTokens: t.Usage.CacheWriteTokens,
 			TotalTokens:      t.Usage.TotalTokens,
+			LatencyMs:        t.LatencyMs,
 			CreatedAt:        nowMs,
 		})
 	}
@@ -1480,13 +1468,69 @@ func (s *ChatService) persistUsage(ctx context.Context, ses *domain.ChatSessionD
 	}
 }
 
-// toLLMMessages 历史消息 → llm.Message；重建 assistant 的工具调用与 tool 消息上下文。
+// persistUsageRow 落一条附属 LLM 调用的用量明细（上下文压缩摘要等）。
+// turn<0 表示非主循环调用：进总消耗统计，不进按轮次的图表。
+func (s *ChatService) persistUsageRow(ctx context.Context, ses *domain.ChatSessionDO, runID, messageID string, turn int, u llm.TokenUsage) {
+	if s.usages == nil {
+		return
+	}
+	row := domain.TokenUsageDO{
+		ID:               pkg.NewID("USAGE"),
+		SessionID:        ses.ID,
+		RunID:            runID,
+		MessageID:        messageID,
+		ProviderID:       ses.ProviderID,
+		Model:            ses.Model,
+		Source:           domain.UsageSourceChat,
+		Turn:             turn,
+		InputTokens:      u.InputTokens,
+		OutputTokens:     u.OutputTokens,
+		CacheReadTokens:  u.CacheReadTokens,
+		CacheWriteTokens: u.CacheWriteTokens,
+		TotalTokens:      u.TotalTokens,
+		CreatedAt:        time.Now().UnixMilli(),
+	}
+	if err := s.usages.BatchCreate(ctx, []domain.TokenUsageDO{row}); err != nil {
+		pkg.L.Warn("persist usage row failed", "runID", runID, "err", err.Error())
+	}
+}
+
+// buildSystem 装配本轮 system 消息：能力注册表按序注入（人格 → 工作区 → 计划 →
+// 记忆 → 知识库 → Skill → 工作流）+ 历史归档摘要 + 压缩保留指示。
 //
-// <p>同时按全列表里所有 assistant 的 tool_calls 预先索引，过滤掉孤儿
-// {@code role=tool}（tool_call_id 在上下文中没有匹配的 assistant tool_call）。
-// 孤儿通常由以下路径产生：续跑/编辑重发后旧 tool 结果残留、压缩器只摘掉
-// assistant 段而保留 tool 段、checkpoint 续跑把过期 turn 的 tool 结果回放。
-// 不剥掉的话上游 LLM 会以「tool result's tool id not found」400 拒绝整轮。
+// <p>唯一装配入口：run（executeAgent）与透视（ContextUsage）都走这里，
+// 保证「用户看到的占用分段」与「真实请求」同口径。新增能力只需实现
+// Capability 并注册，装配代码不随能力增加而膨胀。
+func (s *ChatService) buildSystem(ctx context.Context, ses *domain.ChatSessionDO, runID, userInput string, def harness.Definition) (*llm.Message, *capability.RunState) {
+	asm := harness.NewContextAssembler()
+	state := &capability.RunState{}
+	preload := &capability.PreloadCtx{
+		SessionID: ses.ID,
+		RunID:     runID,
+		UserInput: userInput,
+		Session:   ses,
+		Def:       def,
+		State:     state,
+	}
+	for _, piece := range s.caps.PreloadAll(ctx, preload) {
+		asm.Add(piece)
+	}
+	// 历史归档摘要：/compact 归档掉的早期轮次的确定性摘要（模型据此知道
+	// 被剔除的历史讲了什么，而不是凭空失忆）
+	if sum := archiveSummary(ses); sum != "" {
+		asm.Add(harness.ContextPiece{Key: "archive", Title: "历史归档摘要", Body: sum})
+	}
+	// 压缩保留指示：写进会话元数据，每次 run 都装进 system——不受历史折叠影响；
+	// 置于末段，优先级高于各能力注入的内容
+	if ins := compactInstructions(ses); ins != "" {
+		asm.Add(harness.ContextPiece{Key: "compact", Title: "压缩保留指示", Body: ins})
+	}
+	return asm.Build(), state
+}
+
+// toLLMMessages 历史消息 → llm.Message；重建 assistant 的工具调用与 tool 消息上下文。
+// 过滤孤儿 tool 消息（tool_call_id 无前置 assistant 匹配）与空 assistant 占位——
+// 不剥掉上游 LLM 会以 400 拒绝整轮。本条用户消息由 prepareRun 先落库，随历史一并带出。
 func (s *ChatService) toLLMMessages(hists []domain.MessageDO) ([]*llm.Message, error) {
 	knownToolIDs := make(map[string]struct{}, len(hists))
 	for _, m := range hists {
@@ -1510,6 +1554,11 @@ func (s *ChatService) toLLMMessages(hists []domain.MessageDO) ([]*llm.Message, e
 			// 当前 assistant 占位不回填（避免循环引用）
 			continue
 		}
+		if m.Status == domain.MessageStatusArchived {
+			// /compact 归档：早期轮次剔出上下文（内容仍完整落库、UI 可见；
+			// 归档要点由 buildSystem 的「历史归档摘要」段带进 system）
+			continue
+		}
 		if m.Role == domain.MessageRoleTool {
 			if m.ToolCallID == "" {
 				continue
@@ -1521,6 +1570,15 @@ func (s *ChatService) toLLMMessages(hists []domain.MessageDO) ([]*llm.Message, e
 		lm := &llm.Message{Role: llm.RoleType(m.Role), Content: m.Content, Thinking: m.Thinking}
 		if m.Role == domain.MessageRoleTool {
 			lm.ToolCallID = m.ToolCallID
+			// 空 tool 结果兜底：GLM 等厂商对空 content 一律 400（1214）；剥掉会破坏配对，故填充
+			if lm.Content == "" {
+				lm.Content = "(empty)"
+			}
+		}
+		if m.Role == domain.MessageRoleAssistant && m.ToolCalls == "" && lm.Content == "" {
+			// 失败/中断 run 残留的空 assistant 占位：上游以 400「messages 参数非法」
+			// 拒绝整轮（GLM 上游码 1214），且已落库会永久毒化会话——静默剥掉
+			continue
 		}
 		if m.Role == domain.MessageRoleAssistant && m.ToolCalls != "" {
 			var calls []llm.ToolCall

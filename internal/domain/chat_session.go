@@ -104,6 +104,7 @@ type ContextUsageRESP struct {
 	SessionID     string           `json:"session_id"`
 	Model         string           `json:"model"`
 	ContextWindow int              `json:"context_window"`
+	ContextBudget int              `json:"context_budget"` // 压缩触发预算（窗口 × 压缩比例；0 = 未启用）
 	UsedTokens    int              `json:"used_tokens"`
 	FreeTokens    int              `json:"free_tokens"`
 	UsedRatio     int              `json:"used_ratio"` // 千分比

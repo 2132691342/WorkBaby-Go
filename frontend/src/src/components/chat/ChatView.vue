@@ -19,6 +19,7 @@ import FileChangesPanel from '@/components/chat/FileChangesPanel.vue'
 import TaskCenterPanel from '@/components/chat/TaskCenterPanel.vue'
 import TodoProgressCard from '@/components/chat/TodoProgressCard.vue'
 import ContextRing from '@/components/chat/ContextRing.vue'
+import ChatBackdrop from '@/components/chat/ChatBackdrop.vue'
 import type { AvailableModel, ContextUsageRESP, Session } from '@/types/api'
 
 const chat = useChatStore()
@@ -117,7 +118,7 @@ const liveContextUsage = computed<ContextUsageRESP | null>(() => {
     if (used <= 0) return null
     return {
       session_id: currentID.value ?? '', model: currentSession.value?.model ?? '',
-      context_window: win, used_tokens: used, free_tokens: Math.max(0, win - used),
+      context_window: win, context_budget: 0, used_tokens: used, free_tokens: Math.max(0, win - used),
       used_ratio: Math.min(1000, Math.round((used / win) * 1000)),
       segments: [], message_count: messages.value.length, tool_count: 0, estimated: true
     }
@@ -269,6 +270,11 @@ function onQuickPrompt(text: string): void {
   chatInputRef.value?.setDraft(text)
 }
 
+/** 工作区文件树「添加到聊天」：插入文件的<b>绝对路径</b>引用（相对路径解析依赖工作区语义，易歧义）。 */
+function onAttachWorkspaceFile(path: string): void {
+  chatInputRef.value?.appendText(path.replace(/\/$/, ''))
+}
+
 /** 工作区选择器回调：绑定外部目录，传 null 表示解绑回默认工作区。
  *  尚无会话时先创建会话再绑定（选择动作不丢失），避免「选了目录却不知绑到哪」的困惑。 */
 async function onPickWorkspace(path: string | null): Promise<void> {
@@ -369,8 +375,9 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
 <template>
   <div class="chat wb-ui">
     <!-- 消息主体（会话历史已归位到左侧栏 40% 区） -->
-    <div class="chat-main">
-  <div class="flex h-full flex-col overflow-hidden text-wb-ink">
+    <div class="chat-main" style="position: relative">
+      <ChatBackdrop />
+  <div class="relative z-10 flex h-full flex-col overflow-hidden text-wb-ink">
     <!-- 顶部 ChatHeader：mascot + session title + workspace chip + 模型徽标 + 操作 -->
     <header class="flex items-center justify-between gap-3 border-b border-wb-border bg-wb-surface px-5 py-2.5">
       <div class="flex min-w-0 flex-1 items-center gap-3">
@@ -577,6 +584,7 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
             :session_id="currentID"
             :workspace_path="workspacePath"
             :pick="() => (showPicker = true)"
+            @attach="onAttachWorkspaceFile"
           />
         </div>
       </aside>

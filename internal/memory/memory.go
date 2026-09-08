@@ -11,14 +11,9 @@ import (
 	"WorkBaby/internal/llm"
 )
 
-// ShortTermOpts 短期记忆读取参数。
-type ShortTermOpts struct {
-	MaxMessages int // 默认 50
-}
-
 // RecallOpts 统一召回参数。
 type RecallOpts struct {
-	Kinds []domain.MemoryKind // 默认全选（v1 仅 episodic 生效）
+	Kinds []domain.MemoryKind // 默认全选
 	TopK  int                 // 默认 5
 }
 
@@ -46,6 +41,7 @@ type FactProposal struct {
 	Key        string
 	Value      string
 	Confidence float64
+	SessionID  string // 来源会话（落 MemoryFactDO.Source，面板溯源用）
 }
 
 // ProcedureProposal 程序记忆提案（v2 预留）。
@@ -62,8 +58,10 @@ type FormationResult struct {
 }
 
 // Memory 聚合接口；service 层经此读写记忆。
+//
+// 短期窗口不在此列：会话历史的上下文重建由 chat.toLLMMessages 唯一负责
+// （含工具配对、孤儿剥离、占位清理），记忆层再提供一份滑窗属于重复实现。
 type Memory interface {
-	ShortTerm(ctx context.Context, sessionID string, opts ShortTermOpts) []llm.Message
 	LongTerm(ctx context.Context, sessionID string) string
 	AppendLongTerm(ctx context.Context, sessionID string, delta string) error
 

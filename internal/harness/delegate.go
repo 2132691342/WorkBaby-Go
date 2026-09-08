@@ -25,15 +25,8 @@ type delegateFlight struct {
 }
 
 // Delegate 以指定 Agent 定义跑一个子任务，只把摘要回传给父 Agent（tool.Delegator 实现）。
-//
-// 隔离语义：
-//   - 上下文隔离：子 run 只看到「人设 + 任务」，不继承父 run 的对话历史与工具结果；
-//   - 预算隔离：独立轮次/墙钟预算，且不超过父 run 的预算；
-//   - 工具收缩：子 Agent 只能在父 run 已可见的工具集内再按自己的策略过滤（只能收缩不能升权）；
-//   - 输出隔离：子 run 的正文流不进父回答，只回传摘要，避免上下文污染。
-//   - 同参去重：并发相同 (agent, task) 共享一次执行。
-//
-// 事件仍转发到父 sink（带 parent_run_id / agent），前端可在过程块里看到子 Agent 动作。
+// 四重隔离：子 run 只看到「人设 + 任务」；独立预算；工具集只能收缩不能升权；
+// 正文流不进父回答。并发相同 (agent, task) 共享一次执行；事件转发父 sink 供前端展示。
 func (r *Runner) Delegate(ctx context.Context, agentName, task string) (string, error) {
 	if r.provider == nil || r.tools == nil {
 		return "", pkg.New(5008, "委派不可用：当前运行环境未配置模型或工具", "")
