@@ -1,182 +1,112 @@
-# 16 API 契约总表
-
-> 业务 API 端点 + 前端类型 `Message` / `Session` / `Artifact` 等的字段表。所有字段 snake_case。
+# API 契约总表
 
 ## 通用约定
 
 | 项 | 说明 |
 |---|---|
-| 基础 URL | `http://127.0.0.1:{port}/api/v1`（port 由 `app:ready` 注入或 `wb.serverPort`） |
-| 响应格式 | `{code: 0, message: "ok", data: {...}}` 或错误流（`pkg.AppError`） |
-| 时间戳 | 毫秒整数（int64） |
-| 流式事件 | `GET /api/v1/events?scope=chat&runId=...` SSE，详见 [04-Agent与Harness内核](./04-Agent与Harness内核.md) |
-| 文件预览 | `GET /files/sprites/{id}` / `/files/files/{id}` / `/files/workspace/{sid}?path=...` |
+| 基础 URL | `http://127.0.0.1:{port}/api/v1`（端口由 `GetServerPort()` 绑定或 `app:ready` 事件注入，缓存于 `localStorage('wb.serverPort')`） |
+| 响应信封 | `{code: 0, message: "ok", data: …}`；`code !== 0` 抛错，`message` 直接可展示 |
+| 时间戳 | 毫秒整数（int64），字段名 `*_at` |
+| 字段命名 | snake_case |
+| 流式事件 | `GET /api/v1/events?scope=chat&runId=…`（SSE），断线带 `last_event_id` |
+| 文件预览 | `GET /files/sprites/{id}`、`/files/files/{id}`、`/files/workspace/{sid}?path=…` |
 | 错误码段位 | 1000–1999 通用 · 2000–2999 持久化 · 3000–3999 LLM · 4000–4999 工具 · 5000–5999 Harness · 6000–6999 记忆 · 7000–7999 RAG · 8000–8999 Skill/MCP · 9000–9999 Workflow/Pet/Channel/Cron |
+| 契约版本 | `GET /meta/contract`，前端启动时与内置常量比对 |
 
-## Chat（详见 [07-聊天与会话](./07-聊天与会话.md)）
+## 系统与元信息
 
-| 端点 | 方法 | 请求 | 响应 |
-|---|---|---|---|
-| `/chat/sessions` | GET | `?page=&page_size=&agent=` | `{items: Session[], total: int}` |
-| `/chat/sessions` | POST | `ChatSessionREQ` | `SessionRESP` |
-| `/chat/sessions/:id` | GET | — | `SessionRESP` |
-| `/chat/sessions/:id` | PATCH | `{name?, workspace_path?, permission_mode?}` | `SessionRESP` |
-| `/chat/sessions/:id/delete` | POST | — | `{}` |
-| `/chat/sessions/:id/fork` | POST | `{name, branch_point_seq}` | `SessionRESP` |
-| `/chat/sessions/:id/clear` | POST | — | `{}` |
-| `/chat/sessions/:id/messages` | GET | `?after_seq=&limit=` | `{items: MessageRESP[], total, next_seq}` |
-| `/chat/sessions/:id/workspace` | POST | `{workspace_path}` | `SessionRESP` |
-| `/chat/sessions/:id/permission` | POST | `{mode: restricted\|default\|auto_edit\|yolo}` | `SessionRESP` |
-| `/chat/stream` | POST | `SendStreamREQ` | `SendStreamResult` |
-| `/chat/stream/:runID/resume` | POST | — | `{run_id}` |
-| `/chat/stream/:sid/cancel` | POST | — | `{}` |
-| `/chat/sessions/:id/steer` | POST | `{content}` | `{queued, run_id}` |
-| `/chat/messages/:sid/delete/:mid` | POST | — | `{}` |
-| `/chat/compact` | POST | `{session_id, instructions?, keep_recent?}` | `CompactResultRESP` |
-
-## Agent / Provider / Settings
-
-| 端点 | 方法 |
+| 端点 | 说明 |
 |---|---|
-| `/ai-provider` | GET / POST（创建）/ PATCH（更新） |
-| `/ai-provider/:id` | GET / DELETE |
-| `/ai-provider/:id/test` | POST（连通性测试） |
-| `/ai-provider/available` | GET（已启用 provider + 模型聚合，用于模型选择器） |
-| `/ai-provider/circuit-status` | GET |
-| `/settings/general` / `/settings/:key` | GET / POST（合并保存） |
-| `/auth/login` / `/auth/check` | 本机单用户，登录即绑定 |
+| `GET /meta/version` / `health` / `contract` / `runtime` | 版本、健康、契约版本、内置运行时状态 |
+| `GET /admin/overview` | 管理总览 |
+| `GET /docs` / `docs/:name` | 内置文档 |
+| `GET /dashboard/stats` / `trend` / `token-trend` | 仪表盘统计与趋势 |
+| `GET /events` | SSE 事件流（scope=chat/task/workflow/pet/app） |
 
-## Tool / Skill / MCP
+## 会话与消息
 
-| 端点 | 方法 | 说明 |
-|---|---|---|
-| `/tools` | GET | 工具列表 + 元数据 |
-| `/tools/:name/enabled` | POST | 启停 |
-| `/skills` / `/skills/:name` | GET / POST / DELETE | Skill 列表 / 详情 / 上传 |
-| `/mcp/servers` | GET / POST | MCP server 配置 + 启停 |
-| `/mcp/servers/:id/test` | POST | 重启并握手测试 |
-
-## Memory / Knowledge
-
-| 端点 | 方法 |
+| 端点 | 说明 |
 |---|---|
-| `/memory/episodes` | GET（按 session 列出）/ DELETE |
-| `/memory/facts` | GET / POST / DELETE |
-| `/memory/procedures` | GET / POST / DELETE |
-| `/memory/search` | GET `?q=&top_k=` |
-| `/knowledge/docs` | GET / POST（上传）/ DELETE |
-| `/knowledge/search` | GET `?q=&top_k=&doc_ids=` |
+| `GET/POST /chat/sessions` | 会话列表 / 创建（可携带 `workspace_path` 创建即绑定） |
+| `GET /chat/sessions/:id` / `POST …/rename` / `…/delete` / `POST /chat/sessions/delete-batch` | 详情与维护 |
+| `POST /chat/sessions/:id/model` / `permission` / `workspace` | 切模型 / 权限档 / 绑定工作区 |
+| `GET /chat/sessions/:id/params` / `usage/context` | 生效参数快照 / 上下文分段占用 |
+| `GET /chat/sessions/:id/messages` / `POST …/clear` | 消息列表 / 清空 |
+| `POST /chat/stream` | 发起对话（返回 `run_id`），流式事件走 SSE |
+| `POST /chat/stream/:id/cancel` / `…/resume` | 停止 / 断点续跑 |
+| `POST /chat/sessions/:id/steer` | 中途插话 |
+| `GET /chat/sessions/:id/todos` | 会话计划 |
+| `POST /chat/messages/:sid/delete/:id` / `…/truncate` / `…/fork` | 删除 / 截断 / 分叉 |
+| `POST /chat/sessions/:id/compact` | 手动压缩（保留指示 + 保留窗口） |
+| `GET /chat/sessions/search` / `GET /chat/commands` | 搜索 / 斜杠命令元数据 |
+| `GET /chat/runs` / `GET /chat/runs/:id/events` | 执行记录 / 事件导出 |
 
-## Workflow / Cron / Channel
+## 审批与信任
 
-| 端点 | 方法 |
+| 端点 | 说明 |
 |---|---|
-| `/workflows` | GET / POST |
-| `/workflows/:id` | GET / PATCH / DELETE |
-| `/workflows/:id/run` | POST |
-| `/workflows/:id/cancel` | POST |
-| `/workflow/executions/:id` | GET |
-| `/cron/jobs` | GET / POST / PATCH / DELETE |
-| `/cron/jobs/:id/run` | POST（手动触发） |
-| `/channels` | GET / POST / PATCH / DELETE |
-| `/channels/:id/test` | POST（发送测试消息） |
-| `/channels/executions` | GET |
+| `GET /chat/approvals/pending` | 待决审批 |
+| `POST /chat/approval/:id/decide` / `…/answer` / `…/skip` | 批准或拒绝 / 补充输入回复 / 跳过 |
+| `GET /trust` / `trust/resolve` / `trust/roots` | 信任列表 / 某路径解析态 / 恒信任根 |
+| `POST /trust` / `trust/revoke` | 授权 / 撤销 |
 
-## Pet
+## 工作区与文件
 
-| 端点 | 方法 |
+| 端点 | 说明 |
 |---|---|
-| `/pet/config` | GET / PUT |
-| `/pet/sprites` | GET / POST（上传）/ DELETE |
-| `/pet/state` | GET（前端 2.5s 轮询） |
+| `GET /chat/workspace/:id/files` / `ls` / `file` | 文件树 / 目录列表 / 读文件 |
+| `POST /chat/workspace/:id/rename` / `copy` / `remove` | 重命名 / 复制 / 删除 |
+| `GET /chat/sessions/:id/changes` / `GET /chat/changes/:cid` | 文件变更列表 / diff 详情 |
+| `POST /chat/changes/:cid/rollback` | 回滚一次写入 |
+| `GET /chat/sessions/:id/artifacts` / `POST /chat/artifacts/:aid/delete` | 产出物登记 |
 
-## Dashboard
+## 任务与模型
 
-| 端点 | 方法 |
+| 端点 | 说明 |
 |---|---|
-| `/dashboard/overview` | GET |
-| `/dashboard/token-trend` | GET `?range=7d\|30d` |
-| `/dashboard/runs` | GET `?page=&page_size=&status=` |
+| `GET/POST /tasks`、`GET /tasks/:id`、`POST /tasks/:id/cancel` | 后台任务队列 |
+| `GET/POST /ai-provider`、`GET /ai-provider/available` / `kinds` | 供应商 CRUD / 可用模型 / 协议类型 |
+| `POST /ai-provider/:id/update` / `delete` / `test` / `reload` | 维护与连通性测试 |
+| `GET /ai-provider/circuit-status` / `POST /ai-provider/:id/reset-circuit` | 熔断状态与重置 |
 
-## 关键类型字段（节选）
+## 设置
 
-### SessionRESP
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | string | `SESSION_xxx` |
-| `name` | string | 会话名 |
-| `provider_id` | string | 当前 provider |
-| `model` | string | 当前模型 |
-| `workspace_path` | string | 绑定的工作区目录 |
-| `permission_mode` | string | `restricted` / `default` / `auto_edit` / `yolo` |
-| `parent_id` | string | 分叉来源会话（根为空） |
-| `branch_point` | int64 | 分叉点 seq |
-| `message_count` | int | — |
-| `last_message_at` | int64 | 毫秒 |
-| `created_at` / `updated_at` | int64 | 毫秒 |
-
-### MessageRESP
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | string | `MESSAGE_xxx` |
-| `session_id` | string | — |
-| `run_id` | string | 本消息所属 run |
-| `seq` | int64 | 会话内单调 |
-| `role` | string | `user` / `assistant` / `tool` |
-| `content` / `thinking` | string | 正文 / 推理 |
-| `tool_calls` | ToolCall[] | assistant 调用（JSON） |
-| `tool_call_id` | string | tool 消息对应 id |
-| `blocks` | MessageBlockRESP[] | 工具过程（前端 TaskTimeline 用） |
-| `status` | string | `streaming` / `completed` / `failed` |
-| `stop_reason` | string | `end_turn` / `length` / `cancelled` / ... |
-| `model` | string | — |
-| `input_tokens` / `output_tokens` / `cache_read_tokens` / `total_tokens` | int | 最终落库 |
-| `latency_ms` | int64 | run 端到端耗时 |
-| `created_at` / `updated_at` | int64 | 毫秒 |
-
-### ArtifactPayload（chat:artifact 事件）
-
-| 字段 | 说明 |
+| 端点 | 说明 |
 |---|---|
-| `explanation` | 工具说明文本 |
-| `files[]` | `{path, name, mime, size, url, kind}` |
+| `GET /settings`、`GET/POST /settings/general` | 系统设置键值 / 常规项 |
+| `GET/POST /settings/smtp` / `settings/websearch` / `settings/exec/agent` | SMTP / 搜索 / exec 白名单 |
+| `GET/POST /kv/:key` | 单键读写 |
 
-### CompactResultRESP
+## 能力域
 
-| 字段 | 说明 |
+| 端点 | 说明 |
 |---|---|
-| `compacted` | 本次压缩消息数 |
-| `freed_chars` / `freed_tokens` | 释放的字符 / token |
-| `pinned` | 是否触发了手动压缩（true）/ 自动（false） |
+| `GET/POST /skills`、`POST /skills/import-zip`、`POST /skills/:name/enabled` / `update` / `delete` | 技能管理 |
+| `GET /mcp/servers`、`GET/POST /mcp/servers/raw`、`POST /mcp/servers`、`…/:name/enabled` / `delete`、`POST /mcp/servers/reload` / `reveal` | MCP 管理（raw 为 JSON 直编 + 校验回滚） |
+| `GET /tools`、`POST /tools/:name/enabled` | 工具清单与启停 |
+| `GET /workflows`（含 `node-types` / `:id/graph`）、`POST /workflows`、`…/:id/update` / `update-graph` / `delete` / `validate` / `:id/run` | 工作流定义与校验 |
+| `GET /workflows/:id/executions`、`GET /executions/:id`、`POST /executions/:id/cancel` / `pause` / `resume` / `input` | 执行明细与人工干预 |
+| `GET /kdocs`（含 `search` / `groups` / `group/:group`）、`POST /kdocs` / `import-file`、`POST /kdocs/:id/update` / `delete` / `reindex` | 知识库 |
+| `GET /memory/episodes` / `facts` / `procedures` / `stats` / `recall` / `search` / `long-term/:id`、`POST …/delete` | 记忆中心 |
+| `GET/POST /channels` 等 | 通知通道配置与发送日志 |
+| `GET /cron-jobs` 等 | 定时任务 CRUD 与手动触发 |
+| `GET /api/v1/pet/*`、`POST /pet/window/:mode` | 桌宠配置 / 形象 / 窗口形态 |
 
-## 事件载荷字段表（`chat:*`）
+## SSE 事件清单
 
-| 事件 | 关键字段 |
+| 事件 | 载荷要点 |
 |---|---|
-| `chat:stream.start` | `{model, resumed?}` |
-| `chat:stream` | `{delta}` |
-| `chat:thinking` | `{delta}` |
-| `chat:tool` | `{id, name, arguments, agent}` |
-| `chat:tool-start` | `{id, name, agent}` |
-| `chat:tool-result` | `{id, name, content, error?, duration_ms, agent?, refused?, data?}` |
-| `chat:approval` | `{id, command, reason, risk}` |
-| `chat:approval-decided` | `{id, decision}` |
-| `chat:stats` | `{turn, input_tokens, output_tokens, cache_read_tokens, total_tokens, latency_ms}` |
-| `chat:compressed` | `{removed_messages, summary_head}` |
-| `chat:todo` | `{state: TodoStateRESP}` |
-| `chat:file-change` | `{change: FileChange}` |
-| `chat:artifact` | `{artifact: ArtifactPayload}` |
-| `chat:subagent-start/done/error` | `{sub_run_id, agent, message?}` |
-| `chat:error` | `{code, message, kind?}` |
-| `chat:retry` | `{attempt, delay_ms, reason}` |
-| `chat:gap` | `{run_id, last_seq}` |
-| `chat:done` | `{status, reason, stop_reason, message_id, usage}` |
-
-## 约束
-
-- 所有 API 字段 snake_case，跨前后端对齐（CLAUDE.md §2.5）
-- 所有时间戳 int64 毫秒
-- 所有 ID ULID 大写带领域前缀（CLAUDE.md §2.7）
-- SSE 事件带 seq，断线重连按 Last-Event-ID 重放
+| `chat:stream.start` | 模型、是否续跑 |
+| `chat:stream` / `chat:thinking` | 正文 / 思维链增量 |
+| `chat:tool` / `chat:tool-result` | 工具调用与结果（id / name / args / state / duration） |
+| `chat:stats` | 本轮用量（input / output / cache_read / total / latency） |
+| `chat:approval` / `chat:approval-decided` | 审批请求与裁决 |
+| `chat:compressed` | 自动压缩（折叠条数） |
+| `chat:file-change` / `chat:artifact` | 文件变更 / 产出物登记 |
+| `chat:subagent-start` / `-done` / `-error` | 子 Agent 生命周期 |
+| `chat:done` / `chat:error` / `chat:stopped` | 终态（含 stop_reason） |
+| `chat:gap` | 重放窗口失效，前端转全量快照 |
+| `chat:retry` | 建流瞬时错误自动重试 |
+| `task:created` / `started` / `done` | 后台任务生命周期 |
+| `workflow:*` / `pet:*` / `app:*` | 对应能力域事件 |
+| `ping` | 30s 具名心跳（watchdog 依据） |

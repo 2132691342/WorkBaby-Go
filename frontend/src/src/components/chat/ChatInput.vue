@@ -27,11 +27,12 @@ import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
 import { ElMessageBox } from 'element-plus'
-import type { AvailableModel, CircuitState, EffectiveParams, FileInfo, Message, QueuedMessage } from '@/types/api'
+import type { AvailableModel, CircuitState, EffectiveParams, FileInfo, Message, QueuedMessage, Skill } from '@/types/api'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import AttachmentStrip from '@/components/chat/composer/AttachmentStrip.vue'
 import SlashCommandPalette, { type SlashCommand } from '@/components/chat/composer/SlashCommandPalette.vue'
 import MentionPicker, { type MentionItem } from '@/components/chat/composer/MentionPicker.vue'
+import SkillPicker from '@/components/chat/composer/SkillPicker.vue'
 import MidTurnQueue from '@/components/chat/composer/MidTurnQueue.vue'
 import ContextUsagePopover from '@/components/chat/composer/ContextUsagePopover.vue'
 import ParamsPopover, { type ComposerParams } from '@/components/chat/composer/ParamsPopover.vue'
@@ -49,7 +50,7 @@ const props = defineProps<{
   /** 上下文窗口使用估值（0~max），占位版用 0/128k。 */
   ctxUsed?: number
   ctxMax?: number
-  /** A3 痛点：熔断状态 Map（id → CircuitState）。 */
+  /** 熔断状态 Map（id → CircuitState）。 */
   circuitStates?: Map<string, CircuitState>
   /** 当前会话绑定的工作区绝对路径（null = 默认会话工作区）。 */
   workspacePath?: string | null
@@ -89,12 +90,21 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 const isComposing = ref(false)
 
+/** 根容器：浮层的「点击外部关闭」判定边界。 */
+const composerRef = ref<HTMLElement | null>(null)
+
 const slashOpen = ref(false)
 const slashQuery = ref('')
 const slashPaletteRef = ref<InstanceType<typeof SlashCommandPalette> | null>(null)
+/** 触发字符 `/` 在草稿中的下标（替换时按这个位置截断，而非 lastIndexOf）。 */
+const slashStart = ref(-1)
 const mentionOpen = ref(false)
 const mentionQuery = ref('')
 const mentionActiveIndex = ref(-1)
+/** 触发字符 `@` 在草稿中的下标（同上）。 */
+const mentionStart = ref(-1)
+/** 工具行「技能」按钮唤起的技能选择器。 */
+const skillPickerOpen = ref(false)
 
 const modelSelectorRef = ref<InstanceType<typeof ModelSelector> | null>(null)
 /** 采样参数弹层实例：send 时读取当前 temperature / thinking_effort。 */
@@ -113,6 +123,7 @@ const mentionItems = computed<MentionItem[]>(() => {
   const q = mentionQuery.value.trim().toLowerCase()
   const items: MentionItem[] = []
   for (const s of skillsStore.skills) {
+    if (s.enabled === false) continue
     if (q && !s.name.toLowerCase().includes(q)) continue
     items.push({
       type: 'skill',
@@ -208,21 +219,48 @@ function pickFile(): void {
   void uploadFile()
 }
 
-/** 技能 mini：在光标处插入 @ 并唤起提及选择器（与手输 @ 走同一条解析路径）。 */
+/**
+ * 技能 mini：直接弹出技能选择器（不依赖输入框里有没有 `@`）。
+ * 选中的技能以 `@名称` 插入光标处，仍走后端 Skill 匹配的同一条路径。
+ */
 function openSkills(): void {
   if (props.disabled || props.streaming) return
+  skillPickerOpen.value = !skillPickerOpen.value
+  if (skillPickerOpen.value) {
+    slashOpen.value = false
+    mentionOpen.value = false
+  }
+}
+
+/** 在光标处插入文本（替换已有选区），插入后光标停在文本末尾。 */
+function insertAtCursor(text: string): void {
   const ta = textareaRef.value
-  if (!ta) return
-  const start = ta.selectionStart ?? draft.value.length
-  const end = ta.selectionEnd ?? start
-  draft.value = draft.value.slice(0, start) + '@' + draft.value.slice(end)
+  const start = ta?.selectionStart ?? draft.value.length
+  const end = ta?.selectionEnd ?? start
+  draft.value = draft.value.slice(0, start) + text + draft.value.slice(end)
   void nextTick(() => {
-    ta.focus()
-    const pos = start + 1
-    ta.setSelectionRange(pos, pos)
+    ta?.focus()
+    const pos = start + text.length
+    ta?.setSelectionRange(pos, pos)
     onInput()
     autoResize()
   })
+}
+
+/** 技能选择器选中：插入 `@技能名 `（末尾空格方便直接继续写指令）。 */
+function pickSkill(skill: Skill): void {
+  skillPickerOpen.value = false
+  insertAtCursor(`@${skill.name} `)
+}
+
+/** 点击浮层外部 / 输入框失焦时收起三个浮层，避免遮住消息流。 */
+function onDocumentPointerDown(e: PointerEvent): void {
+  if (!skillPickerOpen.value && !slashOpen.value && !mentionOpen.value) return
+  const root = composerRef.value
+  if (root && e.target instanceof Node && root.contains(e.target)) return
+  skillPickerOpen.value = false
+  slashOpen.value = false
+  mentionOpen.value = false
 }
 
 async function uploadFile(_file?: File): Promise<void> {
@@ -281,6 +319,8 @@ function enqueueMessage(text: string): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
+  // 技能选择器打开时，导航键归它自己处理（内部搜索框已聚焦）
+  if (skillPickerOpen.value && ['Enter', 'ArrowDown', 'ArrowUp', 'Escape'].includes(e.key)) return
   if (e.key === 'Enter' && !e.shiftKey && !isComposing.value) {
     e.preventDefault()
     if (slashOpen.value) {
@@ -332,14 +372,16 @@ function onKeydown(e: KeyboardEvent): void {
 }
 
 function pickMention(item: MentionItem): void {
-  const text = draft.value
-  const idx = text.lastIndexOf('@')
+  // 触发点优先用解析时记下的下标；拿不到（如外部调用）才退化到最后一个 @。
+  const idx = mentionStart.value >= 0 ? mentionStart.value : draft.value.lastIndexOf('@')
   if (idx < 0) {
     mentionOpen.value = false
     return
   }
+  const text = draft.value
   const before = text.slice(0, idx)
-  const baseAfter = text.slice(idx).replace(/@\S*$/, '')
+  const caret = textareaRef.value?.selectionStart ?? text.length
+  const baseAfter = caret > idx ? text.slice(caret) : ''
   if (item.type === 'file') {
     if (!attachments.value.some((a) => a.id === item.id)) {
       attachments.value.push({
@@ -367,25 +409,43 @@ function pickMention(item: MentionItem): void {
   void nextTick(() => textareaRef.value?.focus())
 }
 
+/** 触发字符左侧允许的前导符：行首 / 空白 / 常见中文与括号标点。 */
+const TRIGGER_PREFIX = /(?:^|[\s\u3000(（【［{「『"'、，。；：！？,.;:!?])/
+
+/**
+ * 按光标位置解析触发态，而不是按整段文本的行尾。
+ *
+ * 行尾判断在「输入 @ 后又移动光标」「中间插入」「中文标点后输入」等场景下都会漏判，
+ * 表现就是 `@` / `/` 时灵时不灵；以 caret 之前的片段为判定依据才是稳的。
+ */
 function onInput(): void {
-  const text = draft.value
-  const slashMatch = /(?:^|\s)(\/[A-Za-z]*)$/.exec(text)
-  if (slashMatch) {
-    slashOpen.value = true
-    slashQuery.value = slashMatch[1].slice(1)
-  } else {
-    slashOpen.value = false
-    slashQuery.value = ''
-  }
-  const atMatch = /(?:^|\s)(@\S*)$/.exec(text)
-  if (atMatch) {
+  const ta = textareaRef.value
+  const pos = ta?.selectionStart ?? draft.value.length
+  const before = draft.value.slice(0, pos)
+
+  const at = new RegExp(TRIGGER_PREFIX.source + '@([^\\s@]*)$').exec(before)
+  if (at) {
+    mentionStart.value = pos - at[1].length - 1
+    mentionQuery.value = at[1]
     mentionOpen.value = true
-    mentionQuery.value = atMatch[1].slice(1)
     mentionActiveIndex.value = 0
-  } else {
-    mentionOpen.value = false
-    mentionActiveIndex.value = -1
+    slashOpen.value = false
+    slashStart.value = -1
+    return
   }
+  mentionOpen.value = false
+  mentionStart.value = -1
+  mentionActiveIndex.value = -1
+
+  const sl = new RegExp(TRIGGER_PREFIX.source + '/([A-Za-z]*)$').exec(before)
+  if (sl) {
+    slashStart.value = pos - sl[1].length - 1
+    slashQuery.value = sl[1]
+    slashOpen.value = true
+    return
+  }
+  slashOpen.value = false
+  slashStart.value = -1
 }
 
 function pickSlash(cmd: SlashCommand): void {
@@ -420,7 +480,7 @@ function pickSlash(cmd: SlashCommand): void {
       void runCompact()
       break
     case 'tasks':
-      void router.push('/tasks')
+      window.dispatchEvent(new Event('workbaby:open-tasks'))
       break
     case 'agent':
       void submitAgentTask()
@@ -533,7 +593,8 @@ async function submitAgentTask(): Promise<void> {
     if (!prompt) return
     await apiPost('/api/v1/tasks', { session_id: id, agent: '', prompt })
     toast.success(t('slash.agentSubmitted'))
-    void router.push('/tasks')
+    // 任务中心是聊天页右侧面板，跳 /tasks 会落到无关的会话列表页
+    window.dispatchEvent(new Event('workbaby:open-tasks'))
   } catch (e) {
     if (e === 'cancel') return // 用户主动取消，不算失败
     toast.error(t('slash.agentFailed'), e instanceof Error ? e.message : String(e))
@@ -602,6 +663,7 @@ onMounted(() => {
   textareaRef.value?.focus()
   // 全局快捷键聚焦输入框（Ctrl+/ 与 Ctrl+Shift+P，App.vue 注册）
   window.addEventListener('wb:focus-input', focusFromShortcut)
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
   // 拉取输入上限：system_settings.chat.maxInputChars（key 不存在时后端返 404，catcher 兜底默认）
   void loadMaxInputChars()
 })
@@ -619,6 +681,7 @@ async function loadMaxInputChars(): Promise<void> {
 
 onBeforeUnmount(() => {
   window.removeEventListener('wb:focus-input', focusFromShortcut)
+  document.removeEventListener('pointerdown', onDocumentPointerDown, true)
 })
 
 function focusFromShortcut(): void {
@@ -721,6 +784,7 @@ defineExpose({
 
 <template>
   <div
+    ref="composerRef"
     class="composer relative"
     @dragenter="onDragEnter"
     @dragover="onDragOver"
@@ -853,17 +917,21 @@ defineExpose({
         <!-- 采样参数 mini：展示生效值 + 可覆盖（与设置页同一数据源） -->
         <ParamsPopover ref="paramsRef" :effective="props.effectiveParams" />
 
-        <!-- 技能 mini：光标处插入 @ 唤起技能提及选择器 -->
-        <button
-          type="button"
-          class="mini"
-          :title="t('nav.skills')"
-          :disabled="disabled || streaming"
-          @click="openSkills"
-        >
-          <Zap class="mic" />
-          {{ t('nav.skills') }}
-        </button>
+        <!-- 技能 mini：直接弹出技能选择器（选中后以 @技能名 插入光标处） -->
+        <div class="relative">
+          <button
+            type="button"
+            class="mini"
+            :class="{ 'mini--active': skillPickerOpen }"
+            :title="t('nav.skills')"
+            :disabled="disabled || streaming"
+            @click="openSkills"
+          >
+            <Zap class="mic" />
+            {{ t('nav.skills') }}
+          </button>
+          <SkillPicker :visible="skillPickerOpen" @pick="pickSkill" @close="skillPickerOpen = false" />
+        </div>
 
         <!-- 附件 mini -->
         <button

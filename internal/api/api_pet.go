@@ -1,7 +1,12 @@
 package api
 
 import (
+	"encoding/base64"
+	"os"
+	"strings"
+
 	"WorkBaby/internal/domain"
+	"WorkBaby/internal/pet"
 	"WorkBaby/internal/pkg"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -49,6 +54,46 @@ func (h *Handler) DeletePetSprite(id string) (map[string]any, error) {
 // UploadPetSprite 上传本地图片文件为 sprite（name + 本地路径，前端经文件对话框选路径）。
 func (h *Handler) UploadPetSprite(name string, srcPath string) (domain.PetSpriteRESP, error) {
 	return h.petSvc.UploadSprite(h.ctx, name, srcPath)
+}
+
+// ReadLocalImage 把本地图片读成 data URL，供前端在画布里裁剪 / 旋转 / 抠图。
+// WebView2 不允许前端直接读 file:// 路径，这一步只能由后端代读。
+func (h *Handler) ReadLocalImage(path string) (string, error) {
+	if path == "" {
+		return "", pkg.New(9400, "image path required", "")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", pkg.Wrap(9406, "read image file failed", err)
+	}
+	if len(data) > pet.MaxSpriteBytes {
+		return "", pkg.New(9402, "image file exceeds 5MB", "")
+	}
+	mime := "image/png"
+	switch pet.DetectExt(data) {
+	case "":
+		return "", pkg.New(9403, "unsupported image format (png/webp/gif/jpg)", "")
+	case ".jpg":
+		mime = "image/jpeg"
+	case ".gif":
+		mime = "image/gif"
+	case ".webp":
+		mime = "image/webp"
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// SavePetSpriteImage 保存前端编辑后的图片（data URL）为 sprite。
+func (h *Handler) SavePetSpriteImage(name string, dataURL string) (domain.PetSpriteRESP, error) {
+	idx := strings.Index(dataURL, ",")
+	if !strings.HasPrefix(dataURL, "data:") || idx < 0 {
+		return domain.PetSpriteRESP{}, pkg.New(9403, "invalid image data url", "")
+	}
+	raw, err := base64.StdEncoding.DecodeString(dataURL[idx+1:])
+	if err != nil {
+		return domain.PetSpriteRESP{}, pkg.Wrap(9403, "decode image data failed", err)
+	}
+	return h.petSvc.SaveSpriteBytes(h.ctx, name, raw)
 }
 
 // GetPetState 当前桌宠状态。

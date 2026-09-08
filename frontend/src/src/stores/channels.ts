@@ -6,20 +6,7 @@ import { t } from '@/i18n'
 import type { ChannelConfig, ChannelConfigReq, ChannelMessageLog } from '@/types/api'
 
 /**
- * 通道 store（Pinia 重构）。
- *
- * <p>职责：通道列表 CRUD + 消息日志查看 + start/stop/test 动作。
- * 替代原 ChannelsView.vue 内的本地 ref。
- *
- * <p><b>与后端的契约</b>：
- * <ul>
- *   <li>列表：{@code GET /api/v1/channels}</li>
- *   <li>消息日志：{@code GET /api/v1/channels/{id}/messages?limit=50}</li>
- *   <li>创建：{@code POST /api/v1/channels}</li>
- *   <li>更新：{@code POST /api/v1/channels/{id}/update}</li>
- *   <li>动作：{@code POST /api/v1/channels/{id}/{op}}（op = start|stop|test）</li>
- *   <li>删除：{@code POST /api/v1/channels/{id}/delete}</li>
- * </ul>
+ * 通知通道 store：通道 CRUD、启停 / 测试动作、发送日志查看，端点见 doc/16。
  */
 export const useChannelsStore = defineStore('channels', () => {
   const channels = ref<ChannelConfig[]>([])

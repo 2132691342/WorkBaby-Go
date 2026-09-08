@@ -1,7 +1,13 @@
 import { MATH_CLASS, MERMAID_CLASS } from './setup'
 
-/** 代码块折叠阈值（行数）：超过则默认折叠，防长输出撑爆会话。 */
-export const CODE_FOLD_LINES = 25
+/**
+ * 代码块折叠阈值（行数）。
+ *
+ * <p>折叠是给「超长 dump」准备的逃生门，不是默认形态：阈值 25 时，模型一次回答里
+ * 两段代码中稍长的那段就只剩一条折叠条，用户以为内容丢了（历史反馈）。常态代码
+ * 用 pre 自身的 max-height + 滚动限高，内容始终可见。
+ */
+export const CODE_FOLD_LINES = 400
 
 /**
  * 为代码块加「语言标签 + 复制 + 长代码折叠」。
@@ -45,7 +51,7 @@ export function decorateCodeBlocks(root: HTMLElement): void {
       details.className = 'wb-code-fold'
       const summary = document.createElement('summary')
       summary.className = 'wb-code-summary'
-      summary.textContent = `展开（${lines} 行）`
+      summary.textContent = `${lang || 'text'} · ${lines} 行 · 点击展开`
       summary.setAttribute('data-wb-deco', '1')
       summary.append(header)
       details.append(summary, pre)

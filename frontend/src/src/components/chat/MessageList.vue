@@ -145,7 +145,7 @@ watch(
 )
 
 /**
- * 修复：判断第 i 条消息是否在「当前可视线附近」。
+ * 判断第 i 条消息是否在「当前可视线附近」。
  * 流式中只保留最后 1 条 + 上下 5 条；其余用 content-visibility: auto 跳过渲染。
  */
 const NEAR_WINDOW = 5

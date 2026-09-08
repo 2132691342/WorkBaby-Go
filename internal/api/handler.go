@@ -476,8 +476,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 		Sender:   h.channelSvc,
 		Nodes: []wnodes.Node{
 			// LLM 节点注入 ReAct 执行器：配了 tools 即走多轮工具循环（与聊天同一主循环）。
-			// 计量：ReAct 与补全两条路径统一落 token_usages（Source=workflow），
-			// 此前工作流 LLM 调用完全不计量，仪表盘总消耗系统性偏低。
+			// 计量：ReAct 与补全两条路径统一落 token_usages（Source=workflow）。
 			wnodes.NewLLMNode(h.reg).
 				WithReactor(service.NewWorkflowReactor(h.reg, h.toolSvc).
 					WithUsageSink(service.WorkflowUsageSink(h.usageRepo)).React).

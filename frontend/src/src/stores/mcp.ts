@@ -4,18 +4,7 @@ import { apiGet, apiPost } from '@/api/client'
 import type { McpServer } from '@/types/api'
 
 /**
- * MCP store（改为「直接编辑 mcp.json」）。
- *
- * <p><b>交互</b>：用户直接编辑 {@code mcp.json} 原始 JSON（后端原子写 + 校验 servers 数组），
- * 不再用 transport 下拉表单逐项配置；保存后立即触发热重载生效。
- *
- * <p><b>与后端的契约</b>：
- * <ul>
- *   <li>列表：{@code GET /api/v1/mcp/servers}</li>
- *   <li>原始 JSON 读取：{@code GET /api/v1/mcp/servers/raw}</li>
- *   <li>原始 JSON 保存：{@code POST /api/v1/mcp/servers/raw}（写后自动 reload）</li>
- *   <li>热重载：{@code POST /api/v1/mcp/servers/reload}</li>
- * </ul>
+ * MCP store：直接编辑 mcp.json 原始 JSON（后端原子写 + 校验），保存后触发热重载。
  */
 export const useMcpStore = defineStore('mcp', () => {
   const servers = ref<McpServer[]>([])

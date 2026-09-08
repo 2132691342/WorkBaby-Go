@@ -13,7 +13,7 @@ import { t } from '@/i18n'
 const props = defineProps<{
   models: AvailableModel[]
   selectedModelID?: string | null
-  /** A3 痛点：熔断状态 Map（id → CircuitState）；可选传入以显示徽标。 */
+  /** 熔断状态 Map（id → CircuitState）；传入后显示熔断 / 禁用徽标。 */
   circuitStates?: Map<string, CircuitState>
 }>()
 
@@ -297,7 +297,7 @@ onUnmounted(() => {
               <span class="min-w-0 flex-1 truncate font-medium" :title="m.alias || m.model">
                 {{ m.alias || m.model }}
               </span>
-              <!-- A3 痛点：熔断/禁用徽标 -->
+              <!-- 熔断 / 禁用徽标 -->
               <template v-if="circuitBadge(m).kind === 'open'">
                 <ZapOff class="h-3 w-3 text-wb-danger" />
               </template>

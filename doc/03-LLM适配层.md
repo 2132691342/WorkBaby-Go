@@ -1,80 +1,59 @@
-# 03 LLM 适配层
+# LLM 适配层
 
-## 定位
+位置：`internal/llm/`。职责：把「流式对话 + 工具调用 + 思维链」这一套协议统一成单一抽象，上层（harness）不感知具体供应商。
 
-`internal/llm/` 把上游差异（OpenAI / Anthropic / Ollama / 国产兼容端）归一为统一的 `ChatRequest` / `ChatResponse` / `StreamChunk` / `Message` / `TokenUsage` 协议供 harness 使用。
+## Provider 接口
 
-## 设计要点
+```go
+type Provider interface {
+    Name() string
+    Kind() ProviderKind                       // anthropic | openai | ollama
+    Chat(ctx, *ChatRequest) (*ChatResponse, error)
+    Stream(ctx, *ChatRequest) (<-chan StreamChunk, error)
+    Models(ctx) ([]ModelInfo, error)
+    Ping(ctx) error
+}
+```
 
-- **Provider 接口**（`llm.Provider`）：`Name` / `Kind` / `Chat` / `Stream` / `Models` / `Ping`，每个上游一个实现（`openai/`、`anthropic/`、`ollama/`）
-- **流式 `StreamChunk`** 统一形态：`{Delta Message, ToolCall *NormalizedToolCall, FinalUsage *TokenUsage, FinishReason *string, Err error}`；harness 循环消费
-- **工具调用归一**：`NormalizedToolCall{ID, Name, Arguments json.RawMessage}`，所有上游（结构化 + 文本兜底）汇流到同一形态
-- **thinking 方言探测**：7 种方言（auto / none / adaptive / enabled / reasoning_effort / enable_bool），未知上游回落 `none`（不注入任何字段，宁可不开也不发错）
-- **重试**：`DefaultRetryPolicy()` 仅重试瞬时错误（429 / 5xx / 超时），指数退避 + 抖动，`Retry-After` 优先
-- **错误归一化**：`UpstreamError` 抽人话 + 原始 JSON 不得进 UI 文案
+`ChatRequest` 携带 messages / tools / temperature / thinking_effort；`StreamChunk` 是统一流式单元，四种载荷：
 
-## 核心契约
-
-### ChatRequest
-
-| 字段 | 含义 |
+| 载荷 | 含义 |
 |---|---|
-| `Model` | 当前 run 的模型名 |
-| `Messages` | 已归一化的消息序列（harness 装配） |
-| `Tools` | `[]ToolDefinition{Name, Description, Parameters}` |
-| `Temperature` / `TopP` / `MaxTokens` / `Thinking` / `ExtraBody` | 三层合并：请求级 > Provider 级 > 全局默认 |
-| `User` | 固定 `"local"`（本机单用户） |
+| `Delta.Message.Content` | 正文增量 |
+| `Delta.Message.Thinking` | 思维链增量（独立通道，永不混入正文） |
+| `ToolCall` | 完整工具调用（归一化后） |
+| `FinishReason` | 本轮流终止原因（`stop` / `tool_calls`） |
+| `FinalUsage` | 本轮 token 用量 |
 
-### TokenUsage
+## 适配实现
 
-| 字段 | 含义 |
-|---|---|
-| `InputTokens` / `OutputTokens` | 本轮实际 |
-| `CacheReadTokens` / `CacheWriteTokens` | 缓存拆分维度（与 Input 拆解，不叠加） |
-| `TotalTokens` | 上游给出（部分上游不回 → 用三项之和兜底） |
-
-### Thinking 方言探测表
-
-| 探测 | 命中 host | 命中 model |
+| 文件 | 适配对象 | 关键差异处理 |
 |---|---|---|
-| `adaptive` | `minimax / minimax.chat / api.minimax` | — |
-| `enabled` | `bigmodel.cn / open.bigmodel / volces.com / volcengineapi.com / ark.cn-beijing / moonshot.cn / moonshot.ai` | — |
-| `enable_bool` | `dashscope / bailian / aliyuncs.com` | qwen3 / `-thinking` |
-| `reasoning_effort` | `api.openai.com` | `o1` / `o3` / `o4` / `gpt-5` |
-| `none` | `deepseek.com / api.deepseek` | — |
-| `none`（默认） | — | 其它 |
+| `anthropic/client.go` | Claude 系 | thinking 走独立 content block；usage 的 `cache_read_input_tokens` / `cache_creation_input_tokens` 归一化，`InputTokens` 统一为「含缓存」口径 |
+| `openai/client.go` | OpenAI 及兼容端点（DeepSeek / GLM / Qwen 等） | `prompt_tokens_details.cached_tokens` → `CacheReadTokens`；思维链兼容 `<think>` 标签的端点在渲染层剥离 |
+| `ollama/client.go` | 本地模型 | 无 key，`cache_read_count` 归一化 |
 
-显式指定（Provider 设置）优先于探测。
+缓存 token 的统一口径：**缓存命中是输入的子维度，不与 Input 叠加**。因此「实际计费输入 = InputTokens − CacheReadTokens」在所有协议下同义，仪表盘据此画三线图。
 
-### `ResolveParams(req, providerParams, defaults)`
+## Thinking 渲染策略
 
-合并顺序：请求级 `reqParams` → `providerParams` → `defaults`。三处都缺时回落 LLM API 默认。
+`thinking.go` 按端点能力选择思维链呈现方式：
 
-## 关键流程
+- 原生支持（Claude / DeepSeek-R1 等）：thinking 走独立字段，前端独立面板展示。
+- 不支持但模型会把 `<think>` 写进正文：适配层在渲染前剥离已闭合块与未闭合尾部，避免推理文本污染正文与记忆。
 
-### 流式响应汇聚
+## Registry 与熔断
 
-```
-provider.Stream() → chan StreamChunk
-  → harness 循环：
-    Delta.Content → EventTurnDelta("content", ...)
-    Delta.Thinking → EventTurnThinking("thinking", ...)
-    ToolCall → EventToolCall(...)
-    FinalUsage → 累计 r.usage
-    FinishReason → 终止判定
-    Err → 跳出本轮收尾
-```
+`registry.Registry` 持有全部 enabled provider 的就绪态：
 
-### BuildAssistantMessage
+- 构建时逐条解密 apiKey，失败的单条标记 unready，不影响其他 provider。
+- 每次调用记录成败；连续失败进入熔断（拒绝请求并带原因），冷却后半开试探。
+- 前端可查熔断状态并手动重置（`/ai-provider/circuit-status`、`/ai-provider/:id/reset-circuit`）。
 
-构造发给下一轮的 assistant 消息：合并 `content` + `tool_calls`（`role=assistant`）。
+## 自动降级
 
-### 上游错误归一化
+harness 支持挂载 `TurnAdjuster`：建流失败（限流 / 5xx / 熔断）时按 `chat.fallback_model` 降级重试本轮。前端在流式气泡顶部显示「第 N 次重试」提示，正文恢复后自动消失。
 
-`ExtractUpstreamError(body)` → `UpstreamError{StatusCode, Message, Kind, Raw}`，前端拿 `Message`（人话），不直接拼 `Raw`。
+## 配置源
 
-## 约束
-
-- 任何上游差异（字段名 / 枚举值 / 默认开闭）都在 `internal/llm/<provider>/` 内吸收，不泄漏到 harness
-- thinking 字段默认**不下发**（避免未知上游 400）；用户显式选择才发
-- `chatcmpl-tool-*` 风格的 tool call id 由上游给，harness 不造，但保证幂等键 `tool:<name>|<args>` 在 resume 时命中
+`ai_providers` 表是真源；若 `{home}/model.json` 存在，启动时同步进表（文件缺失 / 解析失败仅告警，不覆盖 DB 存量）。apiKey 在 DB 中恒为密文，读取时按需解密。

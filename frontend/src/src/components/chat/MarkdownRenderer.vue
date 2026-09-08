@@ -1,22 +1,8 @@
 <script setup lang="ts">
 /**
- * Markdown 渲染器。
- *
- * <p><b>优化要点</b>：
- * <ol>
- *   <li>{@code MarkdownIt} 实例提到模块顶层单例（避免每实例 new）</li>
- *   <li>流式时用 {@code useThrottledContent} 把 content 节流到 100ms 一次</li>
- *   <li>流式时关闭 hljs 高亮（去掉 {@code highlight} 选项，避免每 token 都 tokenize），流结束后单独跑一次最终 highlight</li>
- *   <li>容器固定 {@code min-height: 2.5rem} + {@code contain: layout style} 防止 layout shift 引发滚动抖动</li>
- *   <li>流式关闭 DOMPurify 部分钩子加速 sanitize</li>
- *   <li>暴露 {@code wb-cursor-slot} 锚点供外部光标挂载，避免光标被 v-html 重写销毁</li>
- * </ol>
- *
- * <p><b>扩展</b>：GFM 任务列表 / 脚注 / 数学公式 / Mermaid 流程图。
- * 轻量插件（任务列表、脚注）同步渲染；katex 与 mermaid 走占位 + 异步按需加载，不进首屏关键路径。
- *
- * <p><b>安全（CLAUDE.md project-standard）</b>：markdown-it 关闭 {@code html}，原始 HTML 一律按纯文本转义，
- * 进一步用 DOMPurify 白名单消毒后输出到 {@code v-html}，双保险防止 webview 内 XSS / 窃取 localStorage token。
+ * Markdown 渲染器：markdown-it 单例（流式关高亮 + 节流；终态开高亮 + linkify），
+ * 输出经 DOMPurify 消毒（`html:false` + 白名单双保险）。扩展：GFM 任务列表 / 脚注 /
+ * 数学公式 / Mermaid（按需异步加载）。`#md-cursor-slot` 供外部光标挂载。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
@@ -49,7 +35,7 @@ const props = defineProps<{
 const mdStreaming = setupMarkdown(new MarkdownIt({
   html: false,
   linkify: false,  // M3 档位 1（2026-08-28）：流式关闭 linkify，URL 识别延迟到终态
-  breaks: true     // P1（2026-08-29）：与终态统一 —— 此前流式 false/终态 true，换行渲染结果不同导致流结束重排跳动
+  breaks: true     // 流式与终态保持一致：换行渲染口径不同会导致流结束时整段重排
   // streaming 模式不传 highlight，对未闭合代码块也按纯文本处理（性能优先；高亮延迟到终态）
 }))
 
@@ -216,7 +202,7 @@ onBeforeUnmount(() => {
   >
     <!-- 兜底提示：渲染异常时明确告知已降级，避免用户误以为内容丢失 -->
     <div v-if="renderFailed" class="md-fallback-tip">{{ t('chat.renderFallback') }}</div>
-    <!-- 修复：markdown 内容容器；外部光标由调用方挂到 #md-cursor-slot，避免 v-html 重写销毁 -->
+    <!-- 内容容器；外部光标挂到 #md-cursor-slot，不随 v-html 重写销毁 -->
     <div ref="bodyRef" class="markdown-body" v-html="renderedHtml" />
     <!-- 外部光标挂载点：调用方可往 #md-cursor-slot 注入独立 DOM 节点，节点不会随 v-html 重写而销毁 -->
     <span id="md-cursor-slot" class="md-cursor-slot" />
@@ -417,6 +403,10 @@ onBeforeUnmount(() => {
   background: var(--wb-code-bg);
   color: var(--wb-code-fg);
   border: 1px solid var(--wb-code-border);
+  /* 长代码限高滚动而不是折叠：折叠会让用户以为内容丢了，滚动则始终可见 */
+  max-height: 30rem;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 /* header 覆盖在 pre 顶部：语言标签 + 复制按钮 */
 .markdown-body .wb-code-header {

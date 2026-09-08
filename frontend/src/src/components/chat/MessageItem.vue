@@ -86,7 +86,7 @@ function fmtTime(iso: string | number): string {
  */
 const { copy: copyToClipboard } = useClipboard({ legacy: true })
 
-/** 剥离 Markdown 语法 → 纯文本（回应「复制出来是 MD」的痛点）；think 块一并剥离。 */
+/** 剥离 Markdown 语法 → 纯文本（复制出来是纯文本而非 MD 源码）；think 块一并剥离。 */
 function stripMarkdown(md: string): string {
   return stripThinkBlocks(md)
     .replace(/```[a-zA-Z0-9_-]*\n?([\s\S]*?)```/g, (_m, code: string) => code.trim() + '\n')

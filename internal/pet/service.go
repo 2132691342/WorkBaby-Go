@@ -153,6 +153,14 @@ func (s *Service) UploadSprite(ctx context.Context, name, srcPath string) (domai
 	if err != nil {
 		return domain.PetSpriteRESP{}, pkg.Wrap(9406, "read sprite file failed", err)
 	}
+	return s.SaveSpriteBytes(ctx, name, data)
+}
+
+// SaveSpriteBytes 落盘前端编辑（裁剪 / 旋转 / 抠图）后的图片字节并注册为 sprite。
+func (s *Service) SaveSpriteBytes(ctx context.Context, name string, data []byte) (domain.PetSpriteRESP, error) {
+	if name == "" {
+		name = "sprite"
+	}
 	if len(data) > MaxSpriteBytes {
 		return domain.PetSpriteRESP{}, pkg.New(9402, "sprite file exceeds 5MB", "")
 	}

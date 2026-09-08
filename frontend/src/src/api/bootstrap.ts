@@ -2,51 +2,98 @@ import { initApi, apiGet } from './http'
 import { UI_API_CONTRACT_VERSION } from './contract'
 
 /**
- * 双主机启动引导：从 Wails `app:ready` 事件拿到 serverPort 并初始化 HTTP 层，
- * 随后校验前后端契约版本。
- * 降级顺序：Wails 事件 → localStorage('wb.serverPort') → 抛错（App.vue 显示「后端未就绪」）。
+ * 双主机启动引导：拿到 gin 监听端口并初始化 HTTP 层，随后校验前后端契约版本。
+ *
+ * <p>取端口的三条通道按可靠性排序，先命中先返回：
+ * <ol>
+ *   <li>Wails 绑定 `GetServerPort()`——同步取值，没有「事件早于监听器」的时序窗口；</li>
+ *   <li>`app:ready` 事件——后端就绪后补发，用于绑定不可用时的兜底；</li>
+ *   <li>localStorage(`wb.serverPort`)——上一次运行缓存，仅纯浏览器 dev 场景有意义。</li>
+ * </ol>
+ *
+ * <p>三条都拿不到才算启动失败：任何一条通道失败都不能静默 resolve，
+ * 否则后续业务请求会以 `[4000] server not initialized` 的形式在别处爆炸。
  */
 export async function bootstrapServer(): Promise<void> {
-  // 1) Wails 事件（桌面端）：等 app:ready 携带 serverPort
-  try {
-    const rt = await import('@/wailsjs/runtime/runtime')
-    await new Promise<void>((resolve, reject) => {
-      const off = rt.EventsOn('app:ready', (payload: Record<string, unknown>) => {
-        const port = payload?.server_port as number | undefined
-        if (typeof port === 'number' && port > 0) {
-          off()
-          void initAndVerify(port).then(resolve, reject)
-        }
-      })
-      // 兜底：3s 内没等到事件 → 尝试 localStorage
-      setTimeout(() => {
-        const cached = localStorage.getItem('wb.serverPort')
-        if (cached) {
-          off()
-          void initAndVerify(cached).then(resolve, reject)
-          return
-        }
-        off()
-        resolve()
-      }, 3000)
-    })
-    return
-  } catch {
-    // 无 wails 注入（纯浏览器 dev）：直接读 localStorage
+  const port = await acquirePort()
+  if (port <= 0) {
+    throw new Error('server not ready: missing serverPort')
   }
-
-  // 2) localStorage 兜底
-  const cached = localStorage.getItem('wb.serverPort')
-  if (cached) {
-    await initAndVerify(cached)
-    return
-  }
-  throw new Error('server not ready: missing serverPort')
+  initApi(port)
+  await checkContract()
 }
 
-function initAndVerify(port: string | number): Promise<void> {
-  initApi(port)
-  return checkContract()
+/** 端口获取总入口：绑定 → 事件 / 轮询竞速 → localStorage，全部失败返回 0。 */
+async function acquirePort(): Promise<number> {
+  const bound = await readPortBinding()
+  if (bound > 0) return bound
+
+  const fromEvent = await waitReadyEvent()
+  if (fromEvent > 0) return fromEvent
+
+  const cached = readCachedPort()
+  return cached
+}
+
+/** 经 Wails 绑定同步取端口；非桌面环境（纯浏览器 dev）返回 0。 */
+async function readPortBinding(): Promise<number> {
+  try {
+    const { GetServerPort } = await import('@/wailsjs/go/main/App')
+    const port = await GetServerPort()
+    return typeof port === 'number' && port > 0 ? port : 0
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * 等 `app:ready` 事件；同时以 300ms 间隔轮询绑定，覆盖「事件已经先发过」的情况。
+ * 超时后返回 0，由调用方决定降级，不在这里吞掉失败。
+ */
+function waitReadyEvent(timeoutMs = 15000): Promise<number> {
+  return new Promise<number>((resolve) => {
+    let settled = false
+    let off: (() => void) | null = null
+    const finish = (port: number): void => {
+      if (settled) return
+      settled = true
+      off?.()
+      if (timer !== null) clearInterval(timer)
+      resolve(port)
+    }
+
+    const deadline = Date.now() + timeoutMs
+    const timer = setInterval(async () => {
+      const port = await readPortBinding()
+      if (port > 0) {
+        finish(port)
+        return
+      }
+      if (Date.now() > deadline) finish(0)
+    }, 300)
+
+    void import('@/wailsjs/runtime/runtime')
+      .then((rt) => {
+        off = rt.EventsOn('app:ready', (payload: Record<string, unknown>) => {
+          const port = payload?.server_port as number | undefined
+          if (typeof port === 'number' && port > 0) finish(port)
+        })
+      })
+      .catch(() => {
+        // 纯浏览器 dev：没有 runtime，只能等轮询超时
+      })
+  })
+}
+
+/** 读上一次运行缓存的端口（可能已失效，仅在非桌面环境兜底）。 */
+function readCachedPort(): number {
+  try {
+    const cached = localStorage.getItem('wb.serverPort')
+    const n = Number(cached)
+    return Number.isFinite(n) && n > 0 ? n : 0
+  } catch {
+    return 0
+  }
 }
 
 /** 契约版本比对：后端 meta/contract 与前端常量不一致时显式抛错，避免全站静默 404。 */

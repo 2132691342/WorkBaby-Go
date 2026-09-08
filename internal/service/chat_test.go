@@ -411,7 +411,7 @@ func TestToLLMMessagesDropsEmptyAssistant(t *testing.T) {
 
 	hists := []domain.MessageDO{
 		{ID: "M1", Role: domain.MessageRoleUser, Content: "开工", Status: domain.MessageStatusCompleted},
-		// 上次 run 失败残留的空 assistant 占位（GLM 1214 元凶）
+		// 上次 run 失败残留的空 assistant 占位（部分 provider 会因空 content 拒绝整轮）
 		{ID: "M2", Role: domain.MessageRoleAssistant, Content: "", Status: domain.MessageStatusFailed},
 		{ID: "M3", Role: domain.MessageRoleUser, Content: "继续", Status: domain.MessageStatusCompleted},
 		// 空 content 的 tool 消息：兜底 "(empty)" 而非剥掉（剥掉会破坏 tool_call 配对）

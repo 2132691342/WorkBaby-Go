@@ -254,7 +254,7 @@ onBeforeUnmount(() => {
         <button :class="{ on: tokenScope === 'month' }" @click="onScope('month')">{{ t('dashboard.tokenScopeMonth') }}</button>
         <button :class="{ on: tokenScope === 'custom' }" @click="onScope('custom')">{{ t('dashboard.tokenScopeCustom') }}</button>
       </div>
-      <!-- 自定义范围：选中 custom 后展开日期区间（此前只有隐藏逻辑没有 UI，点了像没反应） -->
+      <!-- 自定义范围：选中 custom 后展开日期区间 -->
       <el-date-picker
         v-if="tokenScope === 'custom'"
         v-model="tokenCustomRange"

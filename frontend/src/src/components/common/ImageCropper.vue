@@ -1,71 +1,71 @@
 <script setup lang="ts">
+/**
+ * 图片编辑器（Canvas 实现，零依赖）：裁剪 + 任意角度旋转 + 翻转 + 缩放 + 自动抠图。
+ *
+ * <p>输入是 data URL（本地图由后端 ReadLocalImage 代读，WebView 不让前端碰 file://），
+ * 输出也是 PNG data URL（保留 alpha，抠出来的透明背景能带走）——桌宠形象、
+ * 聊天头像、悬浮 companion 共用同一份成品。
+ *
+ * <p>自动抠图：取四角像素均值当背景色，按容差把接近的像素 alpha 归零，
+ * 容差边界做一圈软过渡，避免硬边锯齿。只做位图变换，不动原文件。
+ */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '@/i18n'
 
-/**
- * 图片裁剪 / 旋转编辑器（Canvas 实现，零依赖）。
- *
- * <p>交互：拖拽平移选区 + 90° 步进旋转 + 缩放滑块；确认输出 PNG Blob 交给调用方上传。
- * 初始缩放按「短边铺满画布」计算（cover），保证裁剪结果不留白边。
- *
- * <p>只做位图变换，不动原文件；桌宠头像与聊天背景共用同一个形象来源。
- */
 const props = withDefaults(defineProps<{
   modelValue: boolean
-  /** 待编辑的源图片；置非空时载入画布。 */
-  source: File | null
+  /** 待编辑的源图片（data URL）；置非空时载入画布。 */
+  source: string
   /** 输出宽高比（宽/高）；1 = 正方形。 */
   aspect?: number
   /** 输出宽度（像素）。 */
   outputWidth?: number
 }>(), {
-  source: null,
   aspect: 1,
   outputWidth: 512
 })
 
 const emit = defineEmits<{
   'update:modelValue': [boolean]
-  confirm: [Blob]
+  confirm: [dataURL: string]
 }>()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 const img = ref<HTMLImageElement | null>(null)
-const objectUrl = ref('')
 const rotation = ref(0)
 const scale = ref(1)
+const flipH = ref(false)
+const flipV = ref(false)
 const offX = ref(0)
 const offY = ref(0)
 const dragging = ref(false)
+/** 抠图容差（0=关，越大抠得越狠）。 */
+const tolerance = ref(0)
+const cutting = ref(false)
 let lastX = 0
 let lastY = 0
 
 const outH = computed(() => Math.round(props.outputWidth / (props.aspect || 1)))
 
-function release(): void {
-  if (objectUrl.value) {
-    URL.revokeObjectURL(objectUrl.value)
-    objectUrl.value = ''
-  }
+function reset(): void {
+  rotation.value = 0
+  scale.value = 1
+  flipH.value = false
+  flipV.value = false
+  offX.value = 0
+  offY.value = 0
+  tolerance.value = 0
 }
 
-function load(src: File): void {
-  release()
-  objectUrl.value = URL.createObjectURL(src)
+function load(src: string): void {
+  if (!src) return
   const el = new Image()
   el.onload = () => {
     img.value = el
     reset()
     draw()
   }
-  el.src = objectUrl.value
-}
-
-function reset(): void {
-  rotation.value = 0
-  scale.value = 1
-  offX.value = 0
-  offY.value = 0
+  el.src = src
 }
 
 /** 短边铺满画布的基础缩放；旋转 90/270 度时宽高互换。 */
@@ -79,29 +79,98 @@ function fitScale(): number {
   return Math.max(props.outputWidth / iw, outH.value / ih)
 }
 
-function draw(): void {
-  const c = canvasRef.value
+/** 透明格背景：抠图后能直观看出哪些区域真的透明了。 */
+function paintBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+  const cell = 8
+  for (let y = 0; y < h; y += cell) {
+    for (let x = 0; x < w; x += cell) {
+      ctx.fillStyle = ((x / cell + y / cell) | 0) % 2 === 0 ? '#2a2a31' : '#202027'
+      ctx.fillRect(x, y, cell, cell)
+    }
+  }
+}
+
+/** 把当前变换画到任意 2D 上下文；backdrop 仅预览用（透明格不进成品）。 */
+function render(ctx: CanvasRenderingContext2D | null, w: number, h: number, backdrop: boolean): void {
   const el = img.value
-  if (!c || !el) return
-  const ctx = c.getContext('2d')
-  if (!ctx) return
-  const w = props.outputWidth
-  const h = outH.value
-  c.width = w
-  c.height = h
+  if (!ctx || !el) return
   ctx.clearRect(0, 0, w, h)
+  if (backdrop) paintBackdrop(ctx, w, h)
   ctx.save()
   ctx.translate(w / 2 + offX.value, h / 2 + offY.value)
   ctx.rotate((rotation.value * Math.PI) / 180)
+  ctx.scale(flipH.value ? -1 : 1, flipV.value ? -1 : 1)
   const s = fitScale() * scale.value
   ctx.scale(s, s)
   ctx.drawImage(el, -el.naturalWidth / 2, -el.naturalHeight / 2)
   ctx.restore()
 }
 
-function rotate(): void {
+function draw(): void {
+  const c = canvasRef.value
+  if (!c) return
+  c.width = props.outputWidth
+  c.height = outH.value
+  render(c.getContext('2d'), props.outputWidth, outH.value, true)
+}
+
+function rotateStep(): void {
   rotation.value = (rotation.value + 90) % 360
   draw()
+}
+
+/**
+ * 自动抠背景：四角均值当背景色，容差内 alpha 归零，容差带内线性过渡。
+ * 结果写回 img，后续旋转 / 缩放都基于抠好的图。
+ */
+function applyCutout(): void {
+  const el = img.value
+  if (!el) return
+  cutting.value = true
+  const w = el.naturalWidth
+  const h = el.naturalHeight
+  const off = document.createElement('canvas')
+  off.width = w
+  off.height = h
+  const ctx = off.getContext('2d')
+  if (!ctx) {
+    cutting.value = false
+    return
+  }
+  ctx.drawImage(el, 0, 0)
+  const data = ctx.getImageData(0, 0, w, h)
+  const px = data.data
+  const corners = [0, (w - 1) * 4, (h - 1) * w * 4, (h * w - 1) * 4]
+  let br = 0
+  let bg = 0
+  let bb = 0
+  for (const i of corners) {
+    br += px[i]
+    bg += px[i + 1]
+    bb += px[i + 2]
+  }
+  br /= corners.length
+  bg /= corners.length
+  bb /= corners.length
+
+  const tol = tolerance.value
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] === 0) continue
+    const d = (Math.abs(px[i] - br) + Math.abs(px[i + 1] - bg) + Math.abs(px[i + 2] - bb)) / 3
+    if (d <= tol) {
+      px[i + 3] = 0
+    } else if (d < tol * 2) {
+      px[i + 3] = Math.round((px[i + 3] * (d - tol)) / tol)
+    }
+  }
+  ctx.putImageData(data, 0, 0)
+  const next = new Image()
+  next.onload = () => {
+    img.value = next
+    draw()
+    cutting.value = false
+  }
+  next.src = off.toDataURL('image/png')
 }
 
 function onPointerDown(e: PointerEvent): void {
@@ -128,69 +197,82 @@ function onPointerUp(): void {
 }
 
 function confirm(): void {
-  const c = canvasRef.value
-  if (!c || !img.value) return
-  draw()
-  c.toBlob((b) => {
-    if (b) emit('confirm', b)
-  }, 'image/png')
+  if (!img.value) return
+  // 离屏重绘一次不带透明格的版本：格子只是预览辅助，不能进成品
+  const out = document.createElement('canvas')
+  out.width = props.outputWidth
+  out.height = outH.value
+  render(out.getContext('2d'), props.outputWidth, outH.value, false)
+  emit('confirm', out.toDataURL('image/png'))
 }
 
 function close(): void {
   emit('update:modelValue', false)
 }
 
-watch(() => props.source, (f) => {
-  if (f) load(f)
+watch(() => props.source, (s) => {
+  if (s) load(s)
 })
 
-watch(() => props.modelValue, (v) => {
-  if (!v) release()
+onBeforeUnmount(() => {
+  img.value = null
 })
-
-onBeforeUnmount(release)
 </script>
 
 <template>
   <el-dialog
     :model-value="modelValue"
     :title="t('cropper.title')"
-    width="440px"
+    width="480px"
     append-to-body
     @update:model-value="(v: boolean) => emit('update:modelValue', v)"
   >
     <div class="flex flex-col items-center gap-3">
-      <canvas
-        ref="canvasRef"
-        class="cursor-grab rounded-xl border border-wb-border bg-wb-bg"
-        :style="{ width: '320px', aspectRatio: String(aspect || 1) }"
-        @pointerdown="onPointerDown"
-        @pointermove="onPointerMove"
-        @pointerup="onPointerUp"
-        @pointerleave="onPointerUp"
-      />
+      <div
+        class="overflow-hidden rounded-xl border border-wb-border"
+        :style="{ width: '320px' }"
+      >
+        <canvas
+          ref="canvasRef"
+          class="block w-full cursor-grab"
+          :style="{ aspectRatio: String(aspect || 1) }"
+          @pointerdown="onPointerDown"
+          @pointermove="onPointerMove"
+          @pointerup="onPointerUp"
+          @pointerleave="onPointerUp"
+        />
+      </div>
       <p class="text-xs text-wb-muted">{{ t('cropper.hint') }}</p>
 
       <div class="flex w-full items-center gap-3">
+        <span class="shrink-0 text-xs text-wb-muted">{{ t('cropper.angle') }}</span>
+        <el-slider v-model="rotation" :min="0" :max="360" :step="1" class="flex-1" @input="draw" />
+        <span class="w-10 shrink-0 text-right text-xs tabular-nums">{{ rotation }}°</span>
+      </div>
+
+      <div class="flex w-full items-center gap-3">
         <span class="shrink-0 text-xs text-wb-muted">{{ t('cropper.zoom') }}</span>
-        <el-slider
-          v-model="scale"
-          :min="0.2"
-          :max="4"
-          :step="0.05"
-          class="flex-1"
-          @input="draw"
-        />
+        <el-slider v-model="scale" :min="0.2" :max="4" :step="0.05" class="flex-1" @input="draw" />
         <span class="w-10 shrink-0 text-right text-xs tabular-nums">{{ scale.toFixed(2) }}×</span>
       </div>
 
+      <div class="flex w-full items-center gap-3">
+        <span class="shrink-0 text-xs text-wb-muted">{{ t('cropper.tolerance') }}</span>
+        <el-slider v-model="tolerance" :min="0" :max="120" :step="1" class="flex-1" />
+        <el-button size="small" :loading="cutting" :disabled="!img || tolerance <= 0" @click="applyCutout">
+          {{ t('cropper.cutout') }}
+        </el-button>
+      </div>
+
       <div class="flex w-full items-center gap-2">
-        <el-button size="small" @click="rotate">
-          {{ t('cropper.rotate') }} 90°
+        <el-button size="small" @click="rotateStep">{{ t('cropper.rotate') }} 90°</el-button>
+        <el-button size="small" :class="flipH ? 'is-active' : ''" @click="flipH = !flipH; draw()">
+          {{ t('cropper.flipH') }}
         </el-button>
-        <el-button size="small" @click="reset(); draw()">
-          {{ t('cropper.reset') }}
+        <el-button size="small" :class="flipV ? 'is-active' : ''" @click="flipV = !flipV; draw()">
+          {{ t('cropper.flipV') }}
         </el-button>
+        <el-button size="small" @click="reset(); draw()">{{ t('cropper.reset') }}</el-button>
         <span class="flex-1" />
         <el-button size="small" @click="close">{{ t('ui.btn.cancel') }}</el-button>
         <el-button size="small" type="primary" :disabled="!img" @click="confirm">
@@ -200,3 +282,11 @@ onBeforeUnmount(release)
     </div>
   </el-dialog>
 </template>
+
+<style scoped>
+.is-active {
+  color: var(--wb-primary-strong);
+  border-color: color-mix(in srgb, var(--wb-primary) 45%, transparent);
+  background: color-mix(in srgb, var(--wb-primary) 10%, transparent);
+}
+</style>

@@ -21,20 +21,8 @@ import {
 import type { CommandItem } from '@/composables/useCommandPalette'
 
 /**
- * 全局命令面板：Ctrl+K 呼出。
- *
- * <p>选型说明：候选库（vue-command-palette / vue-cmdk）文档在本环境不可达，
- * 无样式 compound API 无法验证——按「禁止臆造 API」红线自研渲染层，
- * 命令注册协议收口在 useCommandPalette，后续替换库只动本文件。
- *
- * <p>命令分组：
- * <ul>
- *   <li><b>nav</b> — 全站导航（19 页）</li>
- *   <li><b>action</b> — 全局操作（新建会话 / 清空 / 压缩 / 焦点模式）</li>
- *   <li><b>session</b> — 会话切换（动态）</li>
- *   <li><b>mode</b> — 权限模式切换（agent.session_mode，动态 ✓ 标注当前态）</li>
- *   <li><b>tool</b> — 工具启停（GET /tools 动态注册，POST /tools/:name/enabled）</li>
- * </ul>
+ * 全局命令面板：Ctrl+K 呼出。命令注册协议收口在 useCommandPalette；
+ * 分组：nav 全站导航 / action 全局操作 / session 会话切换 / mode 权限切换 / tool 工具启停。
  */
 const router = useRouter()
 const chat = useChatStore()

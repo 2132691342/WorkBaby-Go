@@ -97,7 +97,7 @@ func (t *HistoryTruncator) BeforeTurn(ms []*llm.Message) []*llm.Message {
 }
 
 // estimateTokens 消息 token 估算；委托给 EstimateTokens 保证全 harness 同一口径
-// （两份估算器各算各的，是压缩阈值失准的历史成因）。
+//（压缩阈值据此判定，口径不一会导致阈值失准）。
 func estimateTokens(ms []*llm.Message) int { return EstimateTokens(ms) }
 
 // defaultMiddlewares 默认中间件链。

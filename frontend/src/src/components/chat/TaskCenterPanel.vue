@@ -5,10 +5,11 @@
  * <p>展示 TaskService 中的任务列表（流式事件 task:* 实时追加）；
  * 不阻塞聊天的长任务（调研、批量处理）在此看结果。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useChatStore } from '@/stores/chat'
 import { useToast } from '@/composables/useToast'
+import { getApiBase } from '@/api/http'
 import { t } from '@/i18n'
 import {
   Loader2,
@@ -85,8 +86,31 @@ async function cancel(id: string): Promise<void> {
   }
 }
 
+/**
+ * 任务事件长连接：scope=task 且不带 runId → 收全部后台任务生命周期变化。
+ * 面板之前只在挂载时拉一次列表，任务跑完界面纹丝不动，看着就像没在跑。
+ */
+let es: EventSource | null = null
+function openTaskStream(): void {
+  const base = getApiBase()
+  if (!base) return
+  es = new EventSource(`${base}/events?scope=task`)
+  const refresh = (): void => {
+    void chat.loadTasks()
+  }
+  for (const name of ['task:created', 'task:started', 'task:done']) {
+    es.addEventListener(name, refresh)
+  }
+}
+
 onMounted(() => {
   void chat.loadTasks()
+  openTaskStream()
+})
+
+onBeforeUnmount(() => {
+  es?.close()
+  es = null
 })
 </script>
 

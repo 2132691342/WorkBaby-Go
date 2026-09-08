@@ -3,19 +3,8 @@ import { apiPost, apiGet, getApiBase } from './http'
 import { onUnmounted } from 'vue'
 
 /**
- * 流式聊天订阅 + 发送（SSE 版，doc/15 §3）。
- *
- * <p>双主机架构：先 POST /api/v1/chat/stream 发起 run 拿 runID，
- * 再建立 GET /api/v1/events?scope=chat&runId={runId} 的 SSE 长连接消费事件。
- *
- * <p><b>M2 可靠性套件</b>（与后端 sse.go 的 seq/Last-Event-ID 重放/具名 ping 心跳配套）：
- * <ul>
- *   <li>lastEventId 追踪：断线重连带 last_event_id（Header 优先，手动重连走 query），
- *       服务端从 RunEventLog 重放缺口</li>
- *   <li>watchdog：75s（> 2×30s 心跳）无任何事件判定假死，主动断开重连</li>
- *   <li>指数退避重连（500ms 起步，上限 8s），重连成功（sse-ready）后回调
- *       {@link StreamChatOpts.onReconnect} 由 store 重拉权威快照</li>
- * </ul>
+ * 流式聊天订阅 + 发送：POST /chat/stream 拿 runID，再经 SSE 消费事件。
+ * 可靠性三件套：Last-Event-ID 重放、watchdog 假死检测（>2× 心跳周期）、指数退避重连。
  */
 
 export interface StreamHandle {
@@ -151,6 +140,8 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
     case 'task:started':
     case 'task:done':
       return { type: 'task', data: { task: p.task } }
+    case 'chat:compressed':
+      return { type: 'compressed', data: { removed_messages: p.removed_messages ?? 0 } }
     default:
       return null
   }
@@ -182,7 +173,9 @@ const EVENT_NAMES = [
   'chat:subagent-done',
   'chat:subagent-error',
   // 建流瞬时错误自动重试提示
-  'chat:retry'
+  'chat:retry',
+  // 自动上下文压缩（达到预算阈值时后端自动触发，需要让用户看见）
+  'chat:compressed'
 ] as const
 
 /** 重连退避：500ms 起步指数递增，8s 封顶。 */

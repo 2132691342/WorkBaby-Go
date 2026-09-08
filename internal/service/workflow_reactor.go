@@ -78,7 +78,7 @@ func (w *WorkflowReactor) React(ctx context.Context, req wnodes.ReactRequest) (w
 	if res.Err != nil {
 		return wnodes.ReactResult{}, pkg.Wrap(9105, "ReAct 执行失败", res.Err)
 	}
-	// 逐轮落 token_usages：工作流 LLM 节点此前完全不计量，总消耗统计系统性偏低
+	// 逐轮落 token_usages：保证工作流消耗与聊天同一计量口径
 	if w.usageSink != nil {
 		for _, t := range res.Turns {
 			w.usageSink(req.ExecutionID, req.ProviderID, req.Model, t.Usage)

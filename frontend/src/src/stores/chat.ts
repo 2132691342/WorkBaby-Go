@@ -724,6 +724,9 @@ export const useChatStore = defineStore('chat', () => {
   /** 停止当前流式生成。 */
   async function cancelStream(): Promise<void> {
     userCancelled.value = true
+    // 停止的那一刻就把还在转圈的工具落成 stopped 终态：
+    // 等 run 终止事件再收尾的话，用户会看到转圈继续转很久，分不清「停了没」。
+    settleRunningTools()
     const sessionID = currentID.value
     if (sessionID) {
       try {
@@ -733,6 +736,16 @@ export const useChatStore = defineStore('chat', () => {
       }
     }
     activeHandle?.cancel()
+  }
+
+  /** 把仍在 running 的工具置为 stopped（保留已有结果文本）。 */
+  function settleRunningTools(): void {
+    if (streamingTools.value.length === 0) return
+    streamingTools.value = streamingTools.value.map((tool) =>
+      tool.state === 'running'
+        ? { ...tool, state: 'stopped' as const, result: tool.result ?? t('chat.toolStopped') }
+        : tool
+    )
   }
 
   /** 关闭终止原因横幅（用户手动关闭；下轮发送时还会自动复位）。 */
@@ -788,9 +801,7 @@ export const useChatStore = defineStore('chat', () => {
 
   /**
    * 跳过：审批按拒绝处理，补充输入按「未回复」处理。
-   *
-   * <p>两类请求共用后端 /skip：此前补充输入也走 /decide，而它只认审批通道，
-   * 于是每次跳过都报 4003「approval request not found or expired」。
+   * 两类请求共用后端 /skip（/decide 只认审批通道）。
    */
   async function skipApproval(): Promise<void> {
     const a = pendingApproval.value
@@ -803,6 +814,12 @@ export const useChatStore = defineStore('chat', () => {
       // chat:gap → 重放窗口失效，立即拉权威快照
       if (update.requestSnapshot && currentID.value) {
         void safeLoadMessages(currentID.value)
+        continue
+      }
+      // chat:compressed → 自动压缩发生了但没有别的视觉信号，必须显式提示，
+      // 否则用户只会发现「前面的聊天不见了」
+      if (update.setCompressed) {
+        useToast().info(t('chat.autoCompressed', update.setCompressed.removed_messages))
         continue
       }
       applyStreamUpdate(update, {
@@ -826,6 +843,8 @@ export const useChatStore = defineStore('chat', () => {
       // 这里再发一次请求会与前者并发且返回顺序不定，过期响应由 loadSeq 守卫丢弃。
       if (update.setStopReason !== undefined) {
         streaming.value = false
+        // run 已终止：还挂着 running 的工具不会再有结果回来，落成明确终态
+        settleRunningTools()
       }
     }
   })

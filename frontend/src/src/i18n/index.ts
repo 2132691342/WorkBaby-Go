@@ -1,21 +1,8 @@
 import { computed, ref } from 'vue'
 
 /**
- * WorkBaby 前端 i18n。
- *
- * <p>采用极简自实现方案，避免引入 vue-i18n 依赖：
- * <ul>
- *   <li>内置 {@code messages} 完整 zh-CN / en-US 字典作为<b>权威来源</b>，
- *       切换语言即时生效、离线可用（不依赖后端往返与 cookie）</li>
- *   <li>{@link t} 支持 {@code {0}/{1}} 占位符插值（与 Spring MessageSource 一致）</li>
- * </ul>
- *
- * <p><b>为什么不再只依赖后端</b>：历史版本切换英文仅少数按钮生效，根因是
- * 后端字典缺 key + 各组件硬编码中文。现在前端内置全量字典，{@link setLocale}
- * 只改本地 {@code locale}，全站响应式刷新。
- *
- * <p>已移除对已下线后端端点 `/api/v1/i18n/messages` / `/api/v1/i18n/locale`
- * 的调用（I18nController 已删，调用只会 404 被静默吞掉）。
+ * 前端 i18n：内置 zh-CN / en-US 全量字典（权威来源，离线可用），
+ * `t()` 支持 `{0}` 占位插值；切语言只改本地 locale，全站响应式刷新。
  */
 import { zhCN } from './dict-zh'
 import { enUS } from './dict-en'

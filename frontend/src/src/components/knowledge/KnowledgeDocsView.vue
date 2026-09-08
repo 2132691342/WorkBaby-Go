@@ -137,7 +137,7 @@ function displaySource(d: KnowledgeDoc): string {
   return d.source
 }
 
-/** file 型文档：原生文件对话框选路径 → 回填 source，免手动粘贴路径（痛点修复）。 */
+/** file 型文档：原生文件对话框选路径 → 回填 source，免手动粘贴路径。 */
 async function pickSourceFile(): Promise<void> {
   try {
     const selected = await OpenFileDialog(t('kdoc.pickFileTitle'), DOC_FILTER)

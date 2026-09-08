@@ -19,7 +19,8 @@ export interface ToolCallInfo {
   name: string
   args?: string
   result?: string
-  state?: 'running' | 'success' | 'error'
+  /** stopped = 用户主动停止 / run 终止时仍未返回的工具，区别于真实失败。 */
+  state?: 'running' | 'success' | 'error' | 'stopped'
   started_at?: number
   duration_ms?: number
   /** 子 Agent 来源标签（delegate 转发的子 run 工具事件）；空 = 主 Agent。 */
@@ -66,6 +67,8 @@ export interface StreamEventUpdate {
   pushFileChange?: FileChange
   /** 工件登记事件（file_write 旁路自动 upsert）。 */
   pushArtifact?: Artifact
+  /** 自动上下文压缩（chat:compressed）：告知用户历史已被折叠，不是内容丢了。 */
+  setCompressed?: { removed_messages: number }
   /** 后台任务生命周期事件（task:created/started/done）。 */
   upsertTask?: BackgroundTask
   /** 子 Agent 生命周期（subagent_start/done/error）：按 id 合并状态，不整体替换。 */
@@ -142,6 +145,11 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
           if (!data || typeof data !== 'object') return null
           const d = data as { task?: BackgroundTask }
           return d.task ? { upsertTask: d.task } : null
+        }
+        case 'compressed': {
+          if (!data || typeof data !== 'object') return null
+          const d = data as { removed_messages?: number }
+          return { setCompressed: { removed_messages: d.removed_messages ?? 0 } }
         }
         case 'subagent_start': {
           if (!data || typeof data !== 'object') return null

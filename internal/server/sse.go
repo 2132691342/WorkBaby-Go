@@ -52,11 +52,13 @@ func NewSSEHub(bus *event.Bus, log *event.RunEventLog) *SSEHub {
 		log:     log,
 		clients: make(map[*sseClient]struct{}),
 	}
-	// 桥接 chat:*/pet:*/app:*/workflow:* 四类事件（前端订阅范围）
+	// 桥接 chat:*/pet:*/app:*/workflow:*/task:* 五类事件（前端订阅范围）。
+	// task:* 必须在此登记：后台任务面板按 scope=task 订阅，缺了这一行任务中心收不到任何实时变化。
 	h.bus.Subscribe(event.MatchPrefix("chat:"), h.onEvent)
 	h.bus.Subscribe(event.MatchPrefix("pet:"), h.onEvent)
 	h.bus.Subscribe(event.MatchPrefix("app:"), h.onEvent)
 	h.bus.Subscribe(event.MatchPrefix("workflow:"), h.onEvent)
+	h.bus.Subscribe(event.MatchPrefix("task:"), h.onEvent)
 	return h
 }
 

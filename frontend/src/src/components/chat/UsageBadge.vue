@@ -45,8 +45,9 @@ function cacheHitRate(u?: UsageShape | null): number | null {
   if (!u) return null
   const read = u.cache_read_tokens ?? 0
   const input = u.input_tokens ?? 0
-  // provider 未报缓存读取时不展示 0%——避免「缓存 0%/1%」这类误导噪音
-  if (read <= 0 || input <= 0) return null
+  // 输入为 0 说明本轮没有可用分母，隐藏；否则一律展示——
+  // 之前 read=0 时整行隐藏，新会话前几轮缓存未预热时用户会以为功能丢了。
+  if (input <= 0) return null
   return Math.round((read / input) * 100)
 }
 
@@ -80,8 +81,13 @@ function usageDetail(u: UsageShape | null | undefined): string {
   if (u.output_tokens != null) rows.push(`输出 ${u.output_tokens}`)
   // 命中率必须与分母一起给：只显示「缓存 99%」会被误读成全局口径，
   // 而它实际是「本轮」——与仪表盘的窗口聚合值天然不同。
-  if ((u.cache_read_tokens ?? 0) > 0) {
-    rows.push(`${t('chat.usageCacheRead')} ${u.cache_read_tokens} / ${t('chat.usageInput')} ${u.input_tokens}（${t('chat.usageThisTurn')} ${cacheHitRate(u)}%）`)
+  if (u.input_tokens != null) {
+    const read = u.cache_read_tokens ?? 0
+    if (read > 0) {
+      rows.push(`${t('chat.usageCacheRead')} ${read} / ${t('chat.usageInput')} ${u.input_tokens}（${t('chat.usageThisTurn')} ${cacheHitRate(u)}%）`)
+    } else {
+      rows.push(t('chat.usageCacheCold'))
+    }
   }
   if (u.total_tokens != null) rows.push(`合计 ${u.total_tokens}`)
   const dur = fmtDuration(u.latency_ms)

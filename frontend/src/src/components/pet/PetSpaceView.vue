@@ -10,7 +10,7 @@
  * </ul>
  *
  * <p>主题统一改用 wb-* token（与 SettingsView/ChatView 等保持一致）。
- * 自定义宠物上传细节已迁移到新 PetConfigPanel.vue。
+ * 自定义形象的裁剪 / 旋转 / 抠图直接在页内 ImageCropper 中完成。
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -19,10 +19,11 @@ import { usePetStore } from '@/stores/pet'
 import { t } from '@/i18n'
 import { apiPost } from '@/api/client'
 import { useToast } from '@/composables/useToast'
+import ImageCropper from '@/components/common/ImageCropper.vue'
 
 const pet = usePetStore()
-const { form, error, info, spriteName, loading, sprites } = storeToRefs(pet)
-const { load, save, addSprite, removeSprite, uploadSpriteFile } = pet
+const { form, error, spriteName, loading, sprites } = storeToRefs(pet)
+const { load, save, addSprite, removeSprite, pickImageForEdit, saveEditedSprite } = pet
 const toast = useToast()
 
 /** 召唤/收起桌面宠物窗口（Wails 单窗口形态切换：缩小 + 置顶 → 前端切到 /pet/desktop 页）。 */
@@ -35,15 +36,22 @@ async function togglePetWindow(show: boolean): Promise<void> {
   }
 }
 
-/** 上传 sprite：单次原生文件对话框选图 + 上传（修复「要选两次文件」的痛点）。 */
+/** 选中本地图 → 打开图片编辑器（裁剪 / 旋转 / 抠图）→ 保存为新形象。 */
 const uploading = ref(false)
-async function pickAndUploadSprite(): Promise<void> {
+const cropperOpen = ref(false)
+async function pickAndEditSprite(): Promise<void> {
   uploading.value = true
   try {
-    await uploadSpriteFile()
+    if (await pickImageForEdit()) cropperOpen.value = true
   } finally {
     uploading.value = false
   }
+}
+
+async function onCropConfirm(dataURL: string): Promise<void> {
+  cropperOpen.value = false
+  const created = await saveEditedSprite(dataURL)
+  if (created) await save()
 }
 
 /** 实时预览：跟随下拉所选 sprite（file_path = /files/sprites/{id}，拼时间戳防浏览器缓存）。 */
@@ -104,9 +112,6 @@ onMounted(load)
 
       <div v-if="error" class="alert a-danger">
         {{ error }}
-      </div>
-      <div v-if="info" class="rounded-lg bg-wb-success/15 px-3 py-2 text-sm text-wb-success">
-        {{ info }}
       </div>
 
       <!-- 响应式断点（移动/小屏 1 列，平板 2 列，桌面 3 列；1024px 以下左侧配置+中预览合并成上下排） -->
@@ -190,7 +195,7 @@ onMounted(load)
 
             <!-- 桌宠 sprite + 浮动 + 眨眼动画（mood 真姿态：头顶 mood emoji） -->
             <div class="relative flex flex-col items-center">
-              <!-- 修复：头顶 mood emoji（根据 mood state 切换） -->
+              <!-- 头顶 mood emoji（随 mood state 切换） -->
               <div class="pet-mood-emoji absolute -top-8 left-1/2 -translate-x-1/2 text-3xl">
                 {{ currentMoodEmoji }}
               </div>
@@ -202,7 +207,7 @@ onMounted(load)
                 :style="{ '--pet-scale': `scale(${form.scale})` }"
                 @error="onPreviewFail"
               />
-              <!-- 未选 sprite / 内置形象无文件时的占位说明（修复：预览不再永远空白） -->
+              <!-- 未选 sprite / 内置形象无文件时的占位说明 -->
               <div v-else class="flex flex-col items-center gap-2 px-6 text-center">
                 <span class="flex h-14 w-14 items-center justify-center rounded-full bg-wb-primary/10 text-wb-primary">
                   <PawPrint class="h-6 w-6" />
@@ -220,7 +225,7 @@ onMounted(load)
             {{ t('pet.scale') }} <span class="text-wb-ink">{{ form.scale }}×</span> · {{ t('pet.position') }} ({{ form.position_x }}, {{ form.position_y }})
           </div>
 
-          <!-- 修复：Mood 选择器（决定 sprite 跟随思考/开心/伤心/空闲切换） -->
+          <!-- Mood 选择器（决定形象跟随思考/开心/低落/空闲切换） -->
           <div class="mt-3 rounded-xl border border-wb-border bg-wb-primary/[0.03] p-3">
             <p class="mb-2 text-xs font-medium text-wb-primary-strong">{{ t('pet.mood.title') }}</p>
             <div class="flex gap-2">
@@ -248,18 +253,19 @@ onMounted(load)
             <el-input v-model="spriteName" class="flex-1" :placeholder="t('pet.newSpriteName')" />
             <el-button type="primary" @click="addSprite">{{ t('pet.add') }}</el-button>
           </div>
-          <!-- 上传用户自定义 sprite：单次原生文件对话框（png/webp/gif/jpg，≤5MB），不再二次选文件 -->
+          <!-- 自定义形象：选图后先进编辑器（裁剪 / 旋转 / 抠图），透明 PNG 直接从背景里「站」出来 -->
           <div class="mb-3">
             <button
               type="button"
               class="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-wb-primary/40 bg-wb-primary/[0.04] px-3 py-2.5 text-sm text-wb-primary-strong transition-colors hover:bg-wb-primary/10 disabled:cursor-not-allowed disabled:opacity-60"
               :disabled="uploading"
-              @click="pickAndUploadSprite"
+              @click="pickAndEditSprite"
             >
               <Upload class="h-4 w-4" />
               <span>{{ uploading ? t('pet.uploading') : t('pet.uploadSprite') }}</span>
               <span class="ml-1 text-[10px] text-wb-muted">≤5MB · png/webp/gif/jpg</span>
             </button>
+            <p class="mt-1 text-[10px] leading-snug text-wb-muted">{{ t('pet.uploadHint') }}</p>
           </div>
           <div v-if="loading" class="text-sm text-wb-muted">{{ t('pet.loading') }}</div>
           <ul v-else class="space-y-1">
@@ -277,6 +283,14 @@ onMounted(load)
         </section>
       </div>
     </div>
+
+    <ImageCropper
+      v-model="cropperOpen"
+      :source="pet.editSource"
+      :aspect="1"
+      :output-width="512"
+      @confirm="onCropConfirm"
+    />
   </div>
 </template>
 

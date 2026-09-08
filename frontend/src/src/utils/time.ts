@@ -1,17 +1,7 @@
 /**
- * 时间格式化：全站日期展示的唯一入口，保证各视图格式一致。
- *
- * <p>刻意<b>不引 dayjs</b>：项目只需要「ISO 串 → 本地可读串」这一种能力，
- * 一个 30 行的 util 就够，不值得为此新增运行时依赖（CLAUDE.md 依赖克制原则）。
- *
- * <p>统一约定：
- * <ul>
- *   <li>{@link formatDateTime} —— 列表/详情的默认展示：`14:05`</li>
- *   <li>{@link formatDate} —— 只要日期：``</li>
- *   <li>{@link formatRelativeTime} —— 会话列表等密集场景：今天只显示 `14:05`，今年显示 `8/29 14:05`</li>
- * </ul>
- *
- * <p>所有函数对 null / 空串 / 非法串统一返回 {@code '—'}，调用方无需再做判空。
+ * 时间格式化：全站日期展示的唯一入口，不引 dayjs（只需 ISO 串 → 可读串）。
+ * `formatDateTime` 默认展示 / `formatDate` 仅日期 / `formatRelativeTime` 密集列表场景；
+ * null / 空串 / 非法串统一返回 `—`，调用方无需判空。
  */
 import { t } from '@/i18n'
 

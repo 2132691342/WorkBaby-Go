@@ -6,19 +6,7 @@ import { t } from '@/i18n'
 import type { Folder, FolderTreeNode, FolderReq } from '@/types/api'
 
 /**
- * Folders store（Pinia 重构）。
- *
- * <p>职责：文件夹树 + 根目录列表 CRUD（新建 / 删除 / 重命名 / 移动）。
- * 替代原 FoldersView.vue 内的本地 ref。
- *
- * <p><b>与后端的契约</b>：
- * <ul>
- *   <li>树：{@code GET /api/v1/folders/tree}</li>
- *   <li>根目录列表：{@code GET /api/v1/folders}</li>
- *   <li>创建：{@code POST /api/v1/folders}</li>
- *   <li>更新（重命名/移动）：{@code POST /api/v1/folders/{id}/update}</li>
- *   <li>删除：{@code POST /api/v1/folders/{id}/delete}</li>
- * </ul>
+ * 文件夹 store：目录树与根目录列表的 CRUD，端点见 doc/16。
  */
 export const useFoldersStore = defineStore('folders', () => {
   const tree = ref<FolderTreeNode[]>([])

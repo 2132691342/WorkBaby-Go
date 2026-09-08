@@ -97,6 +97,17 @@ func (a *App) domReady(ctx context.Context) {
 	a.Handler.EmitReady(a.srv.Port())
 }
 
+// GetServerPort 返回 gin 监听端口（0 = 后端尚未就绪）。
+// 前端启动引导优先走这个绑定而不是只等 app:ready 事件：事件是即发即忘的，
+// 后端 startup 里发出的那一发可能早于前端监听器注册，首启（localStorage 无缓存）
+// 就会永远等不到端口。同步取值没有时序窗口，可以从根上消除这个竞态。
+func (a *App) GetServerPort() int {
+	if a.srv == nil {
+		return 0
+	}
+	return a.srv.Port()
+}
+
 // beforeClose 拦截窗口关闭：开启「关闭到托盘」时隐藏窗口保持常驻（返回 true = 阻止真正的退出）。
 // 设置读取失败按退出处理（fail-closed，保证用户永远有路可走）。
 func (a *App) beforeClose(ctx context.Context) bool {

@@ -516,6 +516,11 @@ func (s *ChatService) validateWorkspace(ctx context.Context, workspacePath strin
 			pkg.L.Warn("auto trust workspace failed", "path", dir, "err", terr.Error())
 		}
 	}
+	// 绑定即落沙箱：.workbaby 及其子目录此刻必须存在，模型与工具才有明确的过程数据落点。
+	// 晚一步建立就会出现「首次 file_write / exec 直接在用户项目根建 scripts、output」的污染。
+	if err := runtime.SandboxOf(dir).Ensure(); err != nil {
+		pkg.L.Warn("init workspace sandbox failed", "path", dir, "err", err.Error())
+	}
 	return dir, nil
 }
 

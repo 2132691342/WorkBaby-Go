@@ -30,7 +30,7 @@ var DefaultTriggers = map[string]float64{
 	"MULTI_STEP_SUCCESS":  0.35, // 多步工具全部成功
 	"CORRECTION":          0.30, // 用户纠正了助手
 	"TOOL_SUCCESS":        0.20, // 工具成功
-	"TURN_COMPLETE":       0.15, // 对话完整完成
+	"TURN_COMPLETE":       0.20, // 对话完整完成（基础分 0.15 + 0.20 ≥ Episodic 阈值，正常问答回合都能沉淀）
 	"USER_DISLIKE":        -1.0, // 用户表示不满 → 直接抑制
 }
 
@@ -48,8 +48,8 @@ func NewFormationPolicy(t Thresholds) *FormationPolicy {
 }
 
 var (
-	rememberRe  = regexp.MustCompile(`(?i)(记住|记得|remember)`)
-	preferRe    = regexp.MustCompile(`(?i)(我喜欢|我偏好|prefer|favorite)`)
+	rememberRe = regexp.MustCompile(`(?i)(记住|记得|remember)`)
+	preferRe   = regexp.MustCompile(`(?i)(我喜欢|我偏好|prefer|favorite)`)
 	// dislikeRe 不含「不要」「报错」——这类词在工作上下文里高频出现
 	//（「不要删这个文件」「这个报错…」「不要错把它当故障」），不属于负反馈。
 	// 留作匹配明确表达不满的词（不喜欢 / 错误理解 / 别这样 / 不好用 / dislike / wrong）。
@@ -190,7 +190,9 @@ func (f *FormationPolicy) detectTriggers(transcript []llm.Message) []string {
 	} else if toolCount >= 1 {
 		triggers = append(triggers, "TOOL_SUCCESS")
 	}
-	if assistantText.Len() > 0 && strings.Contains(u, "?") {
+	// 收尾判定同时认半角与全角问号：中文对话几乎只用「？」，
+	// 只认半角会让正常中文问答永远拿不到 TURN_COMPLETE，记忆中心因此常年为空。
+	if assistantText.Len() > 0 && strings.ContainsAny(u, "??") {
 		triggers = append(triggers, "TURN_COMPLETE")
 	}
 	return triggers

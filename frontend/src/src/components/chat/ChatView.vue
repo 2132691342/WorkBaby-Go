@@ -13,6 +13,7 @@ import { useFocusMode } from '@/composables/useFocusMode'
 import { t } from '@/i18n'
 import MessageList from '@/components/chat/MessageList.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
+import PetCompanion from '@/components/pet/PetCompanion.vue'
 import WorkspacePanel from '@/components/chat/WorkspacePanel.vue'
 import WorkspacePickerDialog from '@/components/chat/WorkspacePickerDialog.vue'
 import FileChangesPanel from '@/components/chat/FileChangesPanel.vue'
@@ -156,13 +157,22 @@ onMounted(() => {
   chat.loadModels()
   // 命令面板触发：打开压缩对话框
   window.addEventListener('workbaby:open-compact', onOpenCompact)
+  // 提交后台任务后就地展开任务面板（跳 /tasks 是另一个页面，与任务中心无关）
+  window.addEventListener('workbaby:open-tasks', onOpenTasks)
   // 从设置页改了 provider 温度/思考等参数后回到聊天，重拉当前会话生效参数（避免输入框 chip 显示旧值）
   if (currentID.value) void chat.loadEffectiveParams(currentID.value)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('workbaby:open-compact', onOpenCompact)
+  window.removeEventListener('workbaby:open-tasks', onOpenTasks)
 })
+
+/** 展开右侧任务面板（后台任务提交后的落地页）。 */
+function onOpenTasks(): void {
+  rightTab.value = 'tasks'
+  showWorkspace.value = true
+}
 
 async function onClearMessages(): Promise<void> {
   if (!currentID.value) return
@@ -213,7 +223,7 @@ async function onDeleteSession(): Promise<void> {
   }
 }
 
-/** M2-3 手动压缩：可附带「保留指示」与自定义保留窗口。 */
+/** 手动压缩：可附带「保留指示」与自定义保留窗口。 */
 const showCompact = ref(false)
 const compactInstructions = ref('')
 const compactKeepRecent = ref(20)
@@ -537,6 +547,9 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
           @use-quick-prompt="onQuickPrompt"
         />
 
+        <!-- 桌宠陪伴体：抠好的形象浮在输入框上方，跟随会话状态 -->
+        <PetCompanion :streaming="streaming" :failed="Boolean(error)" />
+
         <ChatInput
           ref="chatInputRef"
           :streaming="streaming"
@@ -598,7 +611,7 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
       @pick="onPickWorkspace"
     />
 
-    <!-- M2-3 手动压缩：可附保留指示与保留窗口 -->
+    <!-- 手动压缩：可附保留指示与保留窗口 -->
     <el-dialog v-model="showCompact" :title="t('chat.compact')" width="440px" align-center>
       <p class="mb-3 text-sm text-wb-muted">{{ t('chat.compactDesc') }}</p>
       <el-form label-position="top">

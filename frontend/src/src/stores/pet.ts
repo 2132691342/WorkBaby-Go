@@ -2,24 +2,13 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { apiGet, apiPost } from '@/api/client'
 import { useDialog } from '@/composables/useDialog'
+import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
-import { UploadPetSprite, OpenFileDialog } from '@/wailsjs/go/main/App'
+import { UploadPetSprite, OpenFileDialog, ReadLocalImage, SavePetSpriteImage } from '@/wailsjs/go/main/App'
 import type { PetConfig, PetConfigReq, PetSprite, PetSpriteReq } from '@/types/api'
 
 /**
- * 桌宠 store（Pinia 重构）。
- *
- * <p>职责：桌宠配置读取/保存 + sprite 资产管理。
- * 替代原 PetSpaceView.vue 内的本地 ref。
- *
- * <p><b>与后端的契约</b>：
- * <ul>
- *   <li>配置：{@code GET /api/v1/pet/config}</li>
- *   <li>保存配置：{@code POST /api/v1/pet/config/update}</li>
- *   <li>sprite 列表：{@code GET /api/v1/pet/sprites}</li>
- *   <li>新增 sprite：{@code POST /api/v1/pet/sprites}</li>
- *   <li>删除 sprite：{@code POST /api/v1/pet/sprites/{id}/delete}</li>
- * </ul>
+ * 桌宠 store：配置读写 + 形象资产管理（上传 / 编辑 / 删除），端点见 doc/16。
  */
 export const usePetStore = defineStore('pet', () => {
   const config = ref<PetConfig | null>(null)
@@ -30,6 +19,10 @@ export const usePetStore = defineStore('pet', () => {
 
   const form = ref<PetConfigReq>({ enabled: false, mode: 'swing', scale: 1, bubble_enabled: true, bubble_duration_ms: 3000 })
   const spriteName = ref('')
+  /** 图片编辑器待处理的源图（data URL）；非空时 PetSpaceView 打开裁剪弹窗。 */
+  const editSource = ref('')
+  /** 本次编辑对应的默认名称（取自原文件名）。 */
+  const editName = ref('')
 
   /** 同时加载配置与 sprite 列表，并把配置字段回填到表单。 */
   async function load(): Promise<void> {
@@ -47,16 +40,19 @@ export const usePetStore = defineStore('pet', () => {
     }
   }
 
-  /** 保存桌宠配置。 */
+  /** 保存桌宠配置。反馈统一走 toast（页内横幅会被滚走，且与其他页面不一致）。 */
   async function save(): Promise<void> {
+    const toast = useToast()
     error.value = null
     info.value = null
     try {
       config.value = await apiPost<PetConfig>('/api/v1/pet/config/update', form.value)
-      info.value = t('common.saved')
+      toast.success(t('common.saved'))
       window.dispatchEvent(new Event('wb-avatar-refresh'))
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
+      const msg = e instanceof Error ? e.message : String(e)
+      error.value = msg
+      toast.error(t('common.saveFailed'), msg)
     }
   }
 
@@ -95,15 +91,8 @@ export const usePetStore = defineStore('pet', () => {
   }
 
   /**
-   * 上传自定义 sprite：原生文件对话框选本地图片 → 绑定 UploadPetSprite(name, srcPath)。
-   *
-   * <p>修复点（痛点：重复选文件 + 上传后无预览）：
-   * <ul>
-   *   <li>不再叠加 el-upload 浏览器选择器——一次原生对话框即完成选图+上传，杜绝「选两次」；</li>
-   *   <li>上传成功后本地增量插入列表并自动选中（form.sprite_id），不再整体 load() 重置
-   *       表单导致刚选的形象预览不到；</li>
-   *   <li>默认名取文件 basename（去扩展名），也可由调用方显式传入 name。</li>
-   * </ul>
+   * 上传自定义 sprite：原生文件对话框选本地图片 → UploadPetSprite(name, srcPath)。
+   * 成功后增量插入列表并自动选中，不整体 load()（避免表单被覆盖、预览闪断）。
    */
   async function uploadSpriteFile(_file?: File, name?: string): Promise<PetSprite | null> {
     error.value = null
@@ -123,6 +112,46 @@ export const usePetStore = defineStore('pet', () => {
     }
   }
 
+  /**
+   * 选本地图 → 后端代读成 data URL → 交给图片编辑器（裁剪 / 旋转 / 抠图）。
+   * 返回 false 表示用户取消或读取失败，调用方据此决定是否打开编辑器。
+   */
+  async function pickImageForEdit(): Promise<boolean> {
+    const toast = useToast()
+    error.value = null
+    try {
+      const selected = await OpenFileDialog(t('pet.pickSprite'), '*.png;*.jpg;*.jpeg;*.gif;*.webp')
+      if (!selected) return false
+      editName.value = basenameFromPath(selected)
+      editSource.value = await ReadLocalImage(selected)
+      return true
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      error.value = msg
+      toast.error(t('pet.uploadFailed'), msg)
+      return false
+    }
+  }
+
+  /** 保存编辑器产出的图片（data URL）为新 sprite 并自动选中。 */
+  async function saveEditedSprite(dataURL: string, name?: string): Promise<PetSprite | null> {
+    const toast = useToast()
+    error.value = null
+    try {
+      const created = await SavePetSpriteImage((name ?? '').trim() || editName.value || 'sprite', dataURL)
+      sprites.value = [created, ...sprites.value.filter((s) => s.id !== created.id)]
+      form.value.sprite_id = created.id
+      toast.success(t('pet.uploaded', created.name))
+      window.dispatchEvent(new Event('wb-avatar-refresh'))
+      return created as unknown as PetSprite
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      error.value = msg
+      toast.error(t('pet.uploadFailed'), msg)
+      return null
+    }
+  }
+
   return {
     config,
     sprites,
@@ -131,10 +160,14 @@ export const usePetStore = defineStore('pet', () => {
     loading,
     form,
     spriteName,
+    editSource,
+    editName,
     load,
     save,
     addSprite,
     removeSprite,
-    uploadSpriteFile
+    uploadSpriteFile,
+    pickImageForEdit,
+    saveEditedSprite
   }
 })

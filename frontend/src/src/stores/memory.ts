@@ -7,21 +7,7 @@ import { useToast } from '@/composables/useToast'
 import type { MemoryEpisode, MemoryEpisodeReq, MemoryFact, MemoryProcedure, RecallEntry } from '@/types/api'
 
 /**
- * Memory store（Pinia 重构 + 阶段 1-4 API 补全）。
- *
- * <p>职责：情景记忆浏览/搜索 + 手动写入 + 三类记忆统一浏览。
- *
- * <p><b>与后端的契约</b>：
- * <ul>
- *   <li>关键词搜索：{@code GET /api/v1/memory/search?q=}</li>
- *   <li>最近记忆：{@code GET /api/v1/memory/episodes?limit=50}</li>
- *   <li>总数统计：{@code GET /api/v1/memory/stats}</li>
- *   <li>手动写入：{@code POST /api/v1/memory/episodes}</li>
- *   <li>删除：{@code POST /api/v1/memory/episodes/{id}/delete}</li>
- *   <li>统一召回：{@code GET /api/v1/memory/recall?q=}</li>
- *   <li>语义记忆：{@code GET /api/v1/memory/facts}</li>
- *   <li>程序记忆：{@code GET /api/v1/memory/procedures}</li>
- * </ul>
+ * 记忆中心 store：三类记忆的浏览 / 搜索 / 手动写入 / 删除，端点见 doc/16。
  */
 export const useMemoryStore = defineStore('memory', () => {
   const dialog = useDialog()

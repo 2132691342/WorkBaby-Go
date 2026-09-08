@@ -280,8 +280,7 @@ import { watch } from 'vue'
           </div>
         </div>
 
-        <!-- 简单模式：图形化拼 cron；高级模式：5 段 cron 表达式直接输入。
-             此前 mode ref 定义了但模板没消费，导致「点了没任何区别」 -->
+        <!-- 简单模式：图形化拼 cron；高级模式：5 段 cron 表达式直接输入 -->
         <template v-if="mode === 'simple'">
           <div class="grid2 mt14" style="gap: 12px">
             <div class="field">

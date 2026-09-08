@@ -1616,7 +1616,9 @@ kbd.chip {
 .composer-in textarea {
   width: 100%;
   border: 0;
-  outline: none;
+  /* 焦点态由 .composer-in:focus-within 的圆角描边统一表达；
+     再叠一层全局 :focus-visible 描边会出现「内外两条紫框」，这里显式关掉。 */
+  outline: 0 !important;
   resize: vertical; /* 手动纵向拉伸；脚本侧只增不减，不覆盖用户高度 */
   max-height: 55vh;
   padding: 11px 13px 4px;

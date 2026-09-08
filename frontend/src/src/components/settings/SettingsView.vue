@@ -13,18 +13,8 @@ import AdvancedSettings from '@/components/settings/tabs/AdvancedSettings.vue'
 import AboutSettings from '@/components/settings/tabs/AboutSettings.vue'
 
 /**
- * 设置中心视图：tab 导航 + 路由 query 同步。
- *
- * <p>6 个 tab 各自独立组件（settings/tabs/）：
- * <ul>
- *   <li><b>模型</b> — ProviderSettings（新增/列表/编辑/连通测试/熔断徽标）</li>
- *   <li><b>通道</b> — ChannelSettings（SMTP）</li>
- *   <li><b>搜索</b> — SearchSettings（DuckDuckGo）</li>
- *   <li><b>外观</b> — AppearanceSettings（语言/主题/背景/字体）</li>
- *   <li><b>高级</b> — AdvancedSettings（exec 白名单）</li>
- *   <li><b>关于</b> — AboutSettings（版本/运行环境/数据目录）</li>
- * </ul>
- * 支持 {@code /settings?tab=about} 直接定位到指定 tab（原 /admin 路由重定向到此处）。
+ * 设置中心视图：tab 导航 + 路由 query 同步（/settings?tab=about 直达指定 tab）。
+ * 6 个 tab 组件在 settings/tabs/：模型 / 通道 / 搜索 / 外观 / 高级 / 关于。
  */
 type SettingsTab = 'models' | 'channels' | 'search' | 'appearance' | 'advanced' | 'about'
 

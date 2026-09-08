@@ -30,6 +30,7 @@ import {
   Check,
   X,
   Copy,
+  Square,
   ChevronDown,
   Loader2,
   Bot
@@ -43,7 +44,7 @@ export interface ToolCall {
   name: string
   args?: string
   result?: string
-  state?: 'running' | 'success' | 'error'
+  state?: 'running' | 'success' | 'error' | 'stopped'
   /** running 态实时计时用（与 ToolCallInfo.started_at 对齐）。 */
   startedAt?: number
   durationMs?: number
@@ -62,25 +63,62 @@ const emit = defineEmits<{
   retry: [tc: ToolCall]
 }>()
 
-// ===== 展开状态：受控 Set；错误与委派交付默认展开 =====
-const expanded = ref<Set<string>>(new Set())
+// ===== 展开状态：显式覆盖优先，其次按默认策略 =====
+//
+// 默认策略（只看异常与委派交付）与用户显式操作必须分开存：
+// 混在一个 Set 里会出现「失败项永远展开、收起全部对它无效」——
+// 失败的工具调用往往结果最长，恰恰是最需要能收起来的。
+const PREF_KEY = 'wb.toolTimelineAutoOpen'
 
-function toggle(tc: ToolCall): void {
-  const next = new Set(expanded.value)
-  if (next.has(tc.id)) next.delete(tc.id)
-  else next.add(tc.id)
-  expanded.value = next
+/** 是否自动展开异常 / 委派交付（用户选过「收起全部」后记住，后续轮次不再强展开）。 */
+const autoOpen = ref(readPref())
+
+function readPref(): boolean {
+  try {
+    return localStorage.getItem(PREF_KEY) !== 'false'
+  } catch {
+    return true
+  }
+}
+
+function writePref(v: boolean): void {
+  try {
+    localStorage.setItem(PREF_KEY, String(v))
+  } catch {
+    // 隐私模式下不可写，仅本次会话生效
+  }
+}
+
+/** 工具 id → 用户显式指定的展开态。 */
+const manual = ref<Map<string, boolean>>(new Map())
+
+function defaultExpanded(tc: ToolCall): boolean {
+  return tc.state === 'error' || (isDelegate(tc) && !!tc.result)
 }
 
 function isExpanded(tc: ToolCall): boolean {
-  if (expanded.value.has(tc.id)) return true
-  if (tc.state === 'error') return true
-  return isDelegate(tc) && !!tc.result
+  const m = manual.value.get(tc.id)
+  if (m !== undefined) return m
+  return autoOpen.value && defaultExpanded(tc)
 }
 
-function setAll(open: boolean): void {
-  expanded.value = new Set(open ? props.tools.map((x) => x.id) : [])
+function toggle(tc: ToolCall): void {
+  const next = new Map(manual.value)
+  next.set(tc.id, !isExpanded(tc))
+  manual.value = next
 }
+
+/** 全部展开 / 全部收起；同时把选择记成默认策略，之后的新时间线也照此办理。 */
+function setAll(open: boolean): void {
+  autoOpen.value = open
+  writePref(open)
+  manual.value = new Map(props.tools.map((x) => [x.id, open]))
+}
+
+/** 当前是否已全部展开（决定头部按钮文案）。 */
+const allExpanded = computed(
+  () => props.tools.length > 0 && props.tools.every((t) => isExpanded(t))
+)
 
 /** 有可展开详情（args 或 result）才显示展开箭头。 */
 function hasDetail(tc: ToolCall): boolean {
@@ -233,15 +271,16 @@ function fmtDuration(ms?: number): string {
       <ListTree class="ic" style="width: 13px; height: 13px" />
       <span>{{ t('chat.processTitle') }}</span>
       <span class="cnt">{{ props.tools.length }}</span>
-      <button v-if="props.tools.length > 1" type="button" @click="setAll(true)">{{ t('chat.expandAll') }}</button>
-      <button v-if="props.tools.length > 1" type="button" @click="setAll(false)">{{ t('chat.collapseAll') }}</button>
+      <button v-if="props.tools.length > 1" type="button" @click="setAll(!allExpanded)">
+        {{ allExpanded ? t('chat.collapseAll') : t('chat.expandAll') }}
+      </button>
     </div>
 
     <div
       v-for="tc in props.tools"
       :key="tc.id"
       class="tool"
-      :class="{ open: isExpanded(tc) || tc.state === 'error', err: tc.state === 'error' }"
+      :class="{ open: isExpanded(tc), err: tc.state === 'error' }"
     >
       <button
         type="button"
@@ -254,6 +293,7 @@ function fmtDuration(ms?: number): string {
           <Loader2 v-if="tc.state === 'running'" class="run animate-spin" />
           <Check v-else-if="tc.state === 'success'" class="ok" />
           <X v-else-if="tc.state === 'error'" class="fail" />
+          <Square v-else-if="tc.state === 'stopped'" class="pend" />
           <Clock v-else class="pend" />
         </span>
 
@@ -312,7 +352,7 @@ function fmtDuration(ms?: number): string {
         <ChevronDown v-if="hasDetail(tc)" class="chev" />
       </button>
 
-      <div v-if="isExpanded(tc) || tc.state === 'error'" class="tool-bd">
+      <div v-if="isExpanded(tc)" class="tool-bd">
         <template v-if="isDelegate(tc)">
           <p class="lb">task</p>
           <pre>{{ delegateMeta(tc).task || '—' }}</pre>
@@ -344,6 +384,12 @@ function fmtDuration(ms?: number): string {
    展开动效（与 .approve / .tl 行展开保持一致感）。 */
 .tool-bd {
   animation: wb-tool-in 0.18s ease-out both;
+}
+/* 超长结果限高：一条失败调用不该把整屏占满（内部可滚动看全文） */
+.tool-bd pre {
+  max-height: 14rem;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 @keyframes wb-tool-in {
   from {
