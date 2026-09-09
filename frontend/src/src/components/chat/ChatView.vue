@@ -4,12 +4,14 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Trash2, Eraser, FolderOpen, Pencil, Sparkles, ListTree, RefreshCw, Crosshair, X, Archive, MoreHorizontal, Square } from '@/components/common/icons'
+import { Trash2, Eraser, FolderOpen, Pencil, Sparkles, ListTree, RefreshCw, Crosshair, X, Archive, Square } from '@/components/common/icons'
+import { Sunny } from '@element-plus/icons-vue'
 import { useChatStore, backendModeToPermission, type PermissionLevel } from '@/stores/chat'
 import { useTrustStore } from '@/stores/trust'
 import { useDialog } from '@/composables/useDialog'
 import { useToast } from '@/composables/useToast'
 import { useFocusMode } from '@/composables/useFocusMode'
+import { useTheme } from '@/composables/useTheme'
 import { t } from '@/i18n'
 import MessageList from '@/components/chat/MessageList.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
@@ -228,6 +230,11 @@ const showCompact = ref(false)
 const compactInstructions = ref('')
 const compactKeepRecent = ref(20)
 const { enabled: focusMode, toggle: focusToggle } = useFocusMode()
+const theme = useTheme()
+/** 主题切换：原型 header 太阳图标，与 useTheme 双向同步 settings 页面。 */
+function toggleTheme(): void {
+  theme.setTheme(theme.currentTheme.value === 'dark' ? 'light' : 'dark')
+}
 async function onOpenCompact(): Promise<void> {
   if (!currentID.value || streaming.value) return
   showCompact.value = true
@@ -496,10 +503,17 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
             <el-icon><FolderOpen /></el-icon>
           </el-button>
         </el-tooltip>
+        <!-- 主题切换：原型 header 太阳图标，明暗切换与 useTheme 双向同步 -->
+        <el-tooltip :content="t('chat.toggleTheme')" placement="bottom">
+          <el-button text circle @click="toggleTheme">
+            <el-icon><Sunny /></el-icon>
+          </el-button>
+        </el-tooltip>
+
         <!-- 低频/危险操作收进「更多」菜单，降低 header 密度与误触 -->
         <el-dropdown trigger="click" @command="onHeaderCommand">
           <el-button text circle :title="t('chat.moreActions')">
-            <el-icon><MoreHorizontal /></el-icon>
+            <el-icon><Archive /></el-icon>
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>
@@ -567,6 +581,7 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
           @stop="chat.cancelStream"
           @send-queued="(text) => chat.sendMessage(text)"
           @regenerate="onRegenerate"
+          @compact="onOpenCompact"
           @pick-workspace="showPicker = true"
           @change-permission="onChangePermission"
         />

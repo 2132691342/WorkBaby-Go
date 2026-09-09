@@ -266,6 +266,15 @@ func (h *Handler) Startup(ctx context.Context) error {
 	if err := toolReg.Register(exectool.New(tool.DefaultExecPolicy()).
 		WithApprover(h.approvalSvc).
 		WithRootResolver(tool.ResolveRoot(wsResolver, "")).
+		// cwd 越界校验：LLM 显式传 cwd 时必须落在 workspace 根（含 .workbaby/ 子树）下，
+		// 防过程脚本写到用户原有目录。未绑定工作区时 sandbox 为空字符串，exec 校验自动放行（向后兼容）。
+		WithSandbox(func(ctx context.Context) string {
+			wp := tool.ResolveRoot(wsResolver, "")(ctx)
+			if wp == "" {
+				return ""
+			}
+			return runtime.SandboxOf(wp).Root
+		}).
 		WithPathDirs(rt.BinDirs).
 		WithWhitelist(func() []string {
 			rows, err := h.setRepo.ListAll(h.ctx)
@@ -507,12 +516,19 @@ func (h *Handler) Startup(ctx context.Context) error {
 	registerCap(capability.NewKnowledge(retriever), capability.OrderKnowledge)
 	registerCap(capability.NewSkill(capability.NewSkillSource(
 		func(input string) string { return h.skillSvc.Match(input) },
-		func(name string) (string, []string, bool) {
+		func(name string) (capability.SkillHit, bool) {
 			sk, ok := h.skillSvc.Get(name)
-			if !ok {
-				return "", nil, false
+			if !ok || sk.Skill == nil {
+				return capability.SkillHit{}, false
 			}
-			return sk.Body, sk.Tools, true
+			return capability.SkillHit{
+				Name:        sk.Skill.Name,
+				Body:        sk.Body,
+				Tools:       sk.Tools,
+				Source:      string(sk.Skill.SourceKind),
+				Version:     sk.Skill.Version,
+				Description: sk.Skill.Description,
+			}, true
 		},
 	)), capability.OrderSkill)
 	registerCap(capability.NewWorkflow(h.workflowSvc), capability.OrderWorkflow)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,6 +23,7 @@ type ExecTool struct {
 	pathDirs  func() []string                  // 内置运行时 bin 目录提供者；nil = 不增强 PATH
 	whitelist func() []string                  // 可选；非 nil 时每次执行动态覆盖 policy.AllowedBinaries（运行时设置页白名单）
 	root      func(ctx context.Context) string // 会话工作区根；nil = cwd 缺省用进程当前目录
+	sandbox   func(ctx context.Context) string // 会话工作区 .workbaby 根；用于 cwd 越界校验（防污染用户目录）
 }
 
 // New 构造 ExecTool；policy 由装配方（service）注入。
@@ -58,6 +60,51 @@ func (t *ExecTool) ClassifyArgs(args json.RawMessage) (string, string) {
 // WithRootResolver 注入会话工作区根解析器（tool.ResolveRoot 包装 RootResolver）；
 // 入参 cwd 缺省且解析出有效根时，命令在该目录执行——与 file 系工具的沙箱根一致。
 func (t *ExecTool) WithRootResolver(f func(context.Context) string) *ExecTool { t.root = f; return t }
+
+// WithSandbox 注入会话工作区 .workbaby 根解析器；cwd 越界校验的硬约束：
+// LLM 显式传 cwd 时必须落在 workspace 根（含其下的 .workbaby/ 子树）下，否则 4007/4008 拒绝。
+// 防止过程脚本落到用户原有目录、污染项目结构。
+func (t *ExecTool) WithSandbox(f func(context.Context) string) *ExecTool { t.sandbox = f; return t }
+
+// checkCwd 校验 LLM 传入的 cwd。
+//
+// <p>两条硬规则：
+// <ol>
+//   <li>`..` 路径穿越：含 `..` 直接拒绝（含 `\\..\\`、URL 编码绕过等已在本规则范围内）。</li>
+//   <li>越界：cwd 必须落在 workspace 根（含其下子树，含 .workbaby/）内，否则拒绝。</li>
+// </ol>
+//
+// <p>未绑定工作区（默认工作区 / sandbox 为空）放行：保留向后兼容，旧会话与无 workspace 解析场景不受影响。
+func (t *ExecTool) checkCwd(cwd string, ctx context.Context) *pkg.AppError {
+	if strings.Contains(cwd, "..") {
+		return pkg.New(4007, "cwd contains '..' path traversal", cwd)
+	}
+	if t.sandbox == nil {
+		return nil
+	}
+	workspace := ""
+	if t.root != nil {
+		workspace = strings.TrimSpace(t.root(ctx))
+	}
+	if workspace == "" {
+		return nil
+	}
+	absCwd, err := filepath.Abs(cwd)
+	if err != nil {
+		return pkg.Wrap(4007, "cwd abs resolve failed", err)
+	}
+	absWS, err := filepath.Abs(workspace)
+	if err != nil {
+		return nil
+	}
+	// Windows 路径大小写不敏感：统一 ToLower 比较（更稳，避免 EqualFold 在混合分隔符下漏判）
+	lowerCwd := strings.ToLower(filepath.Clean(absCwd))
+	lowerWS := strings.ToLower(filepath.Clean(absWS))
+	if lowerCwd != lowerWS && !strings.HasPrefix(lowerCwd, lowerWS+string(filepath.Separator)) {
+		return pkg.New(4008, "cwd outside workspace sandbox", cwd)
+	}
+	return nil
+}
 
 // WithPathDirs 注入内置运行时 bin 目录提供者；执行时实时读取并前置到子进程 PATH，
 // 实现 node/python/pwsh 内置环境隔离（不污染用户环境）。
@@ -156,6 +203,11 @@ func (t *ExecTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 	cmd := exec.CommandContext(execCtx, exe, append(prefix, req.Args...)...)
 	switch {
 	case req.Cwd != "":
+		// cwd 越界校验：防 LLM 把过程脚本写到用户目录外（如 `C:\Users\xxx`），
+		// 也防 `..` 路径穿越（如 `D:\foo\..\bar` 落到 D:\bar）。
+		if err := t.checkCwd(req.Cwd, ctx); err != nil {
+			return tool.ToolResult{Err: err}
+		}
 		cmd.Dir = req.Cwd
 	case t.root != nil:
 		// 工作区联动：解析出的根必须真实存在才生效，否则维持进程当前目录

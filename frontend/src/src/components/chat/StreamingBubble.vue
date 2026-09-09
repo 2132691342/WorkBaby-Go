@@ -23,6 +23,7 @@ const {
   streamingThinking,
   streamingTools,
   streamingStats,
+  streamingSkill,
   streamingArtifacts,
   streamingGenUi,
   streamingRetry
@@ -95,8 +96,8 @@ watch(streamingThinking, async () => {
 
     <!-- 任务步骤时间线（工具调用可视化）；焦点模式下隐藏（与 Claude Code focus 一致）。
          原型 .tl 自带边框与底色，这里不再套染色包装（消除双重边框） -->
-    <div v-if="!focusMode && tools.length > 0" class="mb-3">
-      <TaskTimeline :tools="tools" />
+    <div v-if="!focusMode && (tools.length > 0 || streamingSkill)" class="mb-3">
+      <TaskTimeline :tools="tools" :skill-hit="streamingSkill" />
     </div>
 
     <!-- 交付成果卡片（present_files 交付） -->

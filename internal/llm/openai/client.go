@@ -166,6 +166,13 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 					TotalTokens:     s.Usage.TotalTokens,
 					CacheReadTokens: cached,
 				}
+				// 防御性校正：GLM 等 OpenAI 兼容实现偶发把 cached_tokens 报成等于 prompt_tokens，
+				// 这会让前端命中率永远 100%、token 总数虚高。清零 + warn，让仪表盘数据真实。
+				if u.CacheReadTokens > u.InputTokens {
+					pkg.L.Warn("openai usage: cache_read exceeds input (server misreport); clamping to 0",
+						"input", u.InputTokens, "cache_read", u.CacheReadTokens)
+					u.CacheReadTokens = 0
+				}
 				out <- llm.StreamChunk{FinalUsage: &u}
 			}
 		}
@@ -266,6 +273,12 @@ func (c *Client) toChatResponse(r *OpenAIResponse) (*llm.ChatResponse, error) {
 	usage := llm.TokenUsage{InputTokens: r.Usage.PromptTokens, OutputTokens: r.Usage.CompletionTokens, TotalTokens: r.Usage.TotalTokens}
 	if r.Usage != nil && r.Usage.PromptTokensDetails != nil {
 		usage.CacheReadTokens = r.Usage.PromptTokensDetails.CachedTokens
+	}
+	// 防御性校正：同 ChatStream，避免上游误报导致命中率 100%。
+	if usage.CacheReadTokens > usage.InputTokens {
+		pkg.L.Warn("openai usage: cache_read exceeds input (server misreport); clamping to 0",
+			"input", usage.InputTokens, "cache_read", usage.CacheReadTokens)
+		usage.CacheReadTokens = 0
 	}
 	// OpenAI 兼容协议：prompt_tokens 已经包含 cached_tokens（与 Anthropic 语义不同），
 	// 这里保持 InputTokens = prompt_tokens 不变，确保 dashboard 实际计费口径与 Anthropic 一致。

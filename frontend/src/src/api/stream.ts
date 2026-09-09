@@ -76,6 +76,19 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
           latency_ms: p.latency_ms
         }
       }
+    case 'chat:skill':
+      // 技能命中：早于首帧正文，前端渲染为执行过程时间线首行
+      return {
+        type: 'skill',
+        data: {
+          name: p.name ?? '',
+          source: p.source ?? '',
+          version: p.version ?? '',
+          description: p.description ?? '',
+          tools: Array.isArray(p.tools) ? (p.tools as string[]) : [],
+          injected_chars: typeof p.injected_chars === 'number' ? p.injected_chars : 0
+        }
+      }
     case 'chat:tool':
       return { type: 'tool_call', data: { id: p.id, name: p.name, args: p.arguments, agent: p.agent ?? '' } }
     case 'chat:tool-result':
@@ -134,6 +147,17 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
       return { type: 'todo', data: { state: p.state } }
     case 'chat:file-change':
       return { type: 'file_change', data: { change: p.change } }
+    case 'chat:warn':
+      // 越界告警：process 副作用落到了 .workbaby/ 之外（污染用户原有目录）
+      return {
+        type: 'warn',
+        data: {
+          kind: String(p.kind ?? ''),
+          message: String(p.message ?? '工作区越界写入'),
+          rel_path: p.rel_path ? String(p.rel_path) : '',
+          path: p.path ? String(p.path) : ''
+        }
+      }
     case 'chat:artifact':
       return { type: 'session_artifact', data: { artifact: p.artifact } }
     case 'task:created':
@@ -152,6 +176,7 @@ const EVENT_NAMES = [
   'chat:stream',
   'chat:thinking',
   'chat:stats',
+  'chat:skill',
   'chat:tool',
   'chat:tool-result',
   'chat:approval',
@@ -164,6 +189,7 @@ const EVENT_NAMES = [
   // P2 扩展事件
   'chat:todo',
   'chat:file-change',
+  'chat:warn',
   'chat:artifact',
   'task:created',
   'task:started',

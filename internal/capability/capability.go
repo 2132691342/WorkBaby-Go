@@ -33,6 +33,12 @@ type Capability interface {
 // RunState 一次 run 的装配运行态；能力间经此交换结果（如激活 Skill 的工具白名单）。
 type RunState struct {
 	SkillTools []string // 激活 Skill 声明的工具白名单；空 = 不限制
+	// Skill 命中详情：SkillName 空表示本轮未命中；装配方据此推 chat:skill 让前端时间线可见。
+	SkillName        string
+	SkillSource      string // builtin / download / custom
+	SkillVersion     string
+	SkillDescription string
+	SkillInjectedLen int // 注入正文字符数
 }
 
 // PreloadCtx 上下文装配输入。

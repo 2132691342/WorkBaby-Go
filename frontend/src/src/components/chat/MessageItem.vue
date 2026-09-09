@@ -11,7 +11,8 @@ import { useFocusMode } from '@/composables/useFocusMode'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import TaskTimeline from '@/components/chat/TaskTimeline.vue'
 import UsageBadge from '@/components/chat/UsageBadge.vue'
-import { resolveMessageBlocks, blocksToToolCalls, stripThinkBlocks } from '@/chat/models/blocks'
+import { resolveMessageBlocks, blocksToToolCalls, stripThinkBlocks, messageSkillHit } from '@/chat/models/blocks'
+import { splitMentions } from '@/chat/models/tokens'
 import type { ToolCallInfo } from '@/stores/chat/ChatStreamDecoder'
 
 /**
@@ -45,10 +46,16 @@ const thinkingOpen = ref(false)
 
 const isUser = computed(() => props.message.role === 'user')
 
+/** 用户消息分段：`@引用` 渲染成气泡，与输入框镜像高亮同源（一眼看出带了什么上下文）。 */
+const userSegments = computed(() => splitMentions(props.message.content ?? ''))
+
 /** 历史消息的过程块 → ToolCallInfo（纯函数已在 blocks.ts 单测覆盖）。 */
 const historyTools = computed<ToolCallInfo[]>(() =>
   blocksToToolCalls(resolveMessageBlocks(props.message))
 )
+
+/** 本条消息命中的 Skill（skill 块回放；刷新后执行过程首行仍在）。 */
+const historySkillHit = computed(() => messageSkillHit(props.message))
 
 /** 本条消息关联的文件变更（chat:file-change 已流式累积；历史消息按 run_id 精确对应）。 */
 const fileChanges = computed(() => {
@@ -278,9 +285,10 @@ async function forkFrom(): Promise<void> {
 
     <!-- 历史过程块复现：工具调用/结果落库，刷新/切会话后完整回放（原型 .tl 自带边框，不再双重包装）；
          M2：末条 assistant 的失败工具可一键重试（转 resendFrom） -->
-    <div v-if="!isUser && historyTools.length > 0 && !editing" class="mt-2 w-full">
+    <div v-if="!isUser && (historyTools.length > 0 || historySkillHit) && !editing" class="mt-2 w-full">
       <TaskTimeline
         :tools="historyTools"
+        :skill-hit="historySkillHit"
         :retryable="!streaming && isLast"
         @retry="onToolRetry"
       />
@@ -297,10 +305,10 @@ async function forkFrom(): Promise<void> {
           : 'leading-[1.78] text-wb-ink'
       "
     >
-      <span v-if="isUser" class="whitespace-pre-wrap">{{ message.content }}</span>
+      <span v-if="isUser" class="whitespace-pre-wrap"><template v-for="(seg, si) in userSegments" :key="si"><span v-if="seg.kind === 'mention'" class="utk">{{ seg.text }}</span><span v-else-if="seg.kind === 'cmd'" class="utk">{{ seg.text }}</span><template v-else>{{ seg.text }}</template></template></span>
       <MarkdownRenderer v-else-if="message.content?.trim()" :content="message.content" :streaming="false" />
       <!-- assistant 整轮只跑了工具、没写收尾文本：给个简洁占位，避免「消息空白但工具齐全」的违和 -->
-      <span v-else-if="historyTools.length > 0" class="text-[12px] text-wb-muted">
+      <span v-else-if="historyTools.length > 0 || historySkillHit" class="text-[12px] text-wb-muted">
         {{ t('chat.toolsOnlyMessage', historyTools.length) }}
       </span>
     </div>

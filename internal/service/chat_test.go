@@ -1,5 +1,8 @@
 package service
 
+// 聊天服务长链路测试：会话操作 / 审批 / 插话队列 / 后台任务 / 工作区绑定 / 消息清洗。
+// 场景实现为私有函数（testXxx），由文件末尾 6 个按能力域划分的父测试以 t.Run 聚合。
+
 import (
 	"WorkBaby/internal/db"
 	"WorkBaby/internal/domain"
@@ -67,7 +70,7 @@ func seedSession(t *testing.T, svc *ChatService, msgRepo *repo.MessageRepo, ctx 
 // ===== 会话消息操作 =====
 
 // TestForkSession 从指定消息分叉：新会话复制前段，原会话不变。
-func TestForkSession(t *testing.T) {
+func testForkSession(t *testing.T) {
 	svc, msgRepo := newChatOpsService(t)
 	ctx := context.Background()
 	ses, _ := seedSession(t, svc, msgRepo, ctx)
@@ -92,7 +95,7 @@ func TestForkSession(t *testing.T) {
 // ===== 审批 =====
 
 // TestApprovalApproveAndDecide 审批全链路 + 已批准免审。
-func TestApprovalApproveAndDecide(t *testing.T) {
+func testApprovalApproveAndDecide(t *testing.T) {
 	bus := event.New()
 	svc := NewApprovalService(bus)
 
@@ -151,7 +154,7 @@ func itoa(n int) string {
 }
 
 // TestQueueSteerPersistsAndQueues 有活动 run 时：消息立即落库（前端可见）+ 进入注入队列。
-func TestQueueSteerPersistsAndQueues(t *testing.T) {
+func testQueueSteerPersistsAndQueues(t *testing.T) {
 	svc, msgRepo := newChatOpsService(t)
 	ctx := context.Background()
 	ses, err := svc.CreateSession(ctx, &domain.ChatSessionREQ{Name: "steer2"})
@@ -245,7 +248,7 @@ func newTaskServiceWithFake(t *testing.T, runner agentRunner, workers int) *Task
 }
 
 // TestTaskSubmitAndComplete 提交任务 → worker 执行 → 终态 completed。
-func TestTaskSubmitAndComplete(t *testing.T) {
+func testTaskSubmitAndComplete(t *testing.T) {
 	fake := newFakeRunner(&AgentRunOutcome{Content: "done", RunID: "RUN_FAKE"}, nil)
 	fake.hold = 50 * time.Millisecond
 	svc := newTaskServiceWithFake(t, fake, 1)
@@ -268,7 +271,7 @@ func TestTaskSubmitAndComplete(t *testing.T) {
 }
 
 // TestTaskCancelRunning 取消运行中的任务 → worker ctx 取消 → 任务转 cancelled。
-func TestTaskCancelRunning(t *testing.T) {
+func testTaskCancelRunning(t *testing.T) {
 	fake := newFakeRunner(nil, nil) // hold=0 → 阻塞直到 holdCh 关闭或 ctx 取消
 	svc := newTaskServiceWithFake(t, fake, 1)
 
@@ -301,7 +304,7 @@ var _ = context.Background
 // TestWorkspaceBindLifecycle 工作区绑定闭环：
 // 创建即绑定（回归：CreateSession 曾丢弃 workspace_path）→ 解析优先绑定目录 →
 // 未绑定回落默认根 → 不存在的目录被拒绝。
-func TestWorkspaceBindLifecycle(t *testing.T) {
+func testWorkspaceBindLifecycle(t *testing.T) {
 	svc, _ := newChatOpsService(t)
 	ctx := context.Background()
 
@@ -334,7 +337,7 @@ func TestWorkspaceBindLifecycle(t *testing.T) {
 //
 // <p>早期轮次整体标 archived 剔出 LLM 上下文（正文不删改）；归档边界不得切进
 // assistant(tool_calls) 与其 tool 结果之间；归档摘要写会话元数据供 buildSystem 注入。
-func TestCompactSessionArchive(t *testing.T) {
+func testCompactSessionArchive(t *testing.T) {
 	svc, msgRepo := newChatOpsService(t)
 	ctx := context.Background()
 	ses, _ := seedSession(t, svc, msgRepo, ctx)
@@ -405,7 +408,7 @@ func TestCompactSessionArchive(t *testing.T) {
 // <p>上次 run 失败/中断后落库的 assistant 占位（content 为空、无 tool_calls）若原样
 // 回发上游，GLM 等厂商直接以 400 拒绝整轮；且消息已持久化，会话被永久毒化。
 // 修复后空 assistant 消息被静默剥掉；空 content 的 tool 消息兜底为 "(empty)"。
-func TestToLLMMessagesDropsEmptyAssistant(t *testing.T) {
+func testToLLMMessagesDropsEmptyAssistant(t *testing.T) {
 	svc, _ := newChatOpsService(t)
 	toolCallsJSON := `[{"id":"CALL_1","type":"function","function":{"name":"exec","arguments":"{}"}}]`
 
@@ -432,7 +435,7 @@ func TestToLLMMessagesDropsEmptyAssistant(t *testing.T) {
 	}
 }
 
-func TestToLLMMessagesDropsOrphanTools(t *testing.T) {
+func testToLLMMessagesDropsOrphanTools(t *testing.T) {
 	svc, _ := newChatOpsService(t)
 	toolCallsJSON := `[{"id":"CALL_REAL","type":"function","function":{"name":"exec","arguments":"{}"}}]`
 
@@ -465,4 +468,43 @@ func TestToLLMMessagesDropsOrphanTools(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, toolCount)
+}
+
+// ===== 聚合入口 =====
+//
+// 场景实现为上面的私有函数（不被 go test 直接发现），由下列 6 个按能力域划分的
+// 父测试以 t.Run 聚合；改某个能力只需跑对应的一个父测试。
+
+// TestChatSessionOps 会话操作：分叉 / 压缩归档。
+func TestChatSessionOps(t *testing.T) {
+	t.Run("fork", testForkSession)
+	t.Run("compact_archive", testCompactSessionArchive)
+}
+
+// TestChatApproval 危险命令审批：判定回执与决策落库。
+func TestChatApproval(t *testing.T) {
+	t.Run("approve_and_decide", testApprovalApproveAndDecide)
+}
+
+// TestChatSteerQueue 中途插话：steer 持久化并入队。
+func TestChatSteerQueue(t *testing.T) {
+	t.Run("persists_and_queues", testQueueSteerPersistsAndQueues)
+}
+
+// TestChatBackgroundTasks 后台任务：提交完成 / 运行中取消。
+func TestChatBackgroundTasks(t *testing.T) {
+	t.Run("submit_and_complete", testTaskSubmitAndComplete)
+	t.Run("cancel_running", testTaskCancelRunning)
+}
+
+// TestChatWorkspaceBind 工作区绑定生命周期。
+func TestChatWorkspaceBind(t *testing.T) {
+	t.Run("lifecycle", testWorkspaceBindLifecycle)
+}
+
+// TestChatLLMMessageHygiene 回发上游前的消息清洗（协议硬约束：
+// 空 assistant 与孤儿 tool 消息都会让上游 400 拒绝整轮）。
+func TestChatLLMMessageHygiene(t *testing.T) {
+	t.Run("drops_empty_assistant", testToLLMMessagesDropsEmptyAssistant)
+	t.Run("drops_orphan_tools", testToLLMMessagesDropsOrphanTools)
 }

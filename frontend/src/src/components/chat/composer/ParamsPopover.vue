@@ -38,10 +38,14 @@ const overridden = computed(() => paramTemperature.value !== null || paramThinki
 
 const fromText = (src?: string) => t(`chat.params.from.${src ?? 'builtin'}`)
 
+/**
+ * 工具行紧凑 chip 文案：原型形态「T 0.7 · 思考 中」——
+ * 详细字段（来源 / 生效值 / 覆盖态）放进 popover 内，chip 只承担「看一眼」。
+ */
 const paramSummary = computed(() => {
   const temp = displayTemperature.value == null ? t('chat.paramTempDefault') : String(displayTemperature.value)
-  const suffix = overridden.value ? ` · ${t('chat.params.from.request')}` : ''
-  return `${t('chat.params.temperature')} ${temp} · ${t('chat.params.thinking')} ${t(`chat.effort.${displayEffort.value}`)}${suffix}`
+  const effortShort = t(`chat.effort.${displayEffort.value}`)
+  return `T ${temp} · ${t('chat.params.thinkingShort')} ${effortShort}`
 })
 
 /** 恢复跟随配置：清空覆盖，回显生效值。 */

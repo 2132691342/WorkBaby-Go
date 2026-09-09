@@ -19,6 +19,7 @@
 |---|---|
 | `GET /meta/version` / `health` / `contract` / `runtime` | 版本、健康、契约版本、内置运行时状态 |
 | `GET /admin/overview` | 管理总览 |
+| `POST /admin/cleanup-token-usages` | 清理上游误报的缓存 token（`cache_read_tokens > input_tokens` 的行清零；返回 `cleaned` 条数，幂等） |
 | `GET /docs` / `docs/:name` | 内置文档 |
 | `GET /dashboard/stats` / `trend` / `token-trend` | 仪表盘统计与趋势 |
 | `GET /events` | SSE 事件流（scope=chat/task/workflow/pet/app） |
@@ -97,12 +98,14 @@
 | 事件 | 载荷要点 |
 |---|---|
 | `chat:stream.start` | 模型、是否续跑 |
+| `chat:skill` | 本轮命中的技能（name / source / version / description / tools / injected_chars）；早于首帧正文，前端渲染为执行过程时间线首行 |
 | `chat:stream` / `chat:thinking` | 正文 / 思维链增量 |
 | `chat:tool` / `chat:tool-result` | 工具调用与结果（id / name / args / state / duration） |
 | `chat:stats` | 本轮用量（input / output / cache_read / total / latency） |
 | `chat:approval` / `chat:approval-decided` | 审批请求与裁决 |
 | `chat:compressed` | 自动压缩（折叠条数） |
 | `chat:file-change` / `chat:artifact` | 文件变更 / 产出物登记 |
+| `chat:warn` | 越界告警：写入落到 `.workbaby/` 之外（kind=file_out_of_sandbox，含 rel_path / path / workspace / sandbox / message） |
 | `chat:subagent-start` / `-done` / `-error` | 子 Agent 生命周期 |
 | `chat:done` / `chat:error` / `chat:stopped` | 终态（含 stop_reason） |
 | `chat:gap` | 重放窗口失效，前端转全量快照 |

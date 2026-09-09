@@ -122,6 +122,10 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 					OutputTokens:    s.EvalCount,
 					CacheReadTokens: s.CacheReadCount,
 				}
+				// 防御性校正：同 openai/anthropic，避免上游把 cache 报成 input 全部导致命中率虚高。
+				if u.CacheReadTokens > u.InputTokens {
+					u.CacheReadTokens = 0
+				}
 				u.TotalTokens = u.InputTokens + u.OutputTokens
 				out <- llm.StreamChunk{FinalUsage: &u}
 				return

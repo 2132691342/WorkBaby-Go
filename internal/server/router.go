@@ -26,6 +26,10 @@ func (s *Server) registerRoutes() {
 		v, err := h.GetAdminOverview()
 		unwrap(c, v, err)
 	})
+	v1.POST("/admin/cleanup-token-usages", func(c *gin.Context) {
+		v, err := h.CleanupMisreportedTokenUsage()
+		unwrap(c, v, err)
+	})
 
 	// ---- docs (built-in) ----
 	v1.GET("/docs", func(c *gin.Context) {

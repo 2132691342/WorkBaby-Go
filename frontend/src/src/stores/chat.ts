@@ -23,6 +23,7 @@ import type {
   Message as ApiMessage,
   Page,
   Session,
+  SkillHit,
   SlashCommand,
   TodoStateRESP
 } from '@/types/api'
@@ -94,6 +95,8 @@ export const useChatStore = defineStore('chat', () => {
   const streamingThinking = ref('')
   const streamingTools = ref<ToolCallInfo[]>([])
   const streamingStats = ref<ChatStats | null>(null)
+  /** 本轮命中的 Skill（chat:skill）；流式气泡把它渲染到执行过程时间线首行。 */
+  const streamingSkill = ref<SkillHit | null>(null)
   const streamingArtifacts = ref<ArtifactPayload | null>(null)
   const streamingGenUi = ref<UiNode | null>(null)
   /** 建流瞬时错误自动重试提示（chat:retry；正文恢复自动清除）。 */
@@ -595,6 +598,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingThinking.value = ''
     streamingTools.value = []
     streamingStats.value = null
+    streamingSkill.value = null
     streamingArtifacts.value = null
     streamingGenUi.value = null
     streamingRetry.value = null
@@ -640,6 +644,7 @@ export const useChatStore = defineStore('chat', () => {
       streamingThinking.value = ''
       streamingTools.value = []
       streamingStats.value = null
+      streamingSkill.value = null
       streamingArtifacts.value = null
       streamingGenUi.value = null
       // 注：本轮新增的 file_changes / artifacts 已由 batcher 流式累积；不重置——保留本会话全部变更历史
@@ -658,6 +663,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingThinking.value = ''
     streamingTools.value = []
     streamingStats.value = null
+    streamingSkill.value = null
     streamingArtifacts.value = null
     streamingGenUi.value = null
     streamingRetry.value = null
@@ -688,6 +694,7 @@ export const useChatStore = defineStore('chat', () => {
       streamingThinking.value = ''
       streamingTools.value = []
       streamingStats.value = null
+      streamingSkill.value = null
       streamingArtifacts.value = null
       streamingGenUi.value = null
       await loadSessions()
@@ -822,11 +829,22 @@ export const useChatStore = defineStore('chat', () => {
         useToast().info(t('chat.autoCompressed', update.setCompressed.removed_messages))
         continue
       }
+      // chat:warn → 工作区越界写入：AI 把文件落到了 .workbaby/ 之外，
+      // 必须以红色 toast + 文件路径强制提示用户清理；这是污染既有目录的硬伤，
+      // 不能仅靠 message block 静默展示。
+      if (update.setWarn) {
+        const title = update.setWarn.rel_path
+          ? t('chat.sandboxViolation', update.setWarn.rel_path)
+          : t('chat.sandboxViolationNoPath')
+        useToast().error(title, update.setWarn.message)
+        continue
+      }
       applyStreamUpdate(update, {
         streamingContent,
         streamingThinking,
         streamingTools,
         streamingStats,
+        streamingSkill,
         stopReason,
         streamingArtifacts,
         streamingGenUi,
@@ -951,6 +969,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingThinking,
     streamingTools,
     streamingStats,
+    streamingSkill,
     streamingArtifacts,
     streamingGenUi,
     streamingRetry,

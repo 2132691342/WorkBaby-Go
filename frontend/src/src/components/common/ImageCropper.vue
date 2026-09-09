@@ -9,7 +9,7 @@
  * <p>自动抠图：取四角像素均值当背景色，按容差把接近的像素 alpha 归零，
  * 容差边界做一圈软过渡，避免硬边锯齿。只做位图变换，不动原文件。
  */
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '@/i18n'
 
 const props = withDefaults(defineProps<{
@@ -211,7 +211,19 @@ function close(): void {
 }
 
 watch(() => props.source, (s) => {
-  if (s) load(s)
+  if (s && props.modelValue) load(s)
+})
+
+/**
+ * 打开 dialog 时强制重新载入：
+ * <p>el-dialog 默认 lazy render（关闭时不渲染 canvas DOM），`source` 在 dialog 关闭状态下被
+ * 设置时 canvas 节点尚未挂载，`load` 内部的 `draw()` 会因 `canvasRef.value === null` 早退，
+ * 表现就是"选了图却一片空白"。watch `modelValue` + nextTick 等 canvas 渲染后再触发一次。
+ */
+watch(() => props.modelValue, (open) => {
+  if (open && props.source) {
+    nextTick(() => load(props.source))
+  }
 })
 
 onBeforeUnmount(() => {

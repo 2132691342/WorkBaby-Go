@@ -5,7 +5,7 @@
  * 历史复现（message.blocks）与流式态（streaming 临时结构）共用同一套块形状，
  * MessageList 组件只做渲染，不解析 payload。
  */
-import type { Message, MessageBlock, MessageBlockKind } from '../../types/api'
+import type { Message, MessageBlock, MessageBlockKind, SkillHit } from '../../types/api'
 import type { ToolCallInfo } from '../../stores/chat/ChatStreamDecoder'
 
 /** 归一化后的块形状（组件渲染直接消费）。 */
@@ -98,6 +98,33 @@ export function isFailedResultBlock(block: ResolvedBlock): boolean {
   if (block.kind !== 'tool_result') return false
   const d = block.data as Partial<ToolResultBlockData> | null
   return Boolean(d?.error)
+}
+
+/**
+ * 块序列 → 本轮命中的 Skill（skill 块可能为空 name 的脏数据，过滤掉）。
+ *
+ * 技能命中发生在首帧之前，取 seq 最小的那一条即可（一轮最多一次命中）。
+ */
+export function skillHitOfBlocks(blocks: ResolvedBlock[]): SkillHit | null {
+  for (const b of blocks) {
+    if (b.kind !== 'skill' || !b.data) continue
+    const d = b.data as Partial<SkillHit>
+    if (!d.name) continue
+    return {
+      name: d.name,
+      source: d.source,
+      version: d.version,
+      description: d.description,
+      tools: d.tools ?? [],
+      injected_chars: d.injected_chars
+    }
+  }
+  return null
+}
+
+/** 消息 → 本轮命中的 Skill（历史回看用；无 skill 块返回 null）。 */
+export function messageSkillHit(msg: Message): SkillHit | null {
+  return skillHitOfBlocks(resolveMessageBlocks(msg))
 }
 
 /** 块是否为审批拒绝结果。 */

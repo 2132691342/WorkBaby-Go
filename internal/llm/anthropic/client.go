@@ -372,6 +372,16 @@ func (c *Client) toChatResponse(r *AnthropicResponse) (*llm.ChatResponse, error)
 		CacheWriteTokens: r.Usage.CacheCreationInputTokens,
 	}
 	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	// 防御性校正：cache_read+cache_write 不应超过 input（输入里 cache 部分是子集）。
+	// 万一上游误报，清零避免前端命中率与计费口径失真。
+	if usage.CacheReadTokens+usage.CacheWriteTokens > usage.InputTokens {
+		pkg.L.Warn("anthropic usage: cache tokens exceed input; clamping to 0",
+			"input", usage.InputTokens,
+			"cache_read", usage.CacheReadTokens,
+			"cache_write", usage.CacheWriteTokens)
+		usage.CacheReadTokens = 0
+		usage.CacheWriteTokens = 0
+	}
 	return &llm.ChatResponse{
 		Message:    llm.Message{Role: llm.RoleAssistant, Content: content.String(), Thinking: thinking.String()},
 		ToolCalls:  tools,

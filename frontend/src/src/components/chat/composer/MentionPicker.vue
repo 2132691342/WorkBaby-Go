@@ -60,13 +60,36 @@ function iconFor(item: MentionItem): Component {
   return Bot
 }
 
-function labelFor(item: MentionItem): string {
-  if (item.type === 'skill') return t('mention.type.skill')
-  if (item.type === 'knowledge') return t('mention.type.knowledge')
-  if (item.type === 'folder') return t('mention.type.folder')
-  if (item.type === 'file') return t('mention.type.file')
+/** 分组标题左侧图标（与行内图标同源）。 */
+function iconForGroup(type: MentionItem['type']): Component {
+  return iconFor({ type, id: '', name: '', insertText: '' } as MentionItem)
+}
+
+/** 类型 → 文案（分组标题与行内标签共用）。 */
+function labelFor(type: MentionItem['type']): string {
+  if (type === 'skill') return t('mention.type.skill')
+  if (type === 'knowledge') return t('mention.type.knowledge')
+  if (type === 'folder') return t('mention.type.folder')
+  if (type === 'file') return t('mention.type.file')
   return t('mention.type.command')
 }
+
+/** 分组顺序：与候选生成顺序一致（技能 → 知识 → 文件夹 → 文件 → 命令）。 */
+const GROUP_ORDER: MentionItem['type'][] = ['skill', 'knowledge', 'folder', 'file', 'command']
+
+/**
+ * 按类型分组；index 保留在原始 items 中的下标——
+ * 父组件的键盘高亮走扁平索引，分组只是渲染层的事，重排会错位。
+ */
+const groups = computed(() =>
+  GROUP_ORDER.map((type) => ({
+    type,
+    title: labelFor(type),
+    items: props.items
+      .map((it, index) => ({ it, index }))
+      .filter((x) => x.it.type === type)
+  })).filter((g) => g.items.length > 0)
+)
 </script>
 
 <template>
@@ -104,24 +127,31 @@ function labelFor(item: MentionItem): string {
         {{ t('mention.noResults') }}
       </p>
       <ul ref="listEl" class="wb-scroll max-h-64 overflow-y-auto overscroll-contain">
-        <li v-for="(it, idx) in props.items" :key="it.id">
+        <li v-for="g in groups" :key="g.type">
+          <!-- 分组标题：加重 + 主色 + 小图标，避免「只看得到一行行候选却没意识到分组」的盲区 -->
+          <p class="flex items-center gap-1.5 border-b border-wb-border/40 px-2 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-wider text-wb-primary-strong">
+            <component :is="iconForGroup(g.type)" class="h-3 w-3" />
+            {{ g.title }}
+            <span class="ml-auto rounded bg-wb-primary/10 px-1 text-[9.5px] tabular-nums text-wb-primary">{{ g.items.length }}</span>
+          </p>
           <button
+            v-for="row in g.items"
+            :key="row.it.id"
             type="button"
-            :data-active="idx === props.activeIndex || undefined"
+            :data-active="row.index === props.activeIndex || undefined"
             class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors"
-            :class="idx === props.activeIndex ? 'bg-wb-primary/15 text-wb-primary-strong' : 'text-wb-ink hover:bg-wb-primary/5'"
-            @click="pickItem(it)"
-            @mouseenter="emit('update-active', idx)"
+            :class="row.index === props.activeIndex ? 'bg-wb-primary/15 text-wb-primary-strong' : 'text-wb-ink hover:bg-wb-primary/5'"
+            @click="pickItem(row.it)"
+            @mouseenter="emit('update-active', row.index)"
           >
             <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-wb-primary/10 text-wb-primary-strong">
-              <component :is="iconFor(it)" class="h-3.5 w-3.5" />
+              <component :is="iconFor(row.it)" class="h-3.5 w-3.5" />
             </span>
             <span class="min-w-0 flex-1">
-              <span class="block truncate font-medium">{{ it.name }}</span>
-              <span v-if="it.type !== 'folder' && 'description' in it && it.description" class="block truncate text-[10px] text-wb-muted">{{ it.description }}</span>
-              <span v-else-if="it.type === 'folder' && it.path" class="block truncate text-[10px] text-wb-muted">{{ it.path }}</span>
+              <span class="block truncate font-medium">{{ row.it.name }}</span>
+              <span v-if="row.it.type !== 'folder' && 'description' in row.it && row.it.description" class="block truncate text-[10px] text-wb-muted">{{ row.it.description }}</span>
+              <span v-else-if="row.it.type === 'folder' && row.it.path" class="block truncate text-[10px] text-wb-muted">{{ row.it.path }}</span>
             </span>
-            <span class="shrink-0 rounded bg-wb-muted/10 px-1 text-[10px] text-wb-muted">{{ labelFor(it) }}</span>
           </button>
         </li>
       </ul>

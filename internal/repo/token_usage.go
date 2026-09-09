@@ -91,3 +91,21 @@ func (r *TokenUsageRepo) Aggregate(ctx context.Context, startMs, endMs int64, gr
 	}
 	return rows, nil
 }
+
+// CleanupMisreported 一次性清理上游误报的缓存 token：cache_read_tokens > input_tokens
+// （GLM 等 OpenAI 兼容实现偶发把 cached_tokens 报成等于 prompt_tokens，导致仪表盘
+// 命中率 100% 与 token 总数虚高）。LLM adapter 已在解析时 clamp 新数据；此函数专治存量。
+//
+// <p>不可逆：执行后 dashboard 缓存命中数会立即下降，幂等（重复执行无副作用）。
+func (r *TokenUsageRepo) CleanupMisreported(ctx context.Context) (int64, error) {
+	res := r.db.WithContext(ctx).Model(&domain.TokenUsageDO{}).
+		Where("cache_read_tokens > input_tokens AND input_tokens > 0").
+		Updates(map[string]any{
+			"cache_read_tokens":  0,
+			"cache_write_tokens": 0,
+		})
+	if err := res.Error; err != nil {
+		return 0, pkg.Wrap(2010, "cleanup misreported token usage failed", err)
+	}
+	return res.RowsAffected, nil
+}

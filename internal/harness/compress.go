@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"WorkBaby/internal/llm"
 	"WorkBaby/internal/pkg"
@@ -16,9 +17,9 @@ type Compressor interface {
 	Compress(msgs []*llm.Message, budgetTokens int) []*llm.Message
 }
 
-// MicroCompressor 确定性轻量压缩：先把最旧的「assistant(tool_calls)+其 tool 结果」
-// 整段折叠成一条占位 assistant 消息，仍超预算时按安全切点对半截断。
-// 不调 LLM（零成本），适合作为每次超预算时的快速回收。
+// MicroCompressor 确定性轻量压缩：最旧的「assistant(tool_calls)+连续 tool 结果」
+// 整段折叠为一条占位消息，仍超预算时按安全切点对半截断；不调 LLM（零成本）。
+// 占位文案声明「结果已消费」，避免模型为找回 payload 重跑有副作用的工具。
 type MicroCompressor struct{}
 
 // Compress 实现 Compressor。
@@ -46,7 +47,13 @@ func (MicroCompressor) Compress(msgs []*llm.Message, budgetTokens int) []*llm.Me
 		for j < len(out) && out[j] != nil && out[j].Role == llm.RoleTool {
 			j++
 		}
-		folded := &llm.Message{Role: llm.RoleAssistant, Content: "[早期工具调用与结果已省略]"}
+		folded := &llm.Message{
+			Role: llm.RoleAssistant,
+			Content: fmt.Sprintf(
+				"[早期工具段已折叠（%d 个调用），结果已消费，请勿重跑以避免副作用]",
+				j-i,
+			),
+		}
 		out = append(out[:i], append([]*llm.Message{folded}, out[j:]...)...)
 		i-- // 折叠点前移一格，下一轮从当前位置继续
 	}

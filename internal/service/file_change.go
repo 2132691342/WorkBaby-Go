@@ -11,6 +11,7 @@ import (
 	"WorkBaby/internal/harness"
 	"WorkBaby/internal/pkg"
 	"WorkBaby/internal/repo"
+	"WorkBaby/internal/runtime"
 	"WorkBaby/internal/tool/file"
 )
 
@@ -91,6 +92,19 @@ func (s *FileChangeService) Record(ctx context.Context, in ChangeInput) (*domain
 	row.RemovedLines = d.Removed
 	if err := s.repo.Create(ctx, row); err != nil {
 		return nil, err
+	}
+	// 越界告警：rel 落在 workspace 根（含其下子目录）但不在 .workbaby/ 子树内 →
+	// 视为污染用户原有目录，emit chat:warn 让前端红色横幅提示用户立刻清理。
+	// 不阻塞变更落库（已发生的副作用必须留痕供回滚），但用户必须看见。
+	if s.root != "" && isOutOfSandbox(s.root, in.Path) {
+		s.emit(ctx, "chat:warn", map[string]any{
+			"kind":     "file_out_of_sandbox",
+			"rel_path": rel,
+			"path":     in.Path,
+			"workspace": s.root,
+			"sandbox":  runtime.SandboxOf(s.root).Root,
+			"message":  "文件写到了工作区 .workbaby/ 之外（污染原有目录）；右键文件变更卡片可一键回滚",
+		})
 	}
 	s.emit(ctx, "chat:file-change", map[string]any{"change": toFileChangeRESP(row)})
 	return row, nil
@@ -268,6 +282,43 @@ func relativeTo(root, p string) string {
 		return p
 	}
 	return filepath.ToSlash(rel)
+}
+
+// isOutOfSandbox 判定绝对路径 p 是否落在 workspace 根（含其下子目录）但不在 .workbaby/ 子树内。
+//
+// <p>判定口径：
+// <ol>
+//   <li>p 必须在 workspace 内（Rel 无 `..`）—— 否则是更深层的越界，提示文案按「污染」算</li>
+//   <li>p 必须**不在** `<workspace>/.workbaby/` 子树内——这是允许的沙箱落点</li>
+// </ol>
+//
+// <p>未绑定 workspace / 解析失败均按「非越界」处理（向后兼容默认会话）。
+func isOutOfSandbox(workspace, p string) bool {
+	if workspace == "" || p == "" {
+		return false
+	}
+	absWS, err := filepath.Abs(workspace)
+	if err != nil {
+		return false
+	}
+	absPath, err := filepath.Abs(p)
+	if err != nil {
+		return false
+	}
+	relWS, err := filepath.Rel(absWS, absPath)
+	if err != nil || relWS == ".." || strings.HasPrefix(relWS, ".."+string(filepath.Separator)) {
+		// 路径在 workspace 外：也算越界（用户能直接看见该红色提示）
+		return true
+	}
+	sandboxRoot := runtime.SandboxOf(absWS).Root
+	if absPath == sandboxRoot {
+		return false
+	}
+	relSandbox, err := filepath.Rel(sandboxRoot, absPath)
+	if err != nil {
+		return false
+	}
+	return relSandbox == ".." || strings.HasPrefix(relSandbox, ".."+string(filepath.Separator))
 }
 
 // truncateBytes 按字节上限截断（详情面板防大文件）。

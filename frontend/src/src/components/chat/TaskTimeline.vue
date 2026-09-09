@@ -36,6 +36,7 @@ import {
   Bot
 } from '@/components/common/icons'
 import { t } from '@/i18n'
+import type { SkillHit } from '@/types/api'
 import { looksLikeDiff, parseDiffLines, diffLineClass } from '@/chat/models/blocks'
 
 /** 流式工具调用（与 chat store ToolCallInfo 对齐；含耗时）。 */
@@ -54,6 +55,8 @@ export interface ToolCall {
 
 const props = defineProps<{
   tools: ToolCall[]
+  /** 本轮命中的 Skill；非空时作为时间线首行（叙事顺序：技能命中 → 工具 → 回答）。 */
+  skillHit?: SkillHit | null
   /** 失败工具是否展示「重试」按钮（仅历史末条 assistant 消息可重试，MessageList 控制）。 */
   retryable?: boolean
 }>()
@@ -129,6 +132,25 @@ function hasDetail(tc: ToolCall): boolean {
 function isDelegate(tc: ToolCall): boolean {
   return tc.name === 'delegate_task'
 }
+
+// ===== 技能命中行 =====
+/** 命中行展开态：默认折叠（只是背景信息，不抢占注意力）。 */
+const skillOpen = ref(false)
+
+/** 命中行展开详情：描述 + 来源 + 注入规模 + 本轮放开的工具。 */
+const skillDetail = computed(() => {
+  const s = props.skillHit
+  if (!s) return ''
+  const lines: string[] = []
+  if (s.description) lines.push(s.description)
+  const meta = [s.source, s.version].filter((x) => !!x).join(' · ')
+  if (meta) lines.push(`${t('chat.skillSource')}：${meta}`)
+  if (s.injected_chars) lines.push(t('chat.skillInjected', s.injected_chars))
+  lines.push(
+    `${t('chat.skillTools')}：${s.tools && s.tools.length > 0 ? s.tools.join(' / ') : t('chat.skillNoLimit')}`
+  )
+  return lines.join('\n')
+})
 
 /** 解析 delegate_task 参数 {agent, task}；坏 JSON 兜底。 */
 function delegateMeta(tc: ToolCall): { agent: string; task: string } {
@@ -266,14 +288,29 @@ function fmtDuration(ms?: number): string {
 <template>
   <!-- 原型 .tl / .tool 折叠列表：标题栏 + 工具行（点击展开 args/result）。
        保留现有能力：状态图标 / 工具图标 / 行内 arg 摘要 / 实时计时 / 复制 / 重试 / 子 Agent 委派卡片 -->
-  <div v-if="props.tools.length > 0" class="tl">
+  <div v-if="props.tools.length > 0 || props.skillHit" class="tl">
     <div class="tl-hd">
       <ListTree class="ic" style="width: 13px; height: 13px" />
       <span>{{ t('chat.processTitle') }}</span>
-      <span class="cnt">{{ props.tools.length }}</span>
+      <span class="cnt">{{ props.tools.length + (props.skillHit ? 1 : 0) }}</span>
       <button v-if="props.tools.length > 1" type="button" @click="setAll(!allExpanded)">
         {{ allExpanded ? t('chat.collapseAll') : t('chat.expandAll') }}
       </button>
+    </div>
+
+    <!-- 技能命中：先于所有工具，回答「这一轮为什么按这个套路走」 -->
+    <div v-if="props.skillHit" class="tool" :class="{ open: skillOpen }">
+      <button type="button" class="tool-hd" @click="skillOpen = !skillOpen">
+        <span class="st"><Check class="ok" /></span>
+        <Sparkles class="ic text-wb-lavender" />
+        <span class="nm">{{ t('chat.skillHit', props.skillHit.name) }}</span>
+        <span class="arg">{{ t('chat.skillHitSummary') }}</span>
+        <ChevronDown class="chev" />
+      </button>
+      <div v-if="skillOpen" class="tool-bd">
+        <p class="lb">{{ t('chat.skillInjectedTitle') }}</p>
+        <pre>{{ skillDetail }}</pre>
+      </div>
     </div>
 
     <div
@@ -330,24 +367,31 @@ function fmtDuration(ms?: number): string {
         <!-- 耗时 -->
         <span v-if="elapsedMs(tc) != null" class="ms">{{ fmtDuration(elapsedMs(tc)) }}</span>
 
-        <!-- hover 操作 -->
-        <button
+        <!-- hover 操作：行头本身是 button，这里只能用 span（button 嵌套会被浏览器
+             提前闭合外层，破坏行结构与折叠交互），键盘可达性由 role/tabindex 补上 -->
+        <span
           v-if="hasDetail(tc)"
-          type="button"
-          class="shrink-0 text-wb-muted transition-colors hover:text-wb-primary"
+          role="button"
+          tabindex="0"
+          class="shrink-0 cursor-pointer text-wb-muted transition-colors hover:text-wb-primary"
           :title="t('chat.copy')"
           @click.stop="copyTool(tc)"
+          @keydown.enter.prevent.stop="copyTool(tc)"
+          @keydown.space.prevent.stop="copyTool(tc)"
         >
           <component :is="copiedID === tc.id ? Check : Copy" style="width: 12px; height: 12px" />
-        </button>
-        <button
+        </span>
+        <span
           v-if="props.retryable && tc.state === 'error'"
-          type="button"
-          class="shrink-0 text-[11px] text-wb-danger transition-colors hover:text-wb-primary"
+          role="button"
+          tabindex="0"
+          class="shrink-0 cursor-pointer text-[11px] text-wb-danger transition-colors hover:text-wb-primary"
           @click.stop="emit('retry', tc)"
+          @keydown.enter.prevent.stop="emit('retry', tc)"
+          @keydown.space.prevent.stop="emit('retry', tc)"
         >
           {{ t('chat.retryTool') }}
-        </button>
+        </span>
 
         <ChevronDown v-if="hasDetail(tc)" class="chev" />
       </button>

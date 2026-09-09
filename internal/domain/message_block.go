@@ -11,6 +11,7 @@ const (
 	BlockToolResult MessageBlockKind = "tool_result" // 工具执行结果
 	BlockArtifact   MessageBlockKind = "artifact"    // 工具产出的结构化数据（todo 快照等）
 	BlockGenUI      MessageBlockKind = "genui"       // 生成式 UI 片段
+	BlockSkill      MessageBlockKind = "skill"       // 本轮命中的 Skill（执行过程时间线首行）
 )
 
 // MessageBlockDO 消息块持久化实体：块即行，可索引、可按会话分页。

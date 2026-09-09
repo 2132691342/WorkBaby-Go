@@ -9,8 +9,10 @@
  * 的光标解析都依赖原生事件，ElementPlus `el-input` 无法等价承接。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import {
+  Check,
   Paperclip,
   Square,
   Upload,
@@ -39,6 +41,8 @@ import ParamsPopover, { type ComposerParams } from '@/components/chat/composer/P
 import { useSkillsStore } from '@/stores/skills'
 import { useFoldersStore } from '@/stores/folders'
 import { useFilesStore } from '@/stores/files'
+import { splitTokens } from '@/chat/models/tokens'
+import type { DraftToken } from '@/chat/models/tokens'
 
 type PermissionLevel = 'restricted' | 'confirm' | 'auto' | 'full'
 
@@ -68,6 +72,8 @@ const emit = defineEmits<{
   'remove-queue': [id: string]
   'send-queued': [message: string]
   regenerate: []
+  /** 用户点击上下文占用 popover 内的「压缩历史」按钮。 */
+  compact: []
   /** 工作区切换（弹 WorkspacePickerDialog）。 */
   'pick-workspace': []
   /** 权限级别切换。 */
@@ -118,6 +124,11 @@ const skillsStore = useSkillsStore()
 const foldersStore = useFoldersStore()
 const filesStore = useFilesStore()
 const chat = useChatStore()
+const { contextUsage } = storeToRefs(chat)
+
+/** 上下文分段明细：popover 渲染用，store 未加载时为空数组。 */
+const contextSegments = computed(() => contextUsage.value?.segments ?? [])
+const contextEstimated = computed(() => contextUsage.value?.estimated ?? false)
 
 const mentionItems = computed<MentionItem[]>(() => {
   const q = mentionQuery.value.trim().toLowerCase()
@@ -206,6 +217,34 @@ const activeSkillMentions = computed(() => {
     .map((name) => skillsStore.skills.find((s) => s.name === name))
     .filter((s): s is NonNullable<typeof s> => Boolean(s))
 })
+
+// ===== 输入框镜像高亮：textarea 文字透明 + 背后镜像层渲染淡色气泡 =====
+//
+// 为什么用镜像而不是富文本输入：中文 IME、自增高、`@`/`/` 光标解析都依赖原生 textarea，
+// 换成 contenteditable 会一次性丢掉这三样。镜像层只做视觉，不接管输入。
+const mirrorRef = ref<HTMLElement | null>(null)
+
+/** `@名称` → 技能 / 文件命中判定（未命中由镜像层渲染成灰气泡提示）。 */
+function resolveMention(name: string): 'skill' | 'file' | null {
+  if (skillsStore.skills.some((s) => s.name === name && s.enabled !== false)) return 'skill'
+  const inFiles = filesStore.files.some((f) => (f.original_name || f.name) === name)
+  if (inFiles) return 'file'
+  const inFolders = (foldersStore.tree as unknown as { name: string; children?: unknown[] }[]).some(
+    (n) => n.name === name
+  )
+  return inFolders ? 'file' : null
+}
+
+const mirrorTokens = computed<DraftToken[]>(() => splitTokens(draft.value, resolveMention))
+
+/** IME 组合期间隐藏镜像并恢复文字颜色：候选窗口前的组合串必须可见。 */
+const mirrorVisible = computed(() => !isComposing.value)
+
+/** 滚动同步：textarea 自增高后可滚动，镜像必须同频否则高亮错位。 */
+function syncMirrorScroll(): void {
+  const ta = textareaRef.value
+  if (mirrorRef.value && ta) mirrorRef.value.scrollTop = ta.scrollTop
+}
 
 /** 移除一条 @skill 提及（连同尾部空白），草稿其余内容不动。 */
 function removeSkillMention(name: string): void {
@@ -448,6 +487,30 @@ function onInput(): void {
   slashStart.value = -1
 }
 
+/**
+ * 命令统一反馈：打开型命令（弹面板 / 聚焦 / 跳页）本身没有可感知结果，
+ * 不给提示用户无法确认命令是否生效——双重保险（toast 在桌面壳里有时被窗口遮挡）：
+ *   1) toast.success 走右下角气泡
+ *   2) 输入框内联反馈条 2.5s 后淡出，定位就近、不可能被遮
+ */
+const cmdFeedback = ref<{ text: string } | null>(null)
+let cmdFeedbackTimer: ReturnType<typeof setTimeout> | null = null
+
+function showCmdFeedback(text: string): void {
+  cmdFeedback.value = { text }
+  if (cmdFeedbackTimer) clearTimeout(cmdFeedbackTimer)
+  cmdFeedbackTimer = setTimeout(() => {
+    cmdFeedback.value = null
+    cmdFeedbackTimer = null
+  }, 2500)
+}
+
+function executed(cmd: SlashCommand): void {
+  const detail = cmd.descKey ? t(cmd.descKey) : (cmd.desc ?? '')
+  toast.success(t('slash.picked', `/${cmd.id}`), detail)
+  showCmdFeedback(`/${cmd.id} · ${detail}`)
+}
+
 function pickSlash(cmd: SlashCommand): void {
   slashOpen.value = false
   switch (cmd.id) {
@@ -456,31 +519,38 @@ function pickSlash(cmd: SlashCommand): void {
       break
     case 'new':
       emit('send', '__wb_new_session__', [], currentParams())
+      executed(cmd)
       break
     case 'focus':
       textareaRef.value?.focus()
+      executed(cmd)
       break
     case 'workspace':
       emit('pick-workspace')
+      executed(cmd)
       break
     case 'model':
       modelSelectorRef.value?.open()
+      executed(cmd)
       break
     case 'theme':
       void router.push('/settings')
-      toast.info(t('slash.picked', cmd.labelKey ? t(cmd.labelKey) : (cmd.label ?? cmd.id)))
+      executed(cmd)
       break
     case 'attach':
       pickFile()
+      executed(cmd)
       break
     case 'regenerate':
       emit('regenerate')
+      executed(cmd)
       break
     case 'compact':
       void runCompact()
       break
     case 'tasks':
       window.dispatchEvent(new Event('workbaby:open-tasks'))
+      executed(cmd)
       break
     case 'agent':
       void submitAgentTask()
@@ -500,6 +570,7 @@ function pickSlash(cmd: SlashCommand): void {
       break
     case 'help':
       void showHelp()
+      executed(cmd)
       break
     default:
       // 后端命令：默认清空 + 提示。后端暂无专用接口的命令不会出现在面板
@@ -682,6 +753,7 @@ async function loadMaxInputChars(): Promise<void> {
 onBeforeUnmount(() => {
   window.removeEventListener('wb:focus-input', focusFromShortcut)
   document.removeEventListener('pointerdown', onDocumentPointerDown, true)
+  if (cmdFeedbackTimer) clearTimeout(cmdFeedbackTimer)
 })
 
 function focusFromShortcut(): void {
@@ -836,14 +908,24 @@ defineExpose({
       <AttachmentStrip class="comp-strip" :attachments="attachments" @remove="removeAttachment" />
 
       <div class="relative">
+        <!-- 镜像层：与 textarea 同字体同内边距，只渲染淡色 token 气泡 -->
+        <div
+          v-show="mirrorVisible"
+          ref="mirrorRef"
+          class="ta-mirror"
+          aria-hidden="true"
+        ><template v-for="(seg, si) in mirrorTokens" :key="si"><span v-if="seg.kind" class="tk" :class="`tk-${seg.kind}`">{{ seg.text }}</span><template v-else>{{ seg.text }}</template></template></div>
         <textarea
           ref="textareaRef"
           v-model="draft"
           rows="1"
+          class="ta-input"
+          :class="{ 'is-mirror': mirrorVisible }"
           :placeholder="t('chat.placeholder')"
           :disabled="disabled || streaming"
           @input="onInput(); autoResize()"
           @keydown="onKeydown"
+          @scroll="syncMirrorScroll"
           @paste="onPaste"
           @compositionstart="onCompositionStart"
           @compositionend="onCompositionEnd"
@@ -961,7 +1043,14 @@ defineExpose({
         <span v-if="draft.length > 0" class="ctx-num" :class="{ over: draft.length > maxInputChars }">
           {{ draft.length }} / {{ maxInputChars }}
         </span>
-        <ContextUsagePopover :used="ctxUsed ?? 0" :max="ctxMax ?? 128000" />
+        <ContextUsagePopover
+          :used="ctxUsed ?? 0"
+          :max="ctxMax ?? 128000"
+          :segments="contextSegments"
+          :estimated="contextEstimated"
+          :compact-disabled="disabled || streaming"
+          @compact="emit('compact')"
+        />
 
         <button
           v-if="!streaming"
@@ -977,6 +1066,21 @@ defineExpose({
           <Square class="fill-current" />
         </button>
       </div>
+
+      <!-- 斜杠命令执行反馈：贴近输入区，2.5s 后淡出，避免被桌面壳遮挡 -->
+      <Transition
+        enter-active-class="transition-all duration-200 ease-out"
+        enter-from-class="opacity-0 translate-y-1"
+        enter-to-class="opacity-100 translate-y-0"
+        leave-active-class="transition-opacity duration-200"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div v-if="cmdFeedback" class="cmd-feedback">
+          <Check class="h-3 w-3 shrink-0 text-wb-mint" />
+          <span>{{ cmdFeedback.text }}</span>
+        </div>
+      </Transition>
     </div>
   </div>
 </template>
@@ -1003,6 +1107,25 @@ defineExpose({
   width: 10px;
   height: 10px;
   opacity: 0.7;
+}
+
+/* 斜杠命令执行反馈：紧贴输入区底边内边距对齐（13px），mint 圆点 + 主色文字 */
+.cmd-feedback {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 13px 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--wb-mint) 12%, transparent);
+  color: var(--wb-mint-strong, var(--wb-mint));
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 非默认权限态需要被看见：只用文字色 + 底色提示，不描边（描边是框线噪音的来源之一） */

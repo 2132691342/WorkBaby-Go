@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1155,6 +1156,11 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 				s.emit(runID, ses.ID, "chat:subagent-start", map[string]any{"sub_run_id": e.RunID, "agent": e.Agent})
 				return
 			}
+			// 技能命中先于首帧正文：时间线叙事顺序为「技能命中 → 工具 → 回答」
+			if st := runState; st != nil && st.SkillName != "" {
+				s.emit(runID, ses.ID, "chat:skill", skillBlockPayload(st))
+				persistBlock(e, domain.BlockSkill, skillBlockPayload(st))
+			}
 			s.emit(runID, ses.ID, "chat:stream.start", map[string]any{"model": ses.Model})
 		case harness.EventTurnDelta:
 			if isChild {
@@ -1530,7 +1536,39 @@ func (s *ChatService) buildSystem(ctx context.Context, ses *domain.ChatSessionDO
 	if ins := compactInstructions(ses); ins != "" {
 		asm.Add(harness.ContextPiece{Key: "compact", Title: "压缩保留指示", Body: ins})
 	}
+	// 工作区沙箱强制隔离：未绑定外部工作区（默认工作区）时不注入，避免空谈约束。
+	// 已绑定则给 LLM 明确的 .workbaby/ 子目录路径与「工作区根只读」红线——
+	// 解决 AI 把 check_ppt.py 这类过程脚本直接落到工作区根、污染用户原有目录的问题。
+	if wp := strings.TrimSpace(ses.WorkspacePath); wp != "" {
+		sb := runtime.SandboxOf(wp)
+		asm.Add(harness.ContextPiece{
+			Key:   "workspace_sandbox",
+			Title: "工作区沙箱（强制隔离）",
+			Body: fmt.Sprintf(
+				"工作区 %s 下已建立 .workbaby/ 目录树；所有过程数据**必须**写入下列子目录，"+
+					"否则视为污染用户原有目录结构：\n"+
+					"  - 脚本：%s\n"+
+					"  - 产出：%s\n"+
+					"  - 缓存：%s\n"+
+					"  - 临时：%s\n"+
+					"工作区根目录视为只读输入源，禁止在 .workbaby/ 之外创建脚本或写入产物。",
+				wp, sb.Scripts, sb.Output, sb.Cache, sb.Tmp,
+			),
+		})
+	}
 	return asm.Build(), state
+}
+
+// skillBlockPayload 技能命中载荷：chat:skill 事件与 skill 消息块共用同一份（字段 snake_case）。
+func skillBlockPayload(st *capability.RunState) map[string]any {
+	return map[string]any{
+		"name":           st.SkillName,
+		"source":         st.SkillSource,
+		"version":        st.SkillVersion,
+		"description":    st.SkillDescription,
+		"tools":          st.SkillTools,
+		"injected_chars": st.SkillInjectedLen,
+	}
 }
 
 // toLLMMessages 历史消息 → llm.Message；重建 assistant 的工具调用与 tool 消息上下文。

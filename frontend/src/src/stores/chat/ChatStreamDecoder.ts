@@ -5,6 +5,7 @@ import type {
   ChatStats,
   ChatStreamEvent,
   FileChange,
+  SkillHit,
   TodoStateRESP
 } from '@/types/api'
 import type { UiNode } from '@/components/genui/GenUiRenderer.vue'
@@ -47,6 +48,8 @@ export interface StreamEventUpdate {
   addTool?: ToolCallInfo
   updateTool?: { id: string; name?: string; argsDelta?: string; result?: string; success: boolean; agent?: string; duration_ms?: number }
   setStats?: ChatStats
+  /** 本轮命中的 Skill（chat:skill）；一轮至多一次，覆盖式写入。 */
+  setSkillHit?: SkillHit
   setArtifacts?: ArtifactPayload
   setGenUi?: UiNode
   setApproval?: ApprovalRequest
@@ -69,6 +72,8 @@ export interface StreamEventUpdate {
   pushArtifact?: Artifact
   /** 自动上下文压缩（chat:compressed）：告知用户历史已被折叠，不是内容丢了。 */
   setCompressed?: { removed_messages: number }
+  /** 越界告警（chat:warn）：副作用落到了 .workbaby/ 之外，强制 toast 提示用户清理。 */
+  setWarn?: { kind: string; message: string; rel_path: string; path: string }
   /** 后台任务生命周期事件（task:created/started/done）。 */
   upsertTask?: BackgroundTask
   /** 子 Agent 生命周期（subagent_start/done/error）：按 id 合并状态，不整体替换。 */
@@ -124,6 +129,11 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
       }
       return update
     }
+    case 'skill': {
+      if (!data || typeof data !== 'object') return null
+      const d = data as Partial<SkillHit>
+      return d.name ? { setSkillHit: { ...(d as SkillHit), tools: d.tools ?? [] } } : null
+    }
     case 'artifact':
             return data && typeof data === 'object' ? { setArtifacts: data as ArtifactPayload } : null
         case 'todo': {
@@ -150,6 +160,18 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
           if (!data || typeof data !== 'object') return null
           const d = data as { removed_messages?: number }
           return { setCompressed: { removed_messages: d.removed_messages ?? 0 } }
+        }
+        case 'warn': {
+          if (!data || typeof data !== 'object') return null
+          const d = data as { kind?: string; message?: string; rel_path?: string; path?: string }
+          return {
+            setWarn: {
+              kind: d.kind ?? '',
+              message: d.message ?? '工作区越界写入',
+              rel_path: d.rel_path ?? '',
+              path: d.path ?? ''
+            }
+          }
         }
         case 'subagent_start': {
           if (!data || typeof data !== 'object') return null
@@ -235,6 +257,8 @@ export function applyStreamUpdate(
     streamingThinking: { value: string }
     streamingTools: { value: ToolCallInfo[] }
     streamingStats: { value: ChatStats | null }
+    /** 本轮命中的 Skill（可选，调用方按需传入）。 */
+    streamingSkill?: { value: SkillHit | null }
     streamingArtifacts: { value: ArtifactPayload | null }
     streamingGenUi: { value: UiNode | null }
     pendingApproval: { value: ApprovalRequest | null }
@@ -261,6 +285,9 @@ export function applyStreamUpdate(
   }
   if (update.setStats) {
     state.streamingStats.value = update.setStats
+  }
+  if (update.setSkillHit && state.streamingSkill) {
+    state.streamingSkill.value = update.setSkillHit
   }
   if (update.addTool) {
     state.streamingTools.value.push(update.addTool)

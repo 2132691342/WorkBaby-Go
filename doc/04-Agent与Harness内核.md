@@ -39,7 +39,7 @@
 ## 上下文管理
 
 - **HistoryTruncator**：估算 token 超阈值时按安全切点对折截断最旧消息（切点永不落在 tool 消息上，避免孤儿 tool 结果被上游 400 拒绝）。
-- **MicroCompressor**：确定性折叠旧轮次（保留工具配对），超长时在安全切点二次截断。
+- **MicroCompressor**：确定性折叠旧轮次（保留工具配对），超长时在安全切点二次截断。折叠后的占位文案显式声明「结果已消费，请勿重跑」，避免模型为找回被折叠的载荷而重复执行有副作用的工具。
 - **AutoCompressor**：达到上下文预算（`context_window × compression_ratio`）时，用 LLM 生成六段交接摘要替换早期轮次；失败降级为 Micro。被归档的消息完整保留在库中（`status=archived`），仅退出上下文。压缩发生时发 `chat:compressed` 事件，前端提示用户。
 
 ## 检查点与续跑
@@ -61,3 +61,10 @@
 ## 事件与重放
 
 run 内所有事件带单调 `seq`，经 `event.RunEventLog` 环形缓冲 + JSONL 文件落盘。SSE 断线重连时按 `Last-Event-ID` 重放；窗口被覆盖则发 `chat:gap`，前端转全量快照。`/chat/runs/:id/events` 可导出完整事件流供自动化消费。
+
+除内核自身事件外，service 层在 run 生命周期上注入两类业务事件，与内核事件共享同一套 seq 与重放机制：
+
+| 事件 | 时机 | 用途 |
+|---|---|---|
+| `chat:skill` | 首帧正文之前（技能命中时） | 让执行过程时间线的首行展示命中的技能，叙事顺序为「技能命中 → 工具 → 回答」 |
+| `chat:warn` | 文件写入落到 `.workbaby/` 之外时 | 越界告警，前端红色提示用户回滚 |

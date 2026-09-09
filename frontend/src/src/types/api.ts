@@ -141,7 +141,7 @@ export interface Message {
 }
 
 /** 消息块类型（与后端 domain.MessageBlockKind 对齐）。 */
-export type MessageBlockKind = 'thinking' | 'tool_call' | 'tool_result' | 'artifact' | 'genui'
+export type MessageBlockKind = 'thinking' | 'tool_call' | 'tool_result' | 'artifact' | 'genui' | 'skill'
 
 /** 消息块（MessageBlockRESP）：块即行，payload 为 JSON 字符串。 */
 export interface MessageBlock {
@@ -151,6 +151,19 @@ export interface MessageBlock {
   kind: MessageBlockKind
   payload: string
   created_at: number
+}
+
+/** 本轮命中的 Skill（chat:skill 事件与 skill 消息块同构）。 */
+export interface SkillHit {
+  name: string
+  /** builtin / download / custom。 */
+  source?: string
+  version?: string
+  description?: string
+  /** 本轮放开的工具白名单；空 = 不限制。 */
+  tools?: string[]
+  /** 注入正文字符数。 */
+  injected_chars?: number
 }
 
 /** 流式聊天请求体（ChatStreamReq）。 */

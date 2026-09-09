@@ -1613,21 +1613,78 @@ kbd.chip {
   border-color: color-mix(in srgb, var(--wb-primary) 55%, var(--wb-border));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--wb-primary) 6%, transparent);
 }
-.composer-in textarea {
+/* textarea 与镜像层共享盒模型：字体/内边距/行高一处定义，改一处即同步，
+   否则高亮气泡会与真实文字错位（镜像高亮的唯一失效模式就是这个） */
+.composer-in textarea,
+.composer-in .ta-mirror {
   width: 100%;
   border: 0;
-  /* 焦点态由 .composer-in:focus-within 的圆角描边统一表达；
-     再叠一层全局 :focus-visible 描边会出现「内外两条紫框」，这里显式关掉。 */
-  outline: 0 !important;
-  resize: vertical; /* 手动纵向拉伸；脚本侧只增不减，不覆盖用户高度 */
-  max-height: 55vh;
   padding: 11px 13px 4px;
   font: inherit;
   font-size: 13px;
   line-height: 1.7;
   background: transparent;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.composer-in textarea {
+  /* 焦点态由 .composer-in:focus-within 的圆角描边统一表达；
+     再叠一层全局 :focus-visible 描边会出现「内外两条紫框」，这里显式关掉。 */
+  outline: 0 !important;
+  resize: vertical; /* 手动纵向拉伸；脚本侧只增不减，不覆盖用户高度 */
+  max-height: 55vh;
   min-height: 44px;
   color: var(--wb-ink);
+}
+.composer-in .ta-mirror {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--wb-ink);
+}
+/* 镜像态：真实文字透明，只留 caret 与选区（选区背景仍由浏览器绘制） */
+.composer-in textarea.is-mirror {
+  position: relative;
+  z-index: 2;
+  color: transparent;
+  caret-color: var(--wb-ink);
+}
+/* token 气泡：技能淡紫 / 文件·文件夹淡天蓝 / 斜杠命令淡靛蓝 / 未命中灰 */
+.tk {
+  border-radius: 5px;
+  padding: 1px 5px;
+  margin: 0 1px;
+  font-size: 12px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.tk-skill {
+  background: color-mix(in srgb, var(--wb-lavender) 14%, transparent);
+  color: var(--wb-lavender);
+}
+.tk-file {
+  background: color-mix(in srgb, var(--wb-sky) 12%, transparent);
+  color: var(--wb-sky);
+}
+.tk-cmd {
+  background: var(--wb-primary-soft);
+  color: var(--wb-primary-strong);
+}
+.tk-unk,
+.tk-mention {
+  background: var(--wb-surface-hover);
+  color: var(--wb-muted);
+}
+/* 用户气泡内的 @引用：白 20% 底，与输入框镜像高亮同源 */
+.utk {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 5px;
+  padding: 1px 5px;
+  margin: 0 1px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .composer-bar {
   display: flex;

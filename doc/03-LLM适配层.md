@@ -35,6 +35,18 @@ type Provider interface {
 
 缓存 token 的统一口径：**缓存命中是输入的子维度，不与 Input 叠加**。因此「实际计费输入 = InputTokens − CacheReadTokens」在所有协议下同义，仪表盘据此画三线图。
 
+### 上游缓存误报校正
+
+部分 OpenAI 兼容端点（如 GLM）会把 `cached_tokens` 报成等于 `prompt_tokens`，导致命中率恒为 100%、token 总数虚高。三个 adapter 在解析 usage 后统一做防御性 clamp：
+
+| 适配 | 规则 |
+|---|---|
+| openai | `CacheReadTokens > InputTokens` → 清零 + warn |
+| anthropic | `CacheRead + CacheWrite > InputTokens` → 清零 + warn |
+| ollama | `CacheReadCount > PromptEvalCount` → 清零 |
+
+存量脏数据由 `POST /admin/cleanup-token-usages` 一次性清理（`cache_read_tokens > input_tokens` 的行清零，幂等）。
+
 ## Thinking 渲染策略
 
 `thinking.go` 按端点能力选择思维链呈现方式：

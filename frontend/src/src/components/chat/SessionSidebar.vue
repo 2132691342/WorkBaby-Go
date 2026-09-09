@@ -180,8 +180,10 @@ watch(searchLower, () => {
 
 <template>
   <aside class="flex h-full w-full flex-col">
+    <!-- 顶部「会话」+ 「+」由 App.vue 的 ses-head 渲染，此处不重复；
+         SessionSidebar 只负责搜索框、多选入口、会话列表 -->
     <div class="space-y-2 border-b border-wb-border p-3">
-      <!-- 多选模式：取消 + 批量删除；否则：新建会话 -->
+      <!-- 多选模式：取消 + 批量删除 -->
       <div v-if="multiSelect" class="flex items-center gap-1.5">
         <el-button class="flex-1" size="small" @click="exitMultiSelect">
           {{ t('chat.cancelMultiSelect') }}
@@ -197,9 +199,6 @@ watch(searchLower, () => {
           {{ t('chat.deleteBatch', selectedIds.size) }}
         </el-button>
       </div>
-      <el-button v-else type="primary" class="w-full" :loading="creating" @click="emit('create')">
-        {{ creating ? t('chat.creating') : t('chat.newSession') }}
-      </el-button>
 
       <el-input v-model="search" size="small" :placeholder="t('chat.searchSession')" clearable>
         <template #prefix><el-icon><Search /></el-icon></template>
