@@ -1,15 +1,7 @@
 <script setup lang="ts">
 /**
- * 页面三态组件：loading / empty / error 三态收敛。
- *
- * <p>列表页统一用它渲染 loading / empty / error 三态，避免各页样式与文案漂移。
- * 本组件统一三态展示：
- * <ul>
- *   <li>loading → el-skeleton 骨架屏</li>
- *   <li>empty → el-empty 占位 + 文案</li>
- *   <li>error → 错误文案 + 重试按钮（emit retry）</li>
- * </ul>
- * 优先级：loading > error > empty（error 且 loading 时展示 loading，避免闪烁）。
+ * 列表页三态收敛：loading（骨架屏）/ error（文案 + 重试）/ empty（占位）。
+ * 优先级 loading > error > empty，避免状态切换闪烁。
  */
 import { CircleCloseFilled } from '@element-plus/icons-vue'
 import { t } from '@/i18n'

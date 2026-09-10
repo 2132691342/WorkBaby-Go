@@ -5,6 +5,7 @@ import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, Brain, Che
 import type { Message } from '@/types/api'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
+import { formatRelativeTime } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
 import { useFocusMode } from '@/composables/useFocusMode'
@@ -75,15 +76,8 @@ function changeTag(action: string): string {
   return t('changes.action.modify')
 }
 
-function fmtTime(iso: string | number): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const now = new Date()
-  const sameDay = d.toDateString() === now.toDateString()
-  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  return sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`
-}
+/** 消息时间统一走 utils/time。 */
+const fmtTime = formatRelativeTime
 
 /**
  * 复制文本到剪贴板（接入 @vueuse/core）。
@@ -214,73 +208,25 @@ async function forkFrom(): Promise<void> {
     class="flex flex-col"
     :class="isUser ? 'max-w-[76%] items-end' : 'w-full min-w-0 items-start'"
   >
-    <!-- 顶部 meta：名字 + 时间 + 操作按钮（原型密度：10.5px 弱化灰） -->
-    <div class="mb-1 flex items-center gap-1 px-1 text-[10.5px] text-wb-muted">
-      <span v-if="!isUser" class="font-medium text-wb-ink">WorkBaby</span>
-      <span v-if="fmtTime(message.created_at)">{{ fmtTime(message.created_at) }}</span>
-
-      <!-- 操作按钮（hover 显示；隐藏态 pointer-events-none 防幽灵 tooltip） -->
-      <div
-        class="flex items-center gap-0.5 transition-opacity"
-        :class="hovered ? 'opacity-100' : 'pointer-events-none opacity-0'"
-      >
-        <el-tooltip :content="t('chat.copy')" placement="top">
-          <el-button text size="small" circle @click="copyMessage">
-            <el-icon :size="13" :color="copiedID ? 'var(--wb-mint)' : undefined">
-              <component :is="copiedID ? Check : Copy" />
-            </el-icon>
-          </el-button>
-        </el-tooltip>
-
-        <el-tooltip v-if="isUser" :content="t('chat.edit')" placement="top">
-          <el-button text size="small" circle @click="startEdit">
-            <el-icon :size="13"><Pencil /></el-icon>
-          </el-button>
-        </el-tooltip>
-
-        <el-tooltip
-          v-if="!isUser && isLast && !streaming"
-          :content="t('chat.regenerate')"
-          placement="top"
-        >
-          <el-button text size="small" circle @click="regenerate">
-            <el-icon :size="13"><RefreshCw /></el-icon>
-          </el-button>
-        </el-tooltip>
-
-        <!-- 从此处分叉（assistant 消息；复制到该条为止的对话到新会话） -->
-        <el-tooltip v-if="!isUser && !streaming" :content="t('chat.fork')" placement="top">
-          <el-button text size="small" circle @click="forkFrom">
-            <el-icon :size="13"><GitBranch /></el-icon>
-          </el-button>
-        </el-tooltip>
-
-        <el-tooltip :content="t('chat.delete')" placement="top">
-          <el-button text size="small" circle @click="deleteMessage">
-            <el-icon :size="13" color="var(--wb-danger)"><Trash2 /></el-icon>
-          </el-button>
-        </el-tooltip>
-      </div>
-    </div>
-
-    <!-- 历史消息的思考过程回看（原型 .think 结构：圆角容器 + .hd 折叠按钮 + .bd 正文；
-         wb-ui.css 里 .think.open > .hd .chev 自动 rotate，.think.open > .bd 自动 display:block） -->
-    <div
-      v-if="!focusMode && !isUser && message.thinking && !editing"
-      class="think mt-1 w-full"
-      :class="{ open: thinkingOpen }"
-    >
+    <!-- 思考回看：无边框轻量行（对标竞品「已完成思考 · 思考了 6 秒 ⌄」），
+         展开后正文只留左侧细竖线，不套盒子、不抢正文注意力 -->
+    <div v-if="!focusMode && !isUser && message.thinking && !editing">
       <button
         type="button"
-        class="hd w-full text-left"
-        style="background: transparent; border: 0"
+        class="flex items-center gap-1.5 rounded px-1 py-0.5 text-[11.5px] text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-ink"
         @click="thinkingOpen = !thinkingOpen"
       >
-        <Brain class="ic" />
+        <Brain class="h-3.5 w-3.5" />
         <span>{{ t('chat.thoughtDone') }}</span>
-        <ChevronDown class="ic chev" />
+        <ChevronDown
+          class="h-3 w-3 transition-transform duration-200"
+          :class="thinkingOpen ? 'rotate-180' : ''"
+        />
       </button>
-      <pre class="bd max-h-48 overflow-y-auto whitespace-pre-wrap font-sans">{{ message.thinking }}</pre>
+      <pre
+        v-if="thinkingOpen"
+        class="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap border-l-2 border-wb-border pl-3 font-sans text-[11.5px] leading-[1.75] text-wb-muted"
+      >{{ message.thinking }}</pre>
     </div>
 
     <!-- 历史过程块复现：工具调用/结果落库，刷新/切会话后完整回放（原型 .tl 自带边框，不再双重包装）；
@@ -290,6 +236,7 @@ async function forkFrom(): Promise<void> {
         :tools="historyTools"
         :skill-hit="historySkillHit"
         :retryable="!streaming && isLast"
+        collapsible
         @retry="onToolRetry"
       />
     </div>
@@ -373,5 +320,54 @@ async function forkFrom(): Promise<void> {
         cost: message.cost
       }"
     />
+
+    <!-- 悬浮操作行：hover 出现在消息底部右侧（时间 + 复制/编辑/重生成/分叉/删除）。
+         常驻占位 h-6 但内容透明，避免 hover 出现时布局跳动；隐藏态
+         pointer-events-none 防幽灵 tooltip -->
+    <div
+      class="flex h-6 items-center gap-0.5 self-end transition-opacity"
+      :class="hovered ? 'opacity-100' : 'pointer-events-none opacity-0'"
+    >
+      <span
+        v-if="fmtTime(message.created_at)"
+        class="mr-1 text-[10.5px] tabular-nums text-wb-muted/70"
+      >{{ fmtTime(message.created_at) }}</span>
+      <el-tooltip :content="t('chat.copy')" placement="top">
+        <el-button text size="small" circle @click="copyMessage">
+          <el-icon :size="13" :color="copiedID ? 'var(--wb-mint)' : undefined">
+            <component :is="copiedID ? Check : Copy" />
+          </el-icon>
+        </el-button>
+      </el-tooltip>
+
+      <el-tooltip v-if="isUser" :content="t('chat.edit')" placement="top">
+        <el-button text size="small" circle @click="startEdit">
+          <el-icon :size="13"><Pencil /></el-icon>
+        </el-button>
+      </el-tooltip>
+
+      <el-tooltip
+        v-if="!isUser && isLast && !streaming"
+        :content="t('chat.regenerate')"
+        placement="top"
+      >
+        <el-button text size="small" circle @click="regenerate">
+          <el-icon :size="13"><RefreshCw /></el-icon>
+        </el-button>
+      </el-tooltip>
+
+      <!-- 从此处分叉（assistant 消息；复制到该条为止的对话到新会话） -->
+      <el-tooltip v-if="!isUser && !streaming" :content="t('chat.fork')" placement="top">
+        <el-button text size="small" circle @click="forkFrom">
+          <el-icon :size="13"><GitBranch /></el-icon>
+        </el-button>
+      </el-tooltip>
+
+      <el-tooltip :content="t('chat.delete')" placement="top">
+        <el-button text size="small" circle @click="deleteMessage">
+          <el-icon :size="13" color="var(--wb-danger)"><Trash2 /></el-icon>
+        </el-button>
+      </el-tooltip>
+    </div>
   </div>
 </template>

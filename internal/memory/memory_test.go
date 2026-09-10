@@ -130,8 +130,8 @@ func TestRecallDecayAndDedupe(t *testing.T) {
 	day := int64(86400000)
 
 	// 衰减：30 天半衰期，同分下旧记录权重约减半
-	fresh := rrfMerge([][]RecallHit{{{Kind: "episodic", Source: "a", Score: 1, Snippet: "new"}}}, 5, now)
-	old := rrfMerge([][]RecallHit{{{Kind: "episodic", Source: "b", Score: 1, CreatedAt: now - 30*day, Snippet: "old"}}}, 5, now)
+	fresh := rrfMerge([][]RecallHit{{{Kind: "episodic", Source: "a", Score: 1, Snippet: "new"}}}, 5, now, 0)
+	old := rrfMerge([][]RecallHit{{{Kind: "episodic", Source: "b", Score: 1, CreatedAt: now - 30*day, Snippet: "old"}}}, 5, now, 0)
 	if old[0].Score < fresh[0].Score*0.49 || old[0].Score > fresh[0].Score*0.51 {
 		t.Fatalf("30 天衰减应约等于半衰: fresh=%f old=%f", fresh[0].Score, old[0].Score)
 	}
@@ -141,15 +141,21 @@ func TestRecallDecayAndDedupe(t *testing.T) {
 		{{Kind: "episodic", Source: "a", Score: 1, Snippet: "用户偏好 Go 语言 开发"}},
 		{{Kind: "semantic", Source: "b", Score: 1, Snippet: "用户偏好Go语言"}},
 		{{Kind: "procedural", Source: "c", Score: 1, Snippet: "完全不同的内容"}},
-	}, 5, now)
+	}, 5, now, 0)
 	if len(merged) != 2 {
 		t.Fatalf("重复片段应合并, got %d: %+v", len(merged), merged)
 	}
 
 	// 无时间戳的命中不衰减
-	noTime := rrfMerge([][]RecallHit{{{Kind: "episodic", Source: "d", Score: 1, Snippet: "x"}}}, 5, now)
+	noTime := rrfMerge([][]RecallHit{{{Kind: "episodic", Source: "d", Score: 1, Snippet: "x"}}}, 5, now, 0)
 	if noTime[0].Score != 1.0/(rrfK+1) {
 		t.Fatalf("无时间戳不应衰减: %f", noTime[0].Score)
+	}
+
+	// 相关性下限：单源低排名 + 极度陈旧（1 年）的命中必须被过滤，不注入噪声
+	stale := rrfMerge([][]RecallHit{{{Kind: "episodic", Source: "e", Score: 1, CreatedAt: now - 365*day, Snippet: "stale"}}}, 5, now, DefaultMinRecallScore)
+	if len(stale) != 0 {
+		t.Fatalf("陈旧低分命中应被下限过滤, got %+v", stale)
 	}
 }
 
@@ -159,12 +165,20 @@ func TestRecallDecayAndDedupe(t *testing.T) {
 func TestSearchEpisodes(t *testing.T) {
 	s := newMemService(t)
 	ctx := context.Background()
-	id1, err := s.WriteEpisode(ctx, EpisodeProposal{SessionID: "SESSION_SE", Summary: "用户喜欢在下午三点喝茶"})
+	id1, err := s.WriteEpisode(ctx, EpisodeProposal{SessionID: "SESSION_SE", Summary: "用户喜欢在下午三点喝茶，偏好龙井"})
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if _, err := s.WriteEpisode(ctx, EpisodeProposal{SessionID: "SESSION_SE", Summary: "用户使用 Go 开发桌面应用"}); err != nil {
 		t.Fatalf("write: %v", err)
+	}
+	// 写入侧近重复合并：同结论换措辞重写不应再落一条（否则污染 MEMORY.md 与召回排序）
+	dupID, err := s.WriteEpisode(ctx, EpisodeProposal{SessionID: "SESSION_SE", Summary: "用户喜欢下午三点喝茶，偏好龙井"})
+	if err != nil {
+		t.Fatalf("write dup: %v", err)
+	}
+	if dupID != id1 {
+		t.Fatalf("近重复摘要应复用已有 episode: got %s want %s", dupID, id1)
 	}
 
 	rows, err := s.SearchEpisodes(ctx, "下午三点", 5)
@@ -178,6 +192,23 @@ func TestSearchEpisodes(t *testing.T) {
 	rows, err = s.SearchEpisodes(ctx, "", 5)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("empty query: want 0 hits, got %d (%v)", len(rows), err)
+	}
+
+	// 2 字中文查询：trigram 无 3 字窗口可用 → 必须由带打分的子串兜底召回，
+	// 且无关查询不得因「按时间倒序」把最新那条（与 query 无关）塞回来。
+	rows, err = s.SearchEpisodes(ctx, "下午", 5)
+	if err != nil {
+		t.Fatalf("search short: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != id1 {
+		t.Fatalf("want 1 hit for 下午（子串兜底）, got %+v", rows)
+	}
+	rows, err = s.SearchEpisodes(ctx, "园艺", 5)
+	if err != nil {
+		t.Fatalf("search miss: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("无关查询必须零命中（禁止按 created_at 兜底返回）, got %+v", rows)
 	}
 }
 

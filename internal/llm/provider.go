@@ -36,6 +36,8 @@ type ChatRequest struct {
 	Thinking    *ThinkingConfig
 	ExtraBody   map[string]any
 	User        string
+	// SessionID 会话标识：OpenAI 侧用作 prompt_cache_key，让同一会话稳定命中同一缓存分片。
+	SessionID string
 }
 
 // ChatResponse 单次非流响应。

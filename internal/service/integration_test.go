@@ -229,6 +229,23 @@ func mustGetFirstID(t *testing.T, r *repo.FileChangeRepo) string {
 	return ""
 }
 
+// TestUnbackedClaimGuard 守卫反幻觉核验：声称已产出文件的声明必须可识别，
+// 而疑问句、无完成标记的普通提及不得误判。
+func TestUnbackedClaimGuard(t *testing.T) {
+	cases := []struct {
+		content string
+		want    bool
+	}{
+		{"PPT已经保存为 AI工具介绍.pptx，放置在工作区根目录下。", true},
+		{"已成功创建 output/report.docx", true},
+		{"你说的 report.pptx 已经创建好了吗？", false},
+		{"请把结果保存为 result.md，我稍后再执行。", false},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, claimsArtifact(tc.content), "content=%q", tc.content)
+	}
+}
+
 // TestApprovalPendingRestore 守卫审批恢复：审批挂起期间可列出，前端刷新后按 id 回填。
 func TestApprovalPendingRestore(t *testing.T) {
 	bus := event.New()
@@ -257,8 +274,8 @@ func TestApprovalPendingRestore(t *testing.T) {
 		assert.Equal(t, "RUN_1", p.RunID)
 		assert.Equal(t, "SESSION_1", p.SessionID)
 		assert.True(t, p.ExpiresAt > time.Now().UnixMilli())
-		// 前端刷新后按 id 恢复决策
-		require.NoError(t, ap.Decide(p.ID, false))
+		// 前端刷新后按 id 恢复决策（空 scope = 一次性放行）
+		require.NoError(t, ap.Decide(p.ID, false, ""))
 	}
 	assert.True(t, found, "审批挂起期间 Pending 应可列出")
 	assert.False(t, <-done)

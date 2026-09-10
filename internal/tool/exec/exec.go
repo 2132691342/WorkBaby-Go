@@ -156,29 +156,113 @@ type execReq struct {
 	Cwd     string   `json:"cwd"`
 }
 
-// execMaxOutputBytes 回填前的输出读取硬上限：先限流再截断，避免 `find /`、
-// `cat 大文件` 之类命令把全量输出读进内存（CombinedOutput 无上限）造成 OOM。
-const execMaxOutputBytes = 200 << 10 // 200KB
+// Meta 声明：命令执行类（前端按 exec 类别呈现，结果按输出上限截断）。
+func (t *ExecTool) Meta() tool.ToolMeta {
+	return tool.ToolMeta{
+		Group: tool.GroupExec, Category: tool.CategoryExec, ActivityDesc: "执行命令",
+		MaxResultChars: execMaxOutputBytes, TimeoutSec: 120,
+	}
+}
 
-// cappedWriter 合并 stdout/stderr 的限流写入器：达到上限后丢弃后续字节
-//（继续计数但不缓存，保证子进程不因管道写满而阻塞，Wait 能正常结束）。
+// ActivityDescription 时间线文案显示真实命令：用户最需要看到的就是「它要干什么」。
+func (t *ExecTool) ActivityDescription(args json.RawMessage) string {
+	var req execReq
+	if json.Unmarshal(args, &req) != nil || req.Command == "" {
+		return ""
+	}
+	line := req.Command
+	if len(req.Args) > 0 {
+		line += " " + strings.Join(req.Args, " ")
+	}
+	if r := []rune(line); len(r) > 60 {
+		line = string(r[:60]) + "…"
+	}
+	return "正在执行 " + line
+}
+
+// 回填前的输出读取硬上限（先限流再截断，避免 `find /`、`cat 大文件` 把全量输出
+// 读进内存造成 OOM）。分双端保留：只留头部会丢掉错误栈与最终统计（最常要看的），
+// 只留尾部会丢掉命令回显与首屏上下文。
+const (
+	execHeadBytes      = 120 << 10 // 头部保留
+	execTailBytes      = 80 << 10  // 尾部环形保留
+	execMaxOutputBytes = execHeadBytes + execTailBytes
+)
+
+// cappedWriter 合并 stdout/stderr 的双端限流写入器：头 120KB + 尾 80KB，
+// 中间丢弃并计数（丢掉的字节仍计入返回值，保证子进程不因管道写满而阻塞）。
 type cappedWriter struct {
-	buf     bytes.Buffer
-	dropped int64
+	head    bytes.Buffer
+	tail    []byte // 环形缓冲；未写满时用 tailLen 标记有效长度
+	tailPos int
+	tailLen int
+	total   int64
 }
 
 func (w *cappedWriter) Write(p []byte) (int, error) {
-	if room := execMaxOutputBytes - w.buf.Len(); room > 0 {
-		if len(p) > room {
-			w.buf.Write(p[:room])
-			w.dropped += int64(len(p) - room)
-			return len(p), nil
+	n := len(p)
+	w.total += int64(n)
+
+	// 头部未满：优先填头
+	if room := execHeadBytes - w.head.Len(); room > 0 {
+		if len(p) <= room {
+			w.head.Write(p)
+			return n, nil
 		}
-		w.buf.Write(p)
-		return len(p), nil
+		w.head.Write(p[:room])
+		p = p[room:]
 	}
-	w.dropped += int64(len(p))
-	return len(p), nil
+	// 头部已满：进环形尾
+	if w.tail == nil {
+		w.tail = make([]byte, execTailBytes)
+	}
+	if len(p) >= execTailBytes {
+		copy(w.tail, p[len(p)-execTailBytes:])
+		w.tailPos, w.tailLen = 0, execTailBytes
+		return n, nil
+	}
+	first := copy(w.tail[w.tailPos:], p)
+	copy(w.tail, p[first:])
+	w.tailPos = (w.tailPos + len(p)) % execTailBytes
+	if w.tailLen < execTailBytes {
+		w.tailLen += len(p)
+		if w.tailLen > execTailBytes {
+			w.tailLen = execTailBytes
+		}
+	}
+	return n, nil
+}
+
+// dropped 被丢弃的字节数（双端之间未保留的部分）。
+func (w *cappedWriter) dropped() int64 {
+	return w.total - int64(w.head.Len()) - int64(w.tailLen)
+}
+
+// Output 拼装最终回填文本：头 + 丢弃提示 + 尾。
+func (w *cappedWriter) Output() string {
+	var sb strings.Builder
+	sb.WriteString(w.head.String())
+	if d := w.dropped(); d > 0 {
+		fmt.Fprintf(&sb, "\n... (output truncated, %d bytes dropped) ...\n", d)
+	}
+	if w.tailLen > 0 {
+		sb.Write(w.tailBytes())
+	}
+	return sb.String()
+}
+
+// tailBytes 环形缓冲按写入顺序还原（最旧 → 最新）。
+func (w *cappedWriter) tailBytes() []byte {
+	if w.tailLen == 0 {
+		return nil
+	}
+	if w.tailLen < execTailBytes {
+		return w.tail[:w.tailLen]
+	}
+	out := make([]byte, execTailBytes)
+	n := copy(out, w.tail[w.tailPos:])
+	copy(out[n:], w.tail[:w.tailPos])
+	return out
 }
 
 // Execute 执行命令并返回合并输出（限流读取，上限 execMaxOutputBytes）。
@@ -262,10 +346,10 @@ func (t *ExecTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 	meta := map[string]string{"exitCode": strconv.Itoa(exitCode)}
-	output := out.buf.String()
-	if out.dropped > 0 {
-		output += fmt.Sprintf("\n... (output truncated, %d bytes dropped)", out.dropped)
+	if d := out.dropped(); d > 0 {
+		meta["truncatedBytes"] = strconv.FormatInt(d, 10)
 	}
+	output := out.Output()
 	if err != nil {
 		if execCtx.Err() != nil {
 			return tool.ToolResult{Content: output, Meta: meta, Err: pkg.Wrap(4006, "exec timeout or cancelled", err)}

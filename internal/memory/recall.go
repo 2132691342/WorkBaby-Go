@@ -29,6 +29,10 @@ const rrfK = 60
 // 没有时间权重的话三年前的事实与昨天的同分，旧记忆长期霸占召回头部。
 const recallHalfLifeDays = 30.0
 
+// DefaultMinRecallScore 融合分下限：RRF 单源最低排名（1/(k+topK)）再经约 90 天衰减后的量级。
+// 低于它的命中只可能来自单源低排名且已陈旧的记忆，注入只会稀释上下文。
+const DefaultMinRecallScore = 0.002
+
 // Recall 按 query 召回多源命中，RRF 融合 + 时间衰减 + 近重复合并后降序返回。
 func (r *recall) Recall(ctx context.Context, query string, opts RecallOpts) []RecallHit {
 	if opts.TopK <= 0 {
@@ -80,12 +84,17 @@ func (r *recall) Recall(ctx context.Context, query string, opts RecallOpts) []Re
 		}
 	}
 	wg.Wait()
-	return rrfMerge(streams, opts.TopK, time.Now().UnixMilli())
+	minScore := opts.MinScore
+	if minScore <= 0 {
+		minScore = DefaultMinRecallScore
+	}
+	return rrfMerge(streams, opts.TopK, time.Now().UnixMilli(), minScore)
 }
 
 // rrfMerge 倒数排名融合：score = Σ 1/(k + rank)，rank 从 1 开始；
-// 融合后乘时间衰减因子，再做近重复合并（归一化后互为子串的片段只留高分者）。
-func rrfMerge(streams [][]RecallHit, topK int, nowMs int64) []RecallHit {
+// 融合后乘时间衰减因子，低于 minScore 的命中先丢弃，再做近重复合并
+//（归一化后互为子串的片段只留高分者）。
+func rrfMerge(streams [][]RecallHit, topK int, nowMs int64, minScore float64) []RecallHit {
 	type scored struct {
 		hit   RecallHit
 		score float64
@@ -106,6 +115,9 @@ func rrfMerge(streams [][]RecallHit, topK int, nowMs int64) []RecallHit {
 	out := make([]RecallHit, 0, len(m))
 	for _, s := range m {
 		s.hit.Score = decayScore(s.score, s.hit.CreatedAt, nowMs)
+		if s.hit.Score < minScore {
+			continue
+		}
 		out = append(out, s.hit)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })

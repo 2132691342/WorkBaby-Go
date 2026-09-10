@@ -33,8 +33,6 @@ type AutoCompressor struct {
 	provider llm.Provider
 	model    string
 	fallback MicroCompressor
-	// Notify 压缩完成回调（可选）：service 层发可见事件/日志。
-	Notify func(removed int, summary string)
 	// OnUsage 压缩摘要调用的用量回调（可选）：摘要消耗真实 token，
 	// 不上报会让「总消耗」统计低于实际。service 层据此落 token_usages。
 	OnUsage func(usage llm.TokenUsage)
@@ -121,9 +119,6 @@ func (a *AutoCompressor) CompressCtx(ctx context.Context, msgs []*llm.Message, b
 	out = append(out, msgs[tailStart:]...)
 	if EstimateTokens(out) > budgetTokens {
 		out = a.fallback.Compress(out, budgetTokens)
-	}
-	if a.Notify != nil {
-		a.Notify(len(msgs)-len(out), summary)
 	}
 	return out
 }

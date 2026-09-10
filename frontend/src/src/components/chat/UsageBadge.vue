@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { t } from '@/i18n'
+import { formatDuration } from '@/utils/time'
 
 /**
  * 消息用量徽标：从 MessageList 抽出的小型纯展示组件。
@@ -51,16 +52,8 @@ function cacheHitRate(u?: UsageShape | null): number | null {
   return Math.round((read / input) * 100)
 }
 
-/** 耗时人类可读：<60s 一位小数秒；≥60s 分秒；<1s 保留 ms 精度。 */
-function fmtDuration(ms?: number | null): string {
-  if (ms == null || ms <= 0) return ''
-  if (ms < 1000) return `${ms}ms`
-  const totalSec = ms / 1000
-  if (totalSec < 60) return `${totalSec.toFixed(1)}s`
-  const min = Math.floor(totalSec / 60)
-  const sec = Math.round(totalSec % 60)
-  return `${min}m${String(sec).padStart(2, '0')}s`
-}
+/** 耗时统一走 utils/time（口径全站一致）。 */
+const fmtDuration = formatDuration
 
 function fmtUsage(u: UsageShape | null | undefined): string {
   if (!u) return ''

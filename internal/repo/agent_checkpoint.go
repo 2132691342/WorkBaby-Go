@@ -19,9 +19,19 @@ func NewAgentCheckpointRepo(db *gorm.DB) *AgentCheckpointRepo { return &AgentChe
 func (r *AgentCheckpointRepo) Save(ctx context.Context, row *domain.AgentCheckpointDO) error {
 	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "run_id"}, {Name: "turn"}},
-		DoUpdates: clause.AssignmentColumns([]string{"messages_json", "state_json", "usage_json", "content", "thinking", "last_seq", "created_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"messages_json", "state_json", "usage_json", "content", "thinking", "created_at"}),
 	}).Create(row).Error; err != nil {
 		return pkg.Wrap(2015, "save agent checkpoint failed", err)
+	}
+	return nil
+}
+
+// DeleteBeforeTurn 删除该 run 早于指定 turn 的检查点行（每 run 只留最新快照）。
+func (r *AgentCheckpointRepo) DeleteBeforeTurn(ctx context.Context, runID string, turn int) error {
+	if err := r.db.WithContext(ctx).
+		Where("run_id = ? AND turn < ?", runID, turn).
+		Delete(&domain.AgentCheckpointDO{}).Error; err != nil {
+		return pkg.Wrap(2015, "prune agent checkpoints failed", err)
 	}
 	return nil
 }

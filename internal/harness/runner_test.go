@@ -858,6 +858,12 @@ func guardRunner(mode tool.SessionMode, approver *countingApprover) *Runner {
 	return r.WithToolGate(tool.NewGate(mode), approver.Approve)
 }
 
+// guardLayer 单独驱动策略门这一层：守卫已收敛为可组合 layer，测试按层定位即可，
+// 不必为了测一道闸门而把整条 run 跑起来。
+func guardLayer(r *Runner, ctx context.Context, runID, sessionID string, turn int, call llm.NormalizedToolCall, t tool.Tool) *llm.Message {
+	return r.layerPolicyGate(&toolCallCtx{ctx: ctx, runID: runID, sessionID: sessionID, turn: turn, call: call, tool: t})
+}
+
 func guardCall(command string) llm.NormalizedToolCall {
 	return llm.NormalizedToolCall{
 		ID: "c1", Name: "guarded",
@@ -870,7 +876,7 @@ func testGateSafeCommandSkipsApproval(t *testing.T) {
 	approver := &countingApprover{ok: true}
 	r := guardRunner(tool.SessionModeDefault, approver)
 
-	msg := r.gateTool(context.Background(), "RUN_G", "SES_G", 0, guardCall("git status"), classifiedTool{})
+	msg := guardLayer(r, context.Background(), "RUN_G", "SES_G", 0, guardCall("git status"), classifiedTool{})
 	require.Nil(t, msg, "安全命令应放行")
 	assert.Zero(t, approver.calls, "安全命令不应触发审批")
 }
@@ -880,7 +886,7 @@ func testGateAskUsesPerCallRisk(t *testing.T) {
 	approver := &countingApprover{ok: true}
 	r := guardRunner(tool.SessionModeDefault, approver)
 
-	msg := r.gateTool(context.Background(), "RUN_G", "SES_G", 0, guardCall("rm -rf /"), classifiedTool{})
+	msg := guardLayer(r, context.Background(), "RUN_G", "SES_G", 0, guardCall("rm -rf /"), classifiedTool{})
 	require.Nil(t, msg, "批准后放行")
 	assert.Equal(t, 1, approver.calls, "单层闸门：只问一次")
 	assert.Equal(t, "rm -rf /", approver.desc, "审批描述应为具体命令")
@@ -888,7 +894,7 @@ func testGateAskUsesPerCallRisk(t *testing.T) {
 
 	denied := &countingApprover{ok: false}
 	r2 := guardRunner(tool.SessionModeDefault, denied)
-	require.NotNil(t, r2.gateTool(context.Background(), "RUN_G", "SES_G", 0, guardCall("rm -rf /"), classifiedTool{}),
+	require.NotNil(t, guardLayer(r2, context.Background(), "RUN_G", "SES_G", 0, guardCall("rm -rf /"), classifiedTool{}),
 		"拒绝应返回 tool 消息（Refused 语义）")
 }
 
@@ -897,7 +903,7 @@ func testGateYoloNeverAsks(t *testing.T) {
 	approver := &countingApprover{ok: true}
 	r := guardRunner(tool.SessionModeYolo, approver)
 
-	msg := r.gateTool(context.Background(), "RUN_G", "SES_G", 0, guardCall("anything"), classifiedTool{})
+	msg := guardLayer(r, context.Background(), "RUN_G", "SES_G", 0, guardCall("anything"), classifiedTool{})
 	require.Nil(t, msg)
 	assert.Zero(t, approver.calls)
 }
@@ -924,7 +930,7 @@ func testGateAllowKeepsCommandLevelCheck(t *testing.T) {
 				WithToolGate(tool.NewGate(tool.SessionModeDefault).Allow(tc.tool.Name()), approver.Approve)
 
 			call := llm.NormalizedToolCall{ID: "c1", Name: tc.tool.Name(), Arguments: json.RawMessage(tc.args)}
-			msg := r.gateTool(context.Background(), "RUN_A", "SES_A", 0, call, tc.tool)
+			msg := guardLayer(r, context.Background(), "RUN_A", "SES_A", 0, call, tc.tool)
 			require.Nil(t, msg, "批准后应放行")
 			assert.Equal(t, tc.wantCalls, approver.calls)
 		})

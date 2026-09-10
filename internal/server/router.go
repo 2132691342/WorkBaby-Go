@@ -200,6 +200,11 @@ func (s *Server) registerRoutes() {
 	v1.GET("/chat/sessions/:id/todos", func(c *gin.Context) {
 		OK(c, h.GetSessionTodos(c.Param("id")))
 	})
+	// 计划项勾选：变量参数在路径末尾（CLAUDE.md §2.12）
+	v1.POST("/chat/sessions/:id/todos/:itemID/toggle", func(c *gin.Context) {
+		v, err := h.ToggleSessionTodo(c.Param("id"), c.Param("itemID"))
+		unwrap(c, v, err)
+	})
 	v1.POST("/chat/sessions/:id/clear", func(c *gin.Context) { Fail(c, h.ClearMessages(c.Param("id"))) })
 	v1.POST("/chat/messages/:sid/delete/:id", func(c *gin.Context) {
 		Fail(c, h.DeleteMessage(c.Param("sid"), c.Param("id")))

@@ -5,6 +5,7 @@ import type { Session } from '@/types/api'
 import { t } from '@/i18n'
 import { useDialog } from '@/composables/useDialog'
 import { useChatStore } from '@/stores/chat'
+import { formatRelativeTime } from '@/utils/time'
 
 /**
  * 会话侧边栏：树形分组 + 搜索 + 多选批量删除。
@@ -181,15 +182,8 @@ const grouped = computed<Group[]>(() => {
   return groups
 })
 
-function fmtTime(iso: string | number | null): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const now = new Date()
-  const sameDay = d.toDateString() === now.toDateString()
-  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  return sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`
-}
+/** 会话时间统一走 utils/time（含「昨天」分支，与全站口径一致）。 */
+const fmtTime = formatRelativeTime
 
 // 命中搜索时自动清空多选（避免搜索态的 checkbox 残留）
 watch(searchLower, () => {

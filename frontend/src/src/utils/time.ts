@@ -29,7 +29,7 @@ export function formatDateTime(iso: string | number | null | undefined): string 
     + `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
 }
 
-/** ``。 */
+/** `2026-09-10`（仅日期）。 */
 export function formatDate(iso: string | number | null | undefined): string {
   const d = toDate(iso)
   if (!d) return TIME_EMPTY
@@ -50,4 +50,18 @@ export function formatRelativeTime(iso: string | number | null | undefined): str
   if (d.getTime() >= startOfToday - 86400000) return `${t('common.yesterday')} ${hm}`
   if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}/${d.getDate()} ${hm}`
   return formatDateTime(iso)
+}
+
+/**
+ * 耗时人类可读：<1s 保留毫秒；<60s 一位小数秒；≥60s 分秒。
+ * 全站唯一实现（工具行、用量徽标、回合摘要共用），避免各处口径不一。
+ */
+export function formatDuration(ms?: number | null): string {
+  if (ms == null || ms <= 0) return ''
+  if (ms < 1000) return `${ms}ms`
+  const totalSec = ms / 1000
+  if (totalSec < 60) return `${totalSec.toFixed(1)}s`
+  const min = Math.floor(totalSec / 60)
+  const sec = Math.round(totalSec % 60)
+  return `${min}m${pad2(sec)}s`
 }

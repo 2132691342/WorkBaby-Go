@@ -16,11 +16,39 @@ import (
 
 // frontmatter SKILL.md 头部 YAML 结构。
 type frontmatter struct {
-	Name         string   `yaml:"name"`
-	Description  string   `yaml:"description"`
-	WhenToUse    []string `yaml:"when_to_use"`
-	AllowedTools []string `yaml:"allowed_tools"`
-	Version      string   `yaml:"version"`
+	Name         string        `yaml:"name"`
+	Description  string        `yaml:"description"`
+	WhenToUse    whenToUseList `yaml:"when_to_use"`
+	AllowedTools []string      `yaml:"allowed_tools"`
+	Version      string        `yaml:"version"`
+}
+
+// whenToUseList 触发词列表；兼容 YAML 标量（when_to_use: pdf）与序列两种写法，
+// 只认序列会让标量写法的技能解析失败被静默跳过。
+type whenToUseList []string
+
+// UnmarshalYAML 标量按单个触发词处理；序列按条目列表处理；其余形状按空处理（交由兜底）。
+func (w *whenToUseList) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := value.Decode(&s); err != nil {
+			return err
+		}
+		if strings.TrimSpace(s) != "" {
+			*w = []string{s}
+		}
+		return nil
+	case yaml.SequenceNode:
+		var list []string
+		if err := value.Decode(&list); err != nil {
+			return err
+		}
+		*w = list
+		return nil
+	default:
+		return nil
+	}
 }
 
 // ParseSKILLMD 解析 SKILL.md → SkillDO。
@@ -60,7 +88,7 @@ func ParseSKILLMD(data []byte, source domain.SkillSourceKind, ref string) (*doma
 	}
 	// 缺 when_to_use 时退回 skill 名兜底：触发词为空会让 Skill 永远匹配不上，
 	// 表现为「装进去了但一次都触发不了」的静默死功能。
-	whenToUse := strings.Join(fm.WhenToUse, "\n")
+	whenToUse := strings.Join([]string(fm.WhenToUse), "\n")
 	if strings.TrimSpace(whenToUse) == "" {
 		whenToUse = fm.Name
 	}

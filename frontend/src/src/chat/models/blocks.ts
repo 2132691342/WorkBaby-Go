@@ -172,6 +172,18 @@ export function stopReasonSeverity(reason: string | null | undefined): StopSever
  */
 export const REFUSED_RESULT_TEXT = '已拒绝：用户未批准该工具调用'
 
+/**
+ * 工具结果文本协议常量（仅用于回读历史数据）。
+ *
+ * 历史消息把工具结果落成带前缀的纯文本，渲染与判定必须与当时的写法一致；
+ * 这些串是协议而非文案，集中在此定义，禁止散落到组件里做字面量判断
+ * （改文案时不会连带改坏协议解析）。
+ */
+export const RESULT_REFUSED_PREFIX = '已拒绝'
+export const RESULT_ERROR_PREFIX = 'error: '
+/** 剥掉整行 error 头（保留后续正文）。 */
+export const RESULT_ERROR_LINE_RE = /^error: [^\n]*\n?/
+
 /** 终止原因 → i18n key（字典 stop.reason.*）；未识别返回空串（消费方给兜底文案）。 */
 export function stopReasonText(reason: string | null | undefined): string {
   switch (reason) {
@@ -281,9 +293,9 @@ export function toolsToBlocks(tools: ToolCallInfo[], messageId: string): Message
       created_at: now
     })
     if (t.result !== undefined) {
-      const refused = t.result.startsWith('已拒绝') || t.result === REFUSED_RESULT_TEXT
+      const refused = t.result.startsWith(RESULT_REFUSED_PREFIX) || t.result === REFUSED_RESULT_TEXT
       const isError = t.state === 'error'
-      const content = isError ? t.result.replace(/^error: [^\n]*\n?/, '') : t.result
+      const content = isError ? t.result.replace(RESULT_ERROR_LINE_RE, '') : t.result
       blocks.push({
         id: `${messageId}-local-result-${seq}`,
         message_id: messageId,
@@ -293,7 +305,7 @@ export function toolsToBlocks(tools: ToolCallInfo[], messageId: string): Message
           tool_call_id: t.id,
           name: t.name,
           content,
-          error: isError && !refused ? t.result.replace(/^error: /, '').split('\n')[0] : '',
+          error: isError && !refused ? t.result.replace(RESULT_ERROR_PREFIX, '').split('\n')[0] : '',
           refused
         }),
         created_at: now
@@ -317,7 +329,7 @@ export function blocksToToolCalls(blocks: ResolvedBlock[]): ToolCallInfo[] {
       })
     } else if (b.kind === 'tool_result' && b.data) {
       const d = b.data as Partial<ToolResultBlockData>
-      const text = d.error ? `error: ${d.error}\n${d.content ?? ''}` : (d.content ?? '')
+      const text = d.error ? `${RESULT_ERROR_PREFIX}${d.error}\n${d.content ?? ''}` : (d.content ?? '')
       const hit = calls.get(d.tool_call_id ?? '')
       if (hit) {
         hit.result = d.refused ? REFUSED_RESULT_TEXT : text

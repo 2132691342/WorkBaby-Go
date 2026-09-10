@@ -234,6 +234,27 @@ async function onDeleteSession(): Promise<void> {
   }
 }
 
+/**
+ * /context 弹窗的优化建议：光看明细用户未必知道该动哪里。
+ * 只给两条确定性结论——某一段占比过高（可关对应来源）、总量逼近上限（该压缩了）。
+ */
+const ctxAdvice = computed<string[]>(() => {
+  const u = contextUsage.value
+  if (!u) return []
+  const out: string[] = []
+  const heaviest = u.segments.reduce<{ title: string; ratio: number } | null>(
+    (max, s) => (max == null || s.ratio > max.ratio ? { title: s.title, ratio: s.ratio } : max),
+    null
+  )
+  if (heaviest && heaviest.ratio >= 400) {
+    out.push(t('ctx.adviceHeavySegment', heaviest.title, (heaviest.ratio / 10).toFixed(0)))
+  }
+  if (u.used_ratio >= 700) {
+    out.push(t('ctx.adviceCompact', (u.used_ratio / 10).toFixed(0)))
+  }
+  return out
+})
+
 /** 手动压缩：可附带「保留指示」与自定义保留窗口。 */
 const showCompact = ref(false)
 const showContext = ref(false)
@@ -671,6 +692,10 @@ function onHeaderCommand(cmd: string): void {
           </div>
         </div>
         <p v-else class="text-xs text-wb-muted">{{ t('ctx.hintNoSegments') }}</p>
+        <!-- 优化建议：只给「看到明细也未必知道该怎么办」的那两条（占比过高 / 总量逼近上限） -->
+        <ul v-if="ctxAdvice.length > 0" class="mt-3 space-y-1 text-[11px] text-wb-warn">
+          <li v-for="(advice, i) in ctxAdvice" :key="i">· {{ advice }}</li>
+        </ul>
         <p class="mt-3 text-[11px] text-wb-muted">
           {{ t('ctx.messages', contextUsage.message_count) }} · {{ t('ctx.tools', contextUsage.tool_count) }}
         </p>

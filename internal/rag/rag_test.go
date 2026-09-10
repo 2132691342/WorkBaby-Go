@@ -98,8 +98,8 @@ func TestIndexAndSearchChinese(t *testing.T) {
 	}
 }
 
-// TestSearchShortChineseQuery 回归：「部署」「报错」这类 2 字中文查询落入 trigram
-// 盲区（最小 3 字符），必须经 LIKE 兜底召回相关内容并按相关性排序，
+// TestSearchShortChineseQuery 回归：「部署」「报错」这类 2 字中文查询是中文场景最高频的
+// 查询长度，必须能召回相关内容（unicode61 逐字分词下走 FTS，否则 LIKE 兜底），
 // 而不是静默空结果（模型会据此编造答案）或按 created_at 返回无关内容。
 func TestSearchShortChineseQuery(t *testing.T) {
 	gdb := newRagTestDB(t)

@@ -15,14 +15,12 @@ import (
 
 // Checkpoint 单轮结束后的运行快照。
 //
-// Messages 仅存本轮新增切片（自 LastSeq 起），Resume 由 adapter 与 DB 完整历史拼接：
-// 旧实现每轮全量落库（30 轮 run ≈ 30× 全文），新版 1× 全量 + 29× 增量，磁盘占用降一个数量级。
+// 语义上是「可覆盖的最新一轮」：存储实现每 run 只留最后一个 turn 的快照
+// （Resume 只认最后一轮），逐轮累积会让一次 30 轮 run 放大成 30× 全文。
 type Checkpoint struct {
-	RunID     string `json:"runID"`
-	SessionID string `json:"sessionID"`
-	Turn      int    `json:"turn"`
-	// LastSeq 增量起点：Messages[0].Seq 之前的消息由 adapter 从 chat_messages 重建。
-	LastSeq        int64          `json:"lastSeq"`
+	RunID          string         `json:"runID"`
+	SessionID      string         `json:"sessionID"`
+	Turn           int            `json:"turn"`
 	Messages       []*llm.Message `json:"messages"`
 	State          RunState       `json:"state"`
 	AssistantMsgID string         `json:"assistantMsgID,omitempty"` // Resume 续跑落回同一条 assistant 消息

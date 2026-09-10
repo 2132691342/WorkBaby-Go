@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { RefreshCw } from '@/components/common/icons'
 import { t } from '@/i18n'
+import { formatDuration } from '@/utils/time'
 import { RESUMABLE_STOP_REASONS, stopReasonSeverity, stopReasonText } from '@/chat/models/blocks'
 
 /**
@@ -13,6 +14,8 @@ import { RESUMABLE_STOP_REASONS, stopReasonSeverity, stopReasonText } from '@/ch
 const props = defineProps<{
   stopReason: string | null
   streaming: boolean
+  /** 本轮 run 耗时（ms）；有值时把终态说成人话（「你在 12s 后停止」）。 */
+  elapsedMs?: number | null
 }>()
 
 const emit = defineEmits<{
@@ -21,6 +24,11 @@ const emit = defineEmits<{
 }>()
 
 const text = computed(() => {
+  // 人话优先：用户主动停止且知道耗时 → 「你在 12s 后停止」
+  //（把系统状态翻译成用户做过的事，而不是丢一个「cancelled」）
+  if (props.stopReason === 'cancelled' && (props.elapsedMs ?? 0) > 0) {
+    return t('chat.stoppedByUserAfter', formatDuration(props.elapsedMs))
+  }
   const key = stopReasonText(props.stopReason ?? '')
   return key ? t(key) : t('chat.stoppedByUser')
 })

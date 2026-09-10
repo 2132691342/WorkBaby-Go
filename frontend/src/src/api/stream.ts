@@ -89,8 +89,21 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
           injected_chars: typeof p.injected_chars === 'number' ? p.injected_chars : 0
         }
       }
-    case 'chat:tool':
-      return { type: 'tool_call', data: { id: p.id, name: p.name, args: p.arguments, agent: p.agent ?? '' } }
+    case 'chat:tool': {
+      // activity 由工具自述（"正在编辑 app.ts"）：前端直接展示动词，不维护名称映射。
+      // 空值不写进载荷，避免下游为「空字符串」再做一次判断。
+      const activity = typeof p.activity === 'string' ? p.activity : ''
+      return {
+        type: 'tool_call',
+        data: {
+          id: p.id,
+          name: p.name,
+          args: p.arguments,
+          agent: p.agent ?? '',
+          ...(activity ? { activity } : {})
+        }
+      }
+    }
     case 'chat:tool-result':
       return {
         type: 'tool_result',
@@ -117,7 +130,9 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
           id: p.id,
           command: p.command ?? '',
           reason: p.reason ?? '',
-          risk: p.risk === 'irreversible' ? 'irreversible' : p.risk === 'input_required' ? 'input_required' : 'needs_approval'
+          risk: p.risk === 'irreversible' ? 'irreversible' : p.risk === 'input_required' ? 'input_required' : 'needs_approval',
+          // 后端声明是否允许「本会话允许」：不可逆操作恒为 false，前端据此隐藏该选项
+          can_remember: p.can_remember === true
         }
       }
     case 'chat:approval-decided':
@@ -165,7 +180,23 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
     case 'task:done':
       return { type: 'task', data: { task: p.task } }
     case 'chat:compressed':
-      return { type: 'compressed', data: { removed_messages: p.removed_messages ?? 0 } }
+      return {
+        type: 'compressed',
+        data: {
+          removed_messages: p.removed_messages ?? 0,
+          filter_key: p.filter_key ? String(p.filter_key) : '',
+          recovery_refs: Array.isArray(p.recovery_refs) ? p.recovery_refs.map(String) : []
+        }
+      }
+    case 'chat:context-trimmed':
+      // 上下文按预算裁剪（system 段超限被丢）：回答质量可能受影响，必须让用户看到原因
+      return {
+        type: 'context_trimmed',
+        data: {
+          dropped_segments: Array.isArray(p.dropped_segments) ? p.dropped_segments.map(String) : [],
+          budget_runes: Number(p.budget_runes ?? 0)
+        }
+      }
     default:
       return null
   }
@@ -201,7 +232,9 @@ const EVENT_NAMES = [
   // 建流瞬时错误自动重试提示
   'chat:retry',
   // 自动上下文压缩（达到预算阈值时后端自动触发，需要让用户看见）
-  'chat:compressed'
+  'chat:compressed',
+  // 上下文按预算裁剪（system 段超限被丢，回答质量受影响需要可解释）
+  'chat:context-trimmed'
 ] as const
 
 /** 重连退避：500ms 起步指数递增，8s 封顶。 */

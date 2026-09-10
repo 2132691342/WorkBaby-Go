@@ -36,7 +36,7 @@
 ```
 
 - 业务全部走 HTTP（`{code,message,data}` 统一响应），前端可脱离壳独立调试；
-- Agent 内核 `harness` 不依赖任何上层：LLM/工具/记忆/钩子全接口注入，ReAct 循环 + 六钩子（LoopHooks）+ 检查点唯一出口；
+- Agent 内核 `harness` 不依赖任何上层：LLM/工具/记忆/钩子全接口注入，ReAct 循环 + 可插拔钩子（LoopHooks）+ 检查点唯一出口；
 - 能力接入走统一契约 `capability`：Preload（上下文注入）/ Tools（模型调用）/ Capture（run 后沉淀）三通道，新增能力注册一行即接入。
 
 ## 快速开始
@@ -69,12 +69,12 @@ internal/
   cron/ channel/ runtime/ pkg/ …        定时/通知/内置运行时/叶子工具
 frontend/src/src/       Vue 3 工程（api / stores / components / chat）
 assets/                 内置 Skill、图标、用户手册（/api/v1/docs）
-doc/                    设计文档（17 篇）
+doc/                    设计文档（18 篇）
 ```
 
 ## 文档
 
-- 设计与实现：[`doc/README.md`](doc/README.md)（17 篇，架构 → 各模块 → API 契约 → 构建分发）；
+- 设计与实现：[`doc/README.md`](doc/README.md)（18 篇，架构 → 各模块 → API 契约 → 构建分发）；
 - 工程规范：[`CLAUDE.md`](CLAUDE.md)（编码前必读，冲突以它为准）；
 - 用户手册：[`assets/docs/`](assets/docs/)，应用内经 `GET /api/v1/docs` 查看；
 - 架构门禁：`powershell -ExecutionPolicy Bypass -File scripts/check-boundaries.ps1`。

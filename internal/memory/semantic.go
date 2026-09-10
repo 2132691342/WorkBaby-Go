@@ -51,7 +51,7 @@ func (s *semantic) Count(ctx context.Context) (int64, error) {
 
 // Search 召回（并入 FTS5）：
 //  1. 优先 FTS5 三列 BM25 召回（memory_facts_fts，写路径同事务索引）；
-//  2. FTS 零命中或不可用（trigram 需 ≥3 字符，短查询天然不命中）→ 回退确定性子串扫描。
+//  2. FTS 零命中或不可用（query 无 ≥2 字 token / 词形不在索引中）→ 回退确定性子串扫描。
 func (s *semantic) Search(ctx context.Context, query string, topK int) []RecallHit {
 	if query == "" {
 		return nil

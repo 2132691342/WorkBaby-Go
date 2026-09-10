@@ -59,9 +59,20 @@ describe('解码器', () => {
     expect(
       decodeStreamEvent({
         type: 'tool_approval_request',
-        data: { id: 'APR_1', command: 'go test', reason: '需要你确认', risk: 'irreversible' }
+        data: { id: 'APR_1', command: 'go test', reason: '需要你确认', risk: 'irreversible', can_remember: false }
       })
-    ).toEqual({ setApproval: { id: 'APR_1', command: 'go test', reason: '需要你确认', risk: 'irreversible' } })
+    ).toEqual({
+      setApproval: { id: 'APR_1', command: 'go test', reason: '需要你确认', risk: 'irreversible', canRemember: false }
+    })
+    // can_remember=true 时透传（前端据此决定是否显示「本会话允许」）
+    expect(
+      decodeStreamEvent({
+        type: 'tool_approval_request',
+        data: { id: 'APR_2', command: 'go test', reason: '需要你确认', risk: 'needs_approval', can_remember: true }
+      })
+    ).toEqual({
+      setApproval: { id: 'APR_2', command: 'go test', reason: '需要你确认', risk: 'needs_approval', canRemember: true }
+    })
 
     expect(decodeStreamEvent({ type: 'approval_decided', data: { id: 'APR_1', decision: 'approved' } }))
       .toEqual({ clearApproval: { id: 'APR_1', decision: 'approved' } })

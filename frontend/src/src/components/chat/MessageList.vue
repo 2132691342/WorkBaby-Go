@@ -248,6 +248,7 @@ function isNearCurrent(i: number): boolean {
       <StopReasonBanner
         :stop-reason="stopReason"
         :streaming="streaming"
+        :elapsed-ms="chat.stopElapsedMs"
         @continue="onContinue"
         @dismiss="chat.dismissStopReason()"
       />

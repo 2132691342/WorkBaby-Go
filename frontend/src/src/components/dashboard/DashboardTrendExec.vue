@@ -73,6 +73,22 @@ const bento = [
   { icon: BrainIcon, titleKey: 'dashboard.go.memory', descKey: 'dashboard.go.memoryDesc', to: '/memory' }
 ]
 
+// 记忆中心入口展示真实三类记忆总数（此前是写死的「248 条」占位文案）。
+const memoryTotal = computed2(() => {
+  const s = stats.value
+  if (!s) return null
+  return (s.memory_episodes ?? 0) + (s.memory_facts ?? 0) + (s.memory_procedures ?? 0)
+})
+
+function descText(b: (typeof bento)[number]): string {
+  if (b.to === '/memory') {
+    return memoryTotal.value != null
+      ? t('dashboard.go.memoryDesc', memoryTotal.value)
+      : t('dashboard.go.memoryEmpty')
+  }
+  return t(b.descKey)
+}
+
 function go(to: string): void {
   void router.push(to)
 }
@@ -156,7 +172,7 @@ function fmtTokens(n: number): string {
           <div class="mini-tile"><component :is="b.icon" class="ic" /></div>
           <div>
             <h5>{{ t(b.titleKey) }}</h5>
-            <p>{{ t(b.descKey) }}</p>
+            <p>{{ descText(b) }}</p>
           </div>
         </button>
       </div>

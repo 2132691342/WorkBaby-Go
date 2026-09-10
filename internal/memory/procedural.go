@@ -52,13 +52,29 @@ func (p *procedural) Count(ctx context.Context) (int64, error) {
 	return p.repo.Count(ctx)
 }
 
-// Search 召回：query 切词后任一 token 命中 name/steps 即返回。
+// Search 召回：优先 memory_procedures_fts 的 BM25 召回，无 token / 零命中时回退子串扫描。
 //
-// 旧实现用整条 query 做子串匹配——「帮我总结 xxx」永远匹配不到 "tool-flow-read_file"；
-// 切词后「读文件」「整理」等词才能关联到对应程序。
+// 子串扫描是兜底而非主路：它每次都要把全表拉回内存（无索引可用），且无法排序打分。
 func (p *procedural) Search(ctx context.Context, query string, topK int) []RecallHit {
+	if query == "" {
+		return nil
+	}
+	if hits, err := p.repo.SearchFTS(ctx, query, topK); err == nil && len(hits) > 0 {
+		out := make([]RecallHit, 0, len(hits))
+		for i := range hits {
+			out = append(out, RecallHit{
+				Kind:      domain.MemoryKindProcedural,
+				Score:     1,
+				Source:    hits[i].ID,
+				Title:     hits[i].Name,
+				Snippet:   snippet(parseSteps(hits[i].Steps), 200),
+				CreatedAt: hits[i].CreatedAt,
+			})
+		}
+		return out
+	}
 	rows, err := p.repo.List(ctx, 200)
-	if err != nil || query == "" {
+	if err != nil {
 		return nil
 	}
 	toks := pkg.SplitTokens(query)

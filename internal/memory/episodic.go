@@ -25,7 +25,11 @@ func newEpisodic(r *repo.MemoryEpisodeRepo, home string) *episodic {
 }
 
 // Write 落库 episode + 写文件快照（快照失败仅忽略，DB 是真相源）。
+// 写入前做近重复合并：同一会话反复沉淀同一结论时只保留首条。
 func (e *episodic) Write(ctx context.Context, p EpisodeProposal) (string, error) {
+	if dupID, err := e.nearDuplicate(ctx, p.SessionID, p.Summary); err == nil && dupID != "" {
+		return dupID, nil
+	}
 	id := pkg.NewID(domain.IDMemoryEpisode)
 	transcriptJSON, err := json.Marshal(p.Transcript)
 	if err != nil {
@@ -52,6 +56,72 @@ func (e *episodic) Write(ctx context.Context, p EpisodeProposal) (string, error)
 	}
 	return id, nil
 }
+
+// nearDuplicate 在同一会话的最近 episode 里找近重复摘要；命中返回已有 id。
+//
+// 写入侧去重（召回侧已有 dedupeSnippets，但那只在注入时生效）：
+// 同一结论换几种措辞反复落库，会同时污染 MEMORY.md、FTS 命中与召回排序。
+func (e *episodic) nearDuplicate(ctx context.Context, sessionID, summary string) (string, error) {
+	if sessionID == "" || strings.TrimSpace(summary) == "" {
+		return "", nil
+	}
+	if len([]rune(normalizeSnippet(summary))) < nearDupMinRunes {
+		// 过短摘要的 Dice 系数噪声太大（几个字相同就超过阈值），宁可多存也不误并
+		return "", nil
+	}
+	rows, err := e.repo.ListBySession(ctx, sessionID, nearDupScan)
+	if err != nil {
+		return "", err
+	}
+	for i := range rows {
+		if similarity(rows[i].Summary, summary) >= nearDupThreshold {
+			return rows[i].ID, nil
+		}
+	}
+	return "", nil
+}
+
+// similarity 字符二元组 Dice 系数（0~1）：对中文无需分词，对改写/增删词较稳健。
+// 计数一律按 rune——按字节算会让中文相似度被低估 3 倍，去重直接失效。
+func similarity(a, b string) float64 {
+	na, nb := []rune(normalizeSnippet(a)), []rune(normalizeSnippet(b))
+	if len(na) == 0 || len(nb) == 0 {
+		return 0
+	}
+	if string(na) == string(nb) {
+		return 1
+	}
+	if len(na) < 2 || len(nb) < 2 {
+		return 0
+	}
+	ba, bb := bigrams(na), bigrams(nb)
+	inter := 0
+	for g, ca := range ba {
+		if cb, ok := bb[g]; ok {
+			if ca < cb {
+				inter += ca
+			} else {
+				inter += cb
+			}
+		}
+	}
+	return 2 * float64(inter) / float64(len(na)-1+len(nb)-1)
+}
+
+// bigrams 字符二元组计数（已按 rune 切分）。
+func bigrams(r []rune) map[string]int {
+	out := make(map[string]int, len(r))
+	for i := 0; i+1 < len(r); i++ {
+		out[string(r[i:i+2])]++
+	}
+	return out
+}
+
+const (
+	nearDupScan      = 20   // 只与最近 N 条比较：更早的记忆语义早已不同
+	nearDupThreshold = 0.7  // 相似度阈值：低于它更像「新结论」而非重复
+	nearDupMinRunes  = 10   // 参与去重的最短摘要长度（rune）
+)
 
 // Search 检索摘要。
 func (e *episodic) Search(ctx context.Context, query string, topK int) []RecallHit {

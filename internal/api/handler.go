@@ -417,11 +417,20 @@ func (h *Handler) Startup(ctx context.Context) error {
 	})
 	h.memProxy = service.NewMemoryService(h.memSvc)
 
-	// Skill 系统：内置 Skill upsert + Registry 装载（skills 表唯一真相源）
+	// Skill 系统：内置技能入库 + 全局技能目录同步（工作区目录在 run 前叠加）
+	globalSkillDir := filepath.Join(paths.Home, "skills")
+	if err := os.MkdirAll(globalSkillDir, 0o755); err != nil {
+		pkg.L.Warn("mkdir global skills dir failed", "dir", globalSkillDir, "err", err)
+	}
 	skillRepo := repo.NewSkillRepo(gdb)
-	h.skillSvc = service.NewSkillService(skillRepo, skill.NewRegistry())
+	h.skillSvc = service.NewSkillService(skillRepo, skill.NewRegistry()).
+		WithGlobalDir(globalSkillDir)
 	if err := h.skillSvc.SyncBuiltin(ctx); err != nil {
 		return err
+	}
+	// 全局目录同步失败只告警：技能缺失影响能力，不应阻断应用启动
+	if err := h.skillSvc.SyncGlobal(ctx); err != nil {
+		pkg.L.Warn("sync global skills dir failed", "dir", globalSkillDir, "err", err.Error())
 	}
 
 	// MCP：外部工具源；启动失败只标记 unready，不阻断
@@ -447,7 +456,10 @@ func (h *Handler) Startup(ctx context.Context) error {
 		WithMessageBlocks(repo.NewMessageBlockRepo(gdb)).
 		WithRunRecords(repo.NewRunRecordRepo(gdb)).
 		WithExecutionRegistry(h.execs).
-		WithApprovalService(h.approvalSvc)
+		WithApprovalService(h.approvalSvc).
+		WithSkillSync(func(ctx context.Context, wsPath string) error {
+			return h.skillSvc.SyncWorkspace(ctx, wsPath)
+		})
 
 	// 目录信任：恒信任根 = 全局工作区 + 会话工作区根 + 数据目录本身；
 	// exec 的 cwd 不在根内时走 ask → 走审批门 → 批准后落盘 allow。
@@ -560,6 +572,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 				Description: sk.Skill.Description,
 			}, true
 		},
+		h.skillSvc.Summaries,
 	)), capability.OrderSkill)
 	registerCap(capability.NewWorkflow(h.workflowSvc), capability.OrderWorkflow)
 	// 能力暴露的工具统一注册（knowledge_search / memory_write / run_workflow）

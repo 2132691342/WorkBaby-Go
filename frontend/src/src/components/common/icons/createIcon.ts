@@ -4,16 +4,8 @@ import { defineComponent, h } from 'vue'
 export type IconNode = readonly [string, Record<string, string | number | undefined>]
 
 /**
- * 自绘图标工厂：行为与 lucide-vue-next 完全一致（size / color / stroke-width props），
- * 替代 EP 图标库缺失的图标（Bot / Brain / Sparkles / PawPrint / Rocket / GitBranch 等）。
- *
- * <p>设计说明（图标统一）：
- * <ul>
- *   <li>EP 图标库（@element-plus/icons-vue）缺的图标统一在此自绘，模板用法与 lucide 兼容
- *       （`&lt;Xxx :size="14" color="var(--x)" /&gt;`、`&lt;el-icon&gt;&lt;Xxx /&gt;&lt;/el-icon&gt;`）；</li>
- *   <li>svg 默认 24 viewBox + stroke 线性风格，与 EP 线性图标（Arrow/Check/Close 等）视觉同族；</li>
- *   <li>`absoluteStrokeWidth` 与 lucide 语义一致：传 true 时按 viewBox 换算实际 stroke 宽度。</li>
- * </ul>
+ * 自绘图标工厂：补足组件库缺失的图标（Bot / Brain / Sparkles / GitBranch 等）。
+ * props 与 lucide 一致（size / color / stroke-width）；24 viewBox 线性风格，与组件库图标同族。
  */
 export function createIcon(name: string, nodes: readonly IconNode[]) {
   return defineComponent({

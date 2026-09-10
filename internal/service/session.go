@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"WorkBaby/internal/domain"
+	"WorkBaby/internal/harness"
 	"WorkBaby/internal/pkg"
 )
 
@@ -25,6 +26,10 @@ const sessionMetaKeyCompactInstructions = "compact_instructions"
 
 // sessionMetaKeyArchiveSummary 归档摘要的元数据键（/compact 落点，buildSystem 注入）。
 const sessionMetaKeyArchiveSummary = "compact_archive_summary"
+
+// sessionMetaKeyCompressBoundary 压缩边界（SummaryBoundary）的元数据键：
+// 记录最近一次压缩覆盖到哪一轮、涉及哪些工具调用锚点，供对账与问题定位。
+const sessionMetaKeyCompressBoundary = "compress_boundary"
 
 // SearchSessions 跨会话检索（/resume 快速检索）。
 //
@@ -189,6 +194,24 @@ func (s *ChatService) writeSessionMeta(ctx context.Context, ses *domain.ChatSess
 	}
 	ses.MetadataJSON = string(bs)
 	return s.sessions.Update(ctx, ses)
+}
+
+// persistCompressBoundary 记录最近一次压缩的边界（SummaryBoundary）：覆盖了哪些消息、
+// 涉及哪些工具调用锚点、何时发生。压缩是上下文被改写的少数时刻，不留证据事后无法解释
+// 「模型为什么忘了刚才的事」，也无法验证是否把没送进模型的内容误标成已摘要。
+func (s *ChatService) persistCompressBoundary(ctx context.Context, ses *domain.ChatSessionDO, b harness.CompressBoundary) {
+	if ses == nil {
+		return
+	}
+	bs, err := json.Marshal(b)
+	if err != nil {
+		return
+	}
+	meta := readSessionMeta(ses)
+	meta[sessionMetaKeyCompressBoundary] = string(bs)
+	if err := s.writeSessionMeta(ctx, ses, meta); err != nil {
+		pkg.L.Warn("write compress boundary failed", "sessionID", ses.ID, "err", err.Error())
+	}
 }
 
 // compactInstructions 读会话上的保留指示；未设置返回空串。

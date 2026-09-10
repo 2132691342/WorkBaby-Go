@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"WorkBaby/internal/llm"
 	"WorkBaby/internal/pkg"
@@ -48,7 +49,7 @@ func (MicroCompressor) Compress(msgs []*llm.Message, budgetTokens int) []*llm.Me
 		for j < len(out) && out[j] != nil && out[j].Role == llm.RoleTool {
 			j++
 		}
-		folded := &llm.Message{Role: llm.RoleAssistant, Content: foldedPlaceholder(out[i+1 : j])}
+		folded := &llm.Message{Role: llm.RoleAssistant, Content: foldedPlaceholder(out[i], out[i+1:j])}
 		out = append(out[:i], append([]*llm.Message{folded}, out[j:]...)...)
 		i-- // 折叠点前移一格，下一轮从当前位置继续
 	}
@@ -92,8 +93,9 @@ func truncateCutByRounds(ms []*llm.Message, budgetTokens int) int {
 }
 
 // foldedPlaceholder 折叠占位文案：明确「已成功执行、结果已消费、勿重跑」，
-// 并保留工具名清单——模型据此判断哪些信息曾经拿到，而不是把它当成执行失败重放副作用。
-func foldedPlaceholder(toolMsgs []*llm.Message) string {
+// 并带上工具名与 tool_call_id 锚点（RecoveryRef）——模型据此判断哪些信息曾经拿到、
+// 该结果在会话记录里的确切出处，而不是把它当成执行失败去重放副作用。
+func foldedPlaceholder(assistantMsg *llm.Message, toolMsgs []*llm.Message) string {
 	var names []string
 	seen := map[string]bool{}
 	for _, m := range toolMsgs {
@@ -105,11 +107,104 @@ func foldedPlaceholder(toolMsgs []*llm.Message) string {
 	if len(names) > 4 {
 		names = append(names[:4], "…")
 	}
+	refs := recoveryRefs(assistantMsg, toolMsgs)
+	refText := ""
+	if len(refs) > 0 {
+		refText = "，可溯源锚点（tool_call_id）：" + strings.Join(refs, ", ")
+	}
 	return fmt.Sprintf(
-		"[早期工具段已折叠（%d 条结果，涉及工具：%s）。这些调用均已成功执行、结果已被消费，请勿重跑以避免副作用。"+
+		"[早期工具段已折叠（%d 条结果，涉及工具：%s%s）。这些调用均已成功执行、结果已被消费，请勿重跑以避免副作用。"+
 			"如确需该信息，请用更精确的范围重新执行只读工具（如 file_read 指定行区间）。]",
-		len(toolMsgs), strings.Join(names, ", "),
+		len(toolMsgs), strings.Join(names, ", "), refText,
 	)
+}
+
+// recoveryRefs 折叠段的溯源锚点：优先取 assistant 的 tool_calls ID（上游协议里的权威 ID），
+// 缺失时回退到 tool 消息自身的 ToolCallID。最多 4 个，超出用省略号。
+func recoveryRefs(assistantMsg *llm.Message, toolMsgs []*llm.Message) []string {
+	var refs []string
+	if assistantMsg != nil {
+		for _, tc := range assistantMsg.ToolCalls {
+			if tc.ID != "" {
+				refs = append(refs, tc.ID)
+			}
+		}
+	}
+	if len(refs) == 0 {
+		for _, m := range toolMsgs {
+			if m != nil && m.ToolCallID != "" {
+				refs = append(refs, m.ToolCallID)
+			}
+		}
+	}
+	if len(refs) > 4 {
+		refs = append(refs[:4], "…")
+	}
+	return refs
+}
+
+// CompressBoundary 压缩证据：记录「这次压缩到底覆盖了哪些内容、何时发生」。
+//
+// 价值在于可对账：只有真正被替换出上下文的内容才计入边界（不把没送进模型的内容标记为已摘要），
+// 出问题时能按 CutoffAt 定位到具体是哪一轮被折叠、涉及哪些工具调用。
+type CompressBoundary struct {
+	FilterKey    string   `json:"filter_key"` // micro | auto
+	CutoffAt     int64    `json:"cutoff_at"`  // 压缩发生时间（ms）
+	RemovedMsgs  int      `json:"removed_msgs"`
+	RecoveryRefs []string `json:"recovery_refs,omitempty"` // 被折叠内容里的 tool_call_id 锚点
+}
+
+// CompressorKey 压缩器标识（写进边界的 filter_key，用于区分是确定性折叠还是 LLM 摘要）。
+func CompressorKey(c Compressor) string {
+	if c == nil {
+		return ""
+	}
+	switch c.(type) {
+	case *AutoCompressor:
+		return "auto"
+	case MicroCompressor, *MicroCompressor:
+		return "micro"
+	}
+	return "other"
+}
+
+// CompressDiff 由压缩前后差异推导边界：谁被移出上下文、涉及哪些 tool_call_id 锚点。
+//
+// 按「差异」而非「压缩器自述」计算，是为了保证证据准确——只有真的不在压缩后上下文里的
+// 内容才计入边界，绝不会把没被摘要的内容标记成已摘要。
+func CompressDiff(filterKey string, before, after []*llm.Message) (CompressBoundary, bool) {
+	removed := len(before) - len(after)
+	if removed <= 0 {
+		return CompressBoundary{}, false
+	}
+	alive := make(map[string]bool, len(after))
+	for _, m := range after {
+		if m != nil && m.ToolCallID != "" {
+			alive[m.ToolCallID] = true
+		}
+	}
+	b := CompressBoundary{FilterKey: filterKey, CutoffAt: time.Now().UnixMilli(), RemovedMsgs: removed}
+	seen := map[string]bool{}
+	for _, m := range before {
+		if m == nil {
+			continue
+		}
+		if len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				if tc.ID != "" && !alive[tc.ID] && !seen[tc.ID] {
+					seen[tc.ID] = true
+					b.RecoveryRefs = append(b.RecoveryRefs, tc.ID)
+				}
+			}
+		} else if m.ToolCallID != "" && !alive[m.ToolCallID] && !seen[m.ToolCallID] {
+			seen[m.ToolCallID] = true
+			b.RecoveryRefs = append(b.RecoveryRefs, m.ToolCallID)
+		}
+	}
+	if len(b.RecoveryRefs) > 8 {
+		b.RecoveryRefs = b.RecoveryRefs[:8]
+	}
+	return b, true
 }
 
 // safeTailStart 从 want 起向前（索引减小方向）找最近的「尾部安全切点」：切点消息不是 tool。

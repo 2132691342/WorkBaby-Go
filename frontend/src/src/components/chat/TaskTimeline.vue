@@ -1,44 +1,13 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import type { Component } from 'vue'
 import { useClipboard } from '@vueuse/core'
-import {
-  Clock,
-  ListTree,
-  Type,
-  Braces,
-  Table,
-  Database,
-  BarChart3,
-  Hash,
-  Dices,
-  Globe,
-  Code2,
-  Image as ImageIcon,
-  LayoutTemplate,
-  Cat,
-  ScanText,
-  FileText,
-  FolderOpen,
-  Calculator,
-  Regex,
-  PackageCheck,
-  Sparkles,
-  Brain,
-  GitBranch,
-  BookOpen,
-  Check,
-  X,
-  Copy,
-  Square,
-  ChevronDown,
-  Loader2,
-  Bot
-} from '@/components/common/icons'
+import { Clock, ListTree, Sparkles, Check, X, Copy, Square, ChevronDown, Loader2, Bot } from '@/components/common/icons'
 import { t } from '@/i18n'
+import { formatDuration } from '@/utils/time'
 import type { SkillHit } from '@/types/api'
 import { looksLikeDiff, parseDiffLines, diffLineClass } from '@/chat/models/blocks'
 import { fmtTurnDuration, summarizeToolCalls, totalToolMs, type ReceiptPart } from '@/chat/models/toolGroupSummary'
+import { toolIcon, toolLabel } from '@/chat/models/toolVisuals'
 
 /** 流式工具调用（与 chat store ToolCallInfo 对齐；含耗时）。 */
 export interface ToolCall {
@@ -52,6 +21,8 @@ export interface ToolCall {
   durationMs?: number
   /** 子 Agent 来源标签；空 = 主 Agent。 */
   agent?: string
+  /** 工具自述的动作描述（"正在编辑 app.ts"）；历史块无此字段，退回工具名。 */
+  activity?: string
 }
 
 const props = defineProps<{
@@ -60,12 +31,21 @@ const props = defineProps<{
   skillHit?: SkillHit | null
   /** 失败工具是否展示「重试」按钮（仅历史末条 assistant 消息可重试，MessageList 控制）。 */
   retryable?: boolean
+  /** 历史折叠形态：默认收起为一行 receipt 摘要，点击展开明细；流式时间线不传，保持逐行实时反馈。 */
+  collapsible?: boolean
 }>()
 
 const emit = defineEmits<{
   /** 用户点击失败工具的「重试」→ MessageList 转 resendFrom 重新生成。 */
   retry: [tc: ToolCall]
 }>()
+
+// ===== 历史折叠态 =====
+// 历史消息默认收起为一行 receipt 摘要（对标竞品「已运行 2 条命令 ⌄」的轻量过程行），
+// 避免十几行工具明细在回看历史时抢占注意力；有失败调用时自动展开。
+// 流式时间线（collapsible 未传）保持逐行可见的实时反馈。
+const open = ref(!props.collapsible || props.tools.some((t) => t.state === 'error'))
+const collapsed = computed(() => props.collapsible === true && !open.value)
 
 // ===== 展开状态：显式覆盖优先，其次按默认策略 =====
 //
@@ -210,34 +190,6 @@ async function copyTool(tc: ToolCall): Promise<void> {
   }
 }
 
-/** 工具名 → 分类图标（前端静态映射，无需后端）。 */
-function toolIcon(name: string): Component {
-  const n = name.toLowerCase()
-  if (n.includes('time') || n.startsWith('date_')) return Clock
-  if (n.startsWith('text_')) return Type
-  if (n.startsWith('json_')) return Braces
-  if (n.startsWith('csv_')) return Table
-  if (n.startsWith('data_')) return Database
-  if (n.startsWith('chart_')) return BarChart3
-  if (n.startsWith('hash_') || n.startsWith('base64_') || n.startsWith('url_')) return Hash
-  if (n.startsWith('random_')) return Dices
-  if (n.startsWith('http_') || n.startsWith('ip_')) return Globe
-  if (n.startsWith('code_')) return Code2
-  if (n.startsWith('image_') || n.startsWith('video_') || n.startsWith('audio_') || n.startsWith('model3d') || n.startsWith('vfx')) return ImageIcon
-  if (n === 'gen_ui') return LayoutTemplate
-  if (n.startsWith('pet_')) return Cat
-  if (n.startsWith('ocr_')) return ScanText
-  if (n.startsWith('pdf_') || n.startsWith('word_') || n.startsWith('excel_')) return FileText
-  if (n.startsWith('file_') || n.startsWith('folder_') || n.startsWith('archive_')) return FolderOpen
-  if (n.startsWith('math_')) return Calculator
-  if (n.startsWith('regex_')) return Regex
-  if (n.startsWith('present_')) return PackageCheck
-  if (n === 'memory_write' || n.startsWith('memory_')) return Brain
-  if (n === 'run_workflow' || n.startsWith('workflow_')) return GitBranch
-  if (n.startsWith('knowledge_')) return BookOpen
-  return Sparkles
-}
-
 /**
  * running 态的实时计时。
  *
@@ -275,15 +227,8 @@ function elapsedMs(tc: ToolCall): number | undefined {
   return undefined
 }
 
-function fmtDuration(ms?: number): string {
-  if (ms === undefined || ms === null) return ''
-  if (ms < 1000) return `${ms}ms`
-  const totalSec = ms / 1000
-  if (totalSec < 60) return `${totalSec.toFixed(1)}s`
-  const min = Math.floor(totalSec / 60)
-  const sec = Math.round(totalSec % 60)
-  return `${min}m${String(sec).padStart(2, '0')}s`
-}
+/** 工具行耗时统一走 utils/time（口径全站一致）。 */
+const fmtDuration = formatDuration
 
 // ===== 回合级 receipt：把一串工具调用收敛成一句人话（nomifun 的 receipt 模式）=====
 //
@@ -297,16 +242,36 @@ const turnDuration = computed<string>(() => fmtTurnDuration(totalToolMs(props.to
 <template>
   <!-- 原型 .tl / .tool 折叠列表：标题栏 + 工具行（点击展开 args/result）。
        保留现有能力：状态图标 / 工具图标 / 行内 arg 摘要 / 实时计时 / 复制 / 重试 / 子 Agent 委派卡片 -->
-  <div v-if="props.tools.length > 0 || props.skillHit" class="tl">
+  <div
+    v-if="props.tools.length > 0 || props.skillHit"
+    class="tl"
+    :class="{ 'tl--light': collapsed }"
+  >
+    <!-- 历史折叠态：单行 receipt 摘要（对标「已搜索文件 2 次，已运行 1 条命令 ⌄」，
+         不带面板标题），点击展开完整明细 -->
+    <button v-if="collapsed" type="button" class="tl-fold" @click="open = true">
+      <ListTree class="ic" style="width: 13px; height: 13px" />
+      <span v-for="p in receipt" :key="p.action" class="rcpt">{{ t(`tool.receipt.${p.action}`, p.count) }}</span>
+      <span v-if="receipt.length === 0">{{ props.tools.length }}</span>
+      <span v-if="turnDuration">{{ t('chat.processedIn', turnDuration) }}</span>
+      <ChevronDown class="chev-end" />
+    </button>
+    <template v-else>
     <div class="tl-hd">
       <ListTree class="ic" style="width: 13px; height: 13px" />
       <span>{{ t('chat.processTitle') }}</span>
       <!-- receipt 聚合：读取 3 个文件 · 执行 2 条命令 · 12s —— 一眼看懂这轮做了什么 -->
       <span v-for="p in receipt" :key="p.action" class="rcpt">{{ t(`tool.receipt.${p.action}`, p.count) }}</span>
-      <span v-if="turnDuration" class="cnt" :class="{ 'rcpt-shift': receipt.length > 0 }">{{ turnDuration }}</span>
+      <!-- 人话耗时：裸数字（12s）读不出「这轮花了多久」，补上动词 -->
+      <span v-if="turnDuration" class="cnt" :class="{ 'rcpt-shift': receipt.length > 0 }">
+        {{ t('chat.processedIn', turnDuration) }}
+      </span>
       <span v-if="receipt.length === 0" class="cnt">{{ props.tools.length + (props.skillHit ? 1 : 0) }}</span>
       <button v-if="props.tools.length > 1" type="button" @click="setAll(!allExpanded)">
         {{ allExpanded ? t('chat.collapseAll') : t('chat.expandAll') }}
+      </button>
+      <button v-if="props.collapsible" type="button" @click="open = false">
+        {{ t('chat.processCollapse') }}
       </button>
     </div>
 
@@ -357,7 +322,8 @@ const turnDuration = computed<string>(() => fmtTurnDuration(totalToolMs(props.to
         <span v-if="isDelegate(tc)" class="nm" style="font-family: inherit">
           {{ t('chat.subAgent') }} · {{ delegateMeta(tc).agent }}
         </span>
-        <span v-else class="nm">{{ tc.name }}</span>
+        <!-- 工具行文案：优先工具自述的动作（"正在编辑 app.ts"），hover 显示原始工具名 -->
+        <span v-else class="nm" :title="tc.name">{{ toolLabel(tc.name, tc.activity) }}</span>
 
         <!-- 子 Agent 来源徽标 -->
         <span
@@ -432,10 +398,42 @@ const turnDuration = computed<string>(() => fmtTurnDuration(totalToolMs(props.to
         </template>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
+/* 历史折叠态：去掉 .tl 的盒子外观（wb-ui.css 全局样式），轻量单行融入正文流 */
+.tl--light {
+  border: 0;
+  background: transparent;
+  margin-bottom: 2px;
+}
+.tl-fold {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.tl-fold:hover {
+  background: var(--wb-surface-hover);
+  color: var(--wb-ink);
+}
+.tl-fold .chev-end {
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
 /* 原型 .tool / .tool-bd 的全局样式已在 wb-ui.css 里定义；这里只做
    展开动效（与 .approve / .tl 行展开保持一致感）。 */
 .tool-bd {

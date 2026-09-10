@@ -150,8 +150,12 @@ type TruncateMessagesREQ struct {
 }
 
 // DecideApprovalREQ 用户对工具审批请求（chat:approval 事件）的决策回填入参。
+//
+// Scope 决定放行的有效期：once（默认）= 只放行这一次；session = 本会话内同命令免审。
+// 不可逆风险（irreversible）的请求不接受 session——service 侧会忽略该字段。
 type DecideApprovalREQ struct {
-	Approved bool `json:"approved"`
+	Approved bool   `json:"approved"`
+	Scope    string `json:"scope,omitempty"`
 }
 
 // 包级错误变量；段位 5000。

@@ -1,15 +1,6 @@
 <script setup lang="ts">
 /**
- * 页面骨架（D.3 共享组件）：统一 hero header（图标 + 标题 + 副标题 + 操作区）+ 空状态。
- *
- * <p>使用：
- * <pre>
- *   &lt;PageScaffold icon="🛡️" title="管理" subtitle="…" empty-text="该模块待接入"&gt;
- *     &lt;template #actions&gt;
- *       &lt;button class="..."&gt;刷新&lt;/button&gt;
- *     &lt;/template&gt;
- *   &lt;/PageScaffold&gt;
- * </pre>
+ * 页面骨架：统一 hero header（图标 + 标题 + 副标题 + 操作插槽）与空状态。
  */
 defineProps<{
   /** 顶部 logo 字符（emoji / SVG 字符）。 */

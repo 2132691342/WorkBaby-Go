@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"WorkBaby/internal/db"
 	"WorkBaby/internal/domain"
 	"WorkBaby/internal/pkg"
 	"gorm.io/gorm"
@@ -24,7 +25,7 @@ func NewMemoryFactRepo(db *gorm.DB) *MemoryFactRepo { return &MemoryFactRepo{db:
 
 func (r *MemoryFactRepo) prepareFactFTS() {
 	r.ftsOnce.Do(func() {
-		_ = r.db.Exec("CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts USING fts5(fact_id UNINDEXED, subject, key, value, tokenize='trigram')").Error
+		_ = db.EnsureFTS5Table(r.db, "memory_facts_fts")
 	})
 }
 

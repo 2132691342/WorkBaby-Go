@@ -10,6 +10,9 @@ const (
 	UsageSourceWorkflow TokenUsageSource = "workflow"
 	UsageSourceCron     TokenUsageSource = "cron"
 	UsageSourceMemory   TokenUsageSource = "memory"
+	// UsageSourceDelegate 子 Agent 委派消耗：必须与父 run 的 chat 明细分开，
+	// 否则委派（可达 12 轮 + 数十次工具）的消耗无法归因，也污染父 run 的对话成本。
+	UsageSourceDelegate TokenUsageSource = "delegate"
 )
 
 // TokenUsageDO 单次 LLM 调用的 token 明细。
@@ -24,6 +27,7 @@ type TokenUsageDO struct {
 	ProviderID       string           `gorm:"size:64"                       json:"provider_id"`
 	Model            string           `gorm:"size:128"                      json:"model"`
 	Source           TokenUsageSource `gorm:"size:16;index:idx_usage_time"  json:"source"`
+	Agent            string           `gorm:"size:64"                       json:"agent"` // 委派来源（source=delegate 时为子 Agent 名）
 	Turn             int              `gorm:"default:0"                     json:"turn"`
 	InputTokens      int              `gorm:"default:0"                     json:"input_tokens"`
 	OutputTokens     int              `gorm:"default:0"                     json:"output_tokens"`

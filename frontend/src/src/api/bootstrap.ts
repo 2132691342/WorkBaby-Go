@@ -2,17 +2,8 @@ import { initApi, apiGet } from './http'
 import { UI_API_CONTRACT_VERSION } from './contract'
 
 /**
- * 双主机启动引导：拿到 gin 监听端口并初始化 HTTP 层，随后校验前后端契约版本。
- *
- * <p>取端口的三条通道按可靠性排序，先命中先返回：
- * <ol>
- *   <li>Wails 绑定 `GetServerPort()`——同步取值，没有「事件早于监听器」的时序窗口；</li>
- *   <li>`app:ready` 事件——后端就绪后补发，用于绑定不可用时的兜底；</li>
- *   <li>localStorage(`wb.serverPort`)——上一次运行缓存，仅纯浏览器 dev 场景有意义。</li>
- * </ol>
- *
- * <p>三条都拿不到才算启动失败：任何一条通道失败都不能静默 resolve，
- * 否则后续业务请求会以 `[4000] server not initialized` 的形式在别处爆炸。
+ * 双主机启动引导：取 gin 监听端口并初始化 HTTP 层，随后校验契约版本。
+ * 取端口依次尝试 Wails 绑定、app:ready 事件、localStorage 缓存；全部失败即启动失败。
  */
 export async function bootstrapServer(): Promise<void> {
   const port = await acquirePort()

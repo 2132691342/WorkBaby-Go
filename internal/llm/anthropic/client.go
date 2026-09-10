@@ -4,7 +4,7 @@
 //   - content_block.type=="thinking" → Message.Thinking
 //   - content_block.type=="tool_use" → NormalizedToolCall
 //   - 流事件：message_start → content_block_start → content_block_delta* → content_block_stop → message_delta → message_stop
-//   - prompt caching：system 与历史前缀加 cache_control.ephemeral
+//   - prompt caching：三个断点（配额 4）—— system 末段（覆盖全部 system）/ 工具定义 / 历史前缀
 package anthropic
 
 import (
@@ -22,6 +22,9 @@ import (
 
 const (
 	APIVersion = "2023-06-01"
+	// minCacheTokens Anthropic prompt caching 的最小可缓存前缀（Sonnet/Opus 1024 token）。
+	// 低于此长度打断点不会命中，只会白占断点配额。
+	minCacheTokens = 1024
 )
 
 // Client Anthropic Messages API 实现。
@@ -247,17 +250,13 @@ func (c *Client) headers() map[string]string {
 
 func (c *Client) buildBody(req *llm.ChatRequest, stream bool) map[string]any {
 	// system 单独提取（Anthropic Messages API 顶层 system 字段）。
-	// 每段 system 都加 cache_control.ephemeral（Anthropic 允许 4 个 cache_control 断点）：
-	// 多段合并成 1 段一次性 cache；  system 的最后一段独立 cache（与多段合并前缀一致时也命中）。
 	systemParts := []map[string]any{}
 	convo := []map[string]any{}
+	var systemText strings.Builder
 	for _, m := range req.Messages {
 		if m.Role == llm.RoleSystem {
-			systemParts = append(systemParts, map[string]any{
-				"type":          "text",
-				"text":          m.Content,
-				"cache_control": map[string]any{"type": "ephemeral"},
-			})
+			systemParts = append(systemParts, map[string]any{"type": "text", "text": m.Content})
+			systemText.WriteString(m.Content)
 			continue
 		}
 		switch m.Role {
@@ -314,7 +313,13 @@ func (c *Client) buildBody(req *llm.ChatRequest, stream bool) map[string]any {
 	if len(req.Stop) > 0 {
 		body["stop_sequences"] = req.Stop
 	}
+	// system 断点只打在最后一段：断点是「缓存到此为止」的前缀语义，一段就覆盖全部 system。
+	// 逐段打既浪费配额（上限 4，tools 与历史前缀各占 1）又不会扩大命中面。
+	// 低于最小可缓存长度时不打：短 system 缓存无收益，还占用历史前缀的刷新时机。
 	if len(systemParts) > 0 {
+		if pkg.EstimateTextTokens(systemText.String()) >= minCacheTokens {
+			systemParts[len(systemParts)-1]["cache_control"] = map[string]any{"type": "ephemeral"}
+		}
 		body["system"] = systemParts
 	}
 	if req.Thinking != nil && req.Thinking.Type == "enabled" {

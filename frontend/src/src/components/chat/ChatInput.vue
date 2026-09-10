@@ -360,6 +360,13 @@ function submit(): void {
 function onKeydown(e: KeyboardEvent): void {
   // 技能选择器打开时，导航键归它自己处理（内部搜索框已聚焦）
   if (skillPickerOpen.value && ['Enter', 'ArrowDown', 'ArrowUp', 'Escape'].includes(e.key)) return
+  // Ctrl/Cmd+Enter = 立即插入：流式中跳过队列直接 steer（submit 内部分流），
+  // 与 Plus 的「排队」构成快慢两档，键盘也能直达而不必点按钮。
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !isComposing.value) {
+    e.preventDefault()
+    submit()
+    return
+  }
   if (e.key === 'Enter' && !e.shiftKey && !isComposing.value) {
     e.preventDefault()
     if (slashOpen.value) {
@@ -1145,7 +1152,7 @@ defineExpose({
             class="send send--steer"
             :disabled="!canSend"
             :aria-label="t('chat.steerNow')"
-            :title="t('chat.steerNow')"
+            :title="`${t('chat.steerNow')} (Ctrl+Enter)`"
             @click="submit"
           >
             <Zap />

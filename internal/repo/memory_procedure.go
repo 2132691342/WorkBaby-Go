@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"WorkBaby/internal/db"
 	"WorkBaby/internal/domain"
 	"WorkBaby/internal/pkg"
 	"gorm.io/gorm"
@@ -39,38 +40,79 @@ func (r *MemoryProcedureRepo) GetByName(ctx context.Context, name string) (*doma
 	return &row, nil
 }
 
-// Upsert 新增或覆盖。
+// Upsert 新增或覆盖；FTS 索引同事务维护（先删后插，覆盖更新后不留陈旧索引）。
 func (r *MemoryProcedureRepo) Upsert(ctx context.Context, row *domain.MemoryProcedureDO) error {
 	old, err := r.GetByName(ctx, row.Name)
 	if err != nil {
 		return err
 	}
-	if old != nil {
-		row.ID = old.ID
-		fields := map[string]any{
-			"steps":         row.Steps,
-			"success_count": row.SuccessCount,
-			"failure_count": row.FailureCount,
-			"last_used_at":  row.LastUsedAt,
-			"updated_at":    row.UpdatedAt,
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if old != nil {
+			row.ID = old.ID
+			fields := map[string]any{
+				"steps":         row.Steps,
+				"success_count": row.SuccessCount,
+				"failure_count": row.FailureCount,
+				"last_used_at":  row.LastUsedAt,
+				"updated_at":    row.UpdatedAt,
+			}
+			if err := tx.Model(&domain.MemoryProcedureDO{}).
+				Where("id = ?", row.ID).Updates(fields).Error; err != nil {
+				return pkg.Wrap(6060, "update memory procedure failed", err)
+			}
+			return indexProcedure(tx, row.ID, row.Name, row.Steps)
 		}
-		if err := r.db.WithContext(ctx).Model(&domain.MemoryProcedureDO{}).
-			Where("id = ?", row.ID).Updates(fields).Error; err != nil {
-			return pkg.Wrap(6060, "update memory procedure failed", err)
+		if err := tx.Create(row).Error; err != nil {
+			return pkg.Wrap(6060, "insert memory procedure failed", err)
 		}
-		return nil
-	}
-	if err := r.db.WithContext(ctx).Create(row).Error; err != nil {
-		return pkg.Wrap(6060, "insert memory procedure failed", err)
-	}
-	return nil
+		return indexProcedure(tx, row.ID, row.Name, row.Steps)
+	})
 }
 
-// Delete 删除单条。
+// Delete 删除单条（含 FTS 行）。
 func (r *MemoryProcedureRepo) Delete(ctx context.Context, id string) error {
-	if err := r.db.WithContext(ctx).Where("id = ?", id).
-		Delete(&domain.MemoryProcedureDO{}).Error; err != nil {
-		return pkg.Wrap(6062, "delete memory procedure failed", err)
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ?", id).
+			Delete(&domain.MemoryProcedureDO{}).Error; err != nil {
+			return pkg.Wrap(6062, "delete memory procedure failed", err)
+		}
+		if err := tx.Exec("DELETE FROM memory_procedures_fts WHERE procedure_id = ?", id).Error; err != nil {
+			return pkg.Wrap(6062, "delete memory procedure fts failed", err)
+		}
+		return nil
+	})
+}
+
+// SearchFTS 全文检索（BM25）；query 无可用 token 时返回空，由上层决定兜底策略。
+func (r *MemoryProcedureRepo) SearchFTS(ctx context.Context, query string, topK int) ([]domain.MemoryProcedureDO, error) {
+	match := pkg.BuildMatchQuery(query)
+	if match == "" {
+		return nil, nil
+	}
+	if topK <= 0 || topK > 100 {
+		topK = 10
+	}
+	_ = db.EnsureFTS5Table(r.db, "memory_procedures_fts")
+	var rows []domain.MemoryProcedureDO
+	if err := r.db.WithContext(ctx).Raw(`
+		SELECT mp.* FROM memory_procedures mp
+		JOIN memory_procedures_fts f ON f.procedure_id = mp.id
+		WHERE memory_procedures_fts MATCH ?
+		ORDER BY f.rank
+		LIMIT ?`, match, topK).Scan(&rows).Error; err != nil {
+		return nil, pkg.Wrap(6063, "search memory procedures fts failed", err)
+	}
+	return rows, nil
+}
+
+// indexProcedure 同步单条程序到 FTS 索引。
+func indexProcedure(tx *gorm.DB, id, name, steps string) error {
+	if err := tx.Exec("DELETE FROM memory_procedures_fts WHERE procedure_id = ?", id).Error; err != nil {
+		return pkg.Wrap(6063, "sync memory procedure fts (delete) failed", err)
+	}
+	if err := tx.Exec("INSERT INTO memory_procedures_fts(procedure_id, name, steps) VALUES (?, ?, ?)",
+		id, name, steps).Error; err != nil {
+		return pkg.Wrap(6063, "sync memory procedure fts (insert) failed", err)
 	}
 	return nil
 }

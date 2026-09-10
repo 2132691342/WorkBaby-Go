@@ -106,6 +106,14 @@ func (h *Handler) GetSessionTodos(sessionID string) domain.TodoStateRESP {
 	return h.todoStore.State(sessionID)
 }
 
+// ToggleSessionTodo 用户手动勾选/取消计划项：与模型写的同一份状态，下一轮注入即生效。
+func (h *Handler) ToggleSessionTodo(sessionID, itemID string) (domain.TodoStateRESP, error) {
+	if h.todoStore == nil {
+		return domain.TodoStateRESP{SessionID: sessionID}, nil
+	}
+	return h.todoStore.Toggle(sessionID, itemID)
+}
+
 // ClearMessages 清空某会话全部消息。
 func (h *Handler) ClearMessages(sessionID string) error {
 	return h.chatSvc.ClearMessages(h.ctx, sessionID)

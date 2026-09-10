@@ -15,6 +15,9 @@ import (
 type RecallOpts struct {
 	Kinds []domain.MemoryKind // 默认全选
 	TopK  int                 // 默认 5
+	// MinScore 融合分下限；<=0 用 DefaultMinRecallScore。
+	// 没有下限时任何命中都会被注入——包括单源低排名且已极度陈旧的记忆，纯噪声。
+	MinScore float64
 }
 
 // RecallHit 召回命中项。

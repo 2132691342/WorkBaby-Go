@@ -26,6 +26,8 @@ export interface ToolCallInfo {
   duration_ms?: number
   /** 子 Agent 来源标签（delegate 转发的子 run 工具事件）；空 = 主 Agent。 */
   agent?: string
+  /** 工具自述的一行动作描述（"正在编辑 app.ts"）；空则退回工具名展示。 */
+  activity?: string
 }
 
 export interface ApprovalRequest {
@@ -34,11 +36,13 @@ export interface ApprovalRequest {
   reason: string
   /**
    * 风险等级：
-   * - `needs_approval`：危险但可恢复，本会话批准过同一命令后免审
+   * - `needs_approval`：危险但可恢复，可选「本会话允许」后免审
    * - `irreversible`：执行后无法撤销（rm -rf / format / dd if= …），每次都要确认
    * - `input_required`：模型补充输入请求（request_input 工具），卡片切问答形态
    */
   risk?: 'needs_approval' | 'irreversible' | 'input_required'
+  /** 后端声明可否「本会话允许」（不可逆操作恒 false）。 */
+  canRemember?: boolean
 }
 
 /** decoder 输出：store 拿到后按需 apply 到 ref state。 */
@@ -71,7 +75,9 @@ export interface StreamEventUpdate {
   /** 工件登记事件（file_write 旁路自动 upsert）。 */
   pushArtifact?: Artifact
   /** 自动上下文压缩（chat:compressed）：告知用户历史已被折叠，不是内容丢了。 */
-  setCompressed?: { removed_messages: number }
+  setCompressed?: { removed_messages: number; filter_key?: string; recovery_refs?: string[] }
+  /** 上下文按预算裁剪（chat:context-trimmed）：system 段被丢，回答质量下降需可解释。 */
+  setContextTrimmed?: { dropped_segments: string[]; budget_runes: number }
   /** 越界告警（chat:warn）：副作用落到了 .workbaby/ 之外，强制 toast 提示用户清理。 */
   setWarn?: { kind: string; message: string; rel_path: string; path: string }
   /** 后台任务生命周期事件（task:created/started/done）。 */
@@ -97,8 +103,17 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
       return data && typeof data === 'object' ? { setStats: data as ChatStats } : null
     case 'tool_call': {
       if (!data || typeof data !== 'object') return null
-      const d = data as { id: string; name: string; agent?: string }
-      return { addTool: { id: d.id, name: d.name, state: 'running', started_at: now, agent: d.agent || undefined } }
+      const d = data as { id: string; name: string; agent?: string; activity?: string }
+      return {
+        addTool: {
+          id: d.id,
+          name: d.name,
+          state: 'running',
+          started_at: now,
+          agent: d.agent || undefined,
+          activity: d.activity || undefined
+        }
+      }
     }
     case 'tool_call_delta': {
       if (!data || typeof data !== 'object') return null
@@ -158,8 +173,21 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
         }
         case 'compressed': {
           if (!data || typeof data !== 'object') return null
-          const d = data as { removed_messages?: number }
-          return { setCompressed: { removed_messages: d.removed_messages ?? 0 } }
+          const d = data as { removed_messages?: number; filter_key?: string; recovery_refs?: string[] }
+          return {
+            setCompressed: {
+              removed_messages: d.removed_messages ?? 0,
+              filter_key: d.filter_key ?? '',
+              recovery_refs: Array.isArray(d.recovery_refs) ? d.recovery_refs : []
+            }
+          }
+        }
+        case 'context_trimmed': {
+          if (!data || typeof data !== 'object') return null
+          const d = data as { dropped_segments?: string[]; budget_runes?: number }
+          const dropped = Array.isArray(d.dropped_segments) ? d.dropped_segments : []
+          if (dropped.length === 0) return null
+          return { setContextTrimmed: { dropped_segments: dropped, budget_runes: Number(d.budget_runes ?? 0) } }
         }
         case 'warn': {
           if (!data || typeof data !== 'object') return null
@@ -199,13 +227,14 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
         }
         case 'tool_approval_request': {
       if (!data || typeof data !== 'object') return null
-      const d = data as { id: string; command: string; reason: string; risk?: string }
+      const d = data as { id: string; command: string; reason: string; risk?: string; can_remember?: boolean }
       return {
         setApproval: {
           id: d.id,
           command: d.command,
           reason: d.reason,
-          risk: d.risk === 'irreversible' ? 'irreversible' : d.risk === 'input_required' ? 'input_required' : 'needs_approval'
+          risk: d.risk === 'irreversible' ? 'irreversible' : d.risk === 'input_required' ? 'input_required' : 'needs_approval',
+          canRemember: d.can_remember === true
         }
       }
     }

@@ -20,6 +20,19 @@ const isDone = computed(() => total.value > 0 && done.value === total.value)
 const isActive = computed(() => total.value > 0 && !isDone.value)
 
 const open = ref(false)
+
+/** 正在提交勾选的条目 id（防连点；状态以服务端返回为准）。 */
+const toggling = ref('')
+
+async function toggle(itemID: string): Promise<void> {
+  if (!itemID || toggling.value) return
+  toggling.value = itemID
+  try {
+    await chat.toggleTodo(itemID)
+  } finally {
+    toggling.value = ''
+  }
+}
 </script>
 
 <template>
@@ -63,17 +76,20 @@ const open = ref(false)
       <div v-if="open" class="pp-pop">
         <p class="pp-title">{{ t('chat.todo.title') }} · {{ progress }}%</p>
         <ul class="pp-list">
-          <li
-            v-for="item in items"
-            :key="item.id"
-            class="flex items-start gap-2 py-0.5 text-xs leading-snug"
-            :class="item.done ? 'text-wb-muted' : 'text-wb-ink'"
-          >
-            <span
-              class="mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-              :class="item.done ? 'bg-wb-mint' : 'bg-wb-primary'"
-            />
-            <span :class="item.done ? 'line-through' : ''">{{ item.title }}</span>
+          <li v-for="item in items" :key="item.id">
+            <!-- 可勾选：用户能直接改进度，写回与 todo 工具同一份会话状态，
+                 下一轮 system 注入即带上最新进度（模型据此调整下一步） -->
+            <button
+              type="button"
+              class="pp-item"
+              :class="item.done ? 'text-wb-muted' : 'text-wb-ink'"
+              :disabled="toggling === item.id"
+              :title="t('chat.todo.toggleHint')"
+              @click="toggle(item.id)"
+            >
+              <span class="pp-dot" :class="item.done ? 'pp-dot--done' : 'pp-dot--open'" />
+              <span :class="item.done ? 'line-through' : ''">{{ item.title }}</span>
+            </button>
           </li>
         </ul>
       </div>
@@ -164,6 +180,38 @@ const open = ref(false)
   max-height: 200px;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+.pp-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 0;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+.pp-item:hover {
+  color: var(--wb-primary);
+}
+.pp-item:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.pp-dot {
+  margin-top: 4px;
+  display: inline-block;
+  height: 6px;
+  width: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+.pp-dot--done {
+  background: var(--wb-mint);
+}
+.pp-dot--open {
+  background: var(--wb-primary);
 }
 @keyframes pp-breathe {
   0%,

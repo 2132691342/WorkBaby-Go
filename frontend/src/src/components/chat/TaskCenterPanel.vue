@@ -11,6 +11,7 @@ import { useChatStore } from '@/stores/chat'
 import { useToast } from '@/composables/useToast'
 import { getApiBase } from '@/api/http'
 import { t } from '@/i18n'
+import { formatRelativeTime } from '@/utils/time'
 import {
   Loader2,
   CircleCheck,
@@ -31,11 +32,8 @@ const agentOptions = ['default', 'coding', 'research', 'writer']
 
 const tasksView = computed(() => tasks.value)
 
-function fmtTime(ms: number): string {
-  if (!ms) return ''
-  const d = new Date(ms)
-  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
+/** 任务时间统一走 utils/time。 */
+const fmtTime = formatRelativeTime
 
 function stateIcon(state: string) {
   switch (state) {

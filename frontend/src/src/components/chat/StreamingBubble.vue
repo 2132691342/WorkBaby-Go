@@ -69,27 +69,26 @@ watch(streamingThinking, async () => {
          不用 <details>：原生 details 折叠是瞬时塌陷，思考完那一刻整条消息突然矮一截，
          观感上像内容丢失；改成 max-height 过渡 + 固定 7 行视口（内部滚动），
          思考期间始终是同一个高度，收起时也是缓动收拢。 -->
-    <div
-      v-if="!focusMode && hasThinking"
-      class="mb-2 overflow-hidden rounded-lg border border-wb-border bg-wb-surface-2"
-    >
+    <!-- 流式思考面板：无边框轻量行（与历史 MessageItem 的思考行同形态），
+         思考中自动展开、正文开始产出后自动折叠；展开时正文只留左侧细竖线 -->
+    <div v-if="!focusMode && hasThinking">
       <button
         type="button"
-        class="flex w-full cursor-pointer select-none items-center gap-1.5 px-2.5 py-1.5 text-left text-[11.5px] text-wb-muted"
+        class="flex cursor-pointer select-none items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11.5px] text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-ink"
         @click="thinkingOpen = !thinkingOpen"
       >
         <Brain class="h-3.5 w-3.5" />
         <span>{{ thinkingOpen ? t('chat.thinking') : t('chat.thoughtDone') }}</span>
         <Loader2 v-if="!streamingContent" class="h-3 w-3 animate-spin" />
         <ChevronDown
-          class="ml-auto h-3 w-3 transition-transform duration-200"
+          class="h-3 w-3 transition-transform duration-200"
           :class="thinkingOpen ? 'rotate-180' : ''"
         />
       </button>
       <div class="wb-think-wrap" :style="{ maxHeight: thinkingOpen ? THINK_MAX_PX : '0px' }">
         <pre
           ref="thinkingBody"
-          class="mx-2.5 mb-2 overflow-y-auto whitespace-pre-wrap border-t border-dashed border-wb-border pt-2 font-sans text-[11px] leading-[1.75] text-wb-muted/90"
+          class="mx-1 mb-1 overflow-y-auto whitespace-pre-wrap border-l-2 border-wb-border pl-3 pt-1 font-sans text-[11px] leading-[1.75] text-wb-muted/90"
         >{{ streamingThinking }}</pre>
       </div>
     </div>

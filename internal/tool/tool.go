@@ -58,7 +58,46 @@ type ToolMeta struct {
 	MaxResultChars int      // 结果回填 LLM 前的建议截断长度；0 = 用 harness 默认
 	UIHint         string   // 前端呈现提示（如 "editor" / "browser" / "diff"）；空 = 默认时间线样式
 	Group          string   // 展示分组：file / exec / doc / agent / media；空 = 由名称与风险推导
+	// Category 动作类别：info / edit / exec / network / irreversible。
+	// 前端据此选图标与措辞，不必再按工具名逐条硬编码（新增工具零改动）。
+	Category string
+	// ActivityDesc 静态动作短语（"正在读取文件"）；配套 ActivityProvider 可给出带参数的描述。
+	ActivityDesc string
 }
+
+// 动作类别。
+const (
+	CategoryInfo         = "info"
+	CategoryEdit         = "edit"
+	CategoryExec         = "exec"
+	CategoryNetwork      = "network"
+	CategoryIrreversible = "irreversible"
+)
+
+// ActivityProvider 可选接口：按本次参数给出面向用户的一行动作描述
+//（"正在编辑 src/app.ts"）——比前端维护「工具名 → 措辞」映射表准确得多。
+type ActivityProvider interface {
+	ActivityDescription(args json.RawMessage) string
+}
+
+// ActivityOf 取本次调用的动作描述：工具自述 > 元数据静态短语 > 通用兜底。
+func ActivityOf(t Tool, args json.RawMessage) string {
+	if t == nil {
+		return ""
+	}
+	if ap, ok := t.(ActivityProvider); ok {
+		if s := ap.ActivityDescription(args); s != "" {
+			return s
+		}
+	}
+	if m := MetaOf(t); m.ActivityDesc != "" {
+		return m.ActivityDesc
+	}
+	return "调用 " + t.Name()
+}
+
+// CategoryOf 动作类别（MetaOf 已保证非空）。
+func CategoryOf(t Tool) string { return MetaOf(t).Category }
 
 // 展示分组：与前端工具页分组顺序一致。
 const (
@@ -111,20 +150,38 @@ type MetaProvider interface {
 
 // MetaOf 读取工具元信息：实现了 MetaProvider 用声明值，否则按 RiskLevel 兜底推导。
 func MetaOf(t Tool) ToolMeta {
+	m := ToolMeta{}
 	if mp, ok := t.(MetaProvider); ok {
-		m := mp.Meta()
-		if m.Group == "" {
-			m.Group = GroupOf(t.Name(), t.RiskLevel())
+		m = mp.Meta()
+	} else {
+		switch t.RiskLevel() {
+		case RiskReadOnly, RiskNetwork:
+			m.ReadOnly = true
+		case RiskDestructive:
+			m.Destructive = true
 		}
-		return m
 	}
-	m := ToolMeta{TimeoutSec: 0, MaxResultChars: 0}
-	switch t.RiskLevel() {
-	case RiskReadOnly, RiskNetwork:
-		m.ReadOnly = true
-	case RiskDestructive:
-		m.Destructive = true
+	if m.Group == "" {
+		m.Group = GroupOf(t.Name(), t.RiskLevel())
 	}
-	m.Group = GroupOf(t.Name(), t.RiskLevel())
+	if m.Category == "" {
+		m.Category = deriveCategory(m, t.RiskLevel())
+	}
 	return m
+}
+
+// deriveCategory 未声明类别时按只读/破坏性/风险推导。
+func deriveCategory(m ToolMeta, risk RiskLevel) string {
+	switch {
+	case m.Destructive || risk == RiskDestructive:
+		return CategoryIrreversible
+	case risk == RiskExec:
+		return CategoryExec
+	case risk == RiskNetwork:
+		return CategoryNetwork
+	case m.ReadOnly || risk == RiskReadOnly:
+		return CategoryInfo
+	default:
+		return CategoryEdit
+	}
 }

@@ -59,7 +59,10 @@ func (t *EditTool) Schema() tool.ToolSchema {
 
 // Meta 声明：文件路径参数 + diff 呈现。
 func (t *EditTool) Meta() tool.ToolMeta {
-	return tool.ToolMeta{Group: tool.GroupFile, PathParams: []string{"path"}, UIHint: "diff"}
+	return tool.ToolMeta{
+		Group: tool.GroupFile, PathParams: []string{"path"}, UIHint: "diff",
+		Category: tool.CategoryEdit, ActivityDesc: "编辑文件",
+	}
 }
 
 type editReq struct {
@@ -67,6 +70,15 @@ type editReq struct {
 	OldString  string `json:"old_string"`
 	NewString  string `json:"new_string"`
 	ReplaceAll bool   `json:"replace_all"`
+}
+
+// ActivityDescription 时间线文案。
+func (t *EditTool) ActivityDescription(args json.RawMessage) string {
+	var req editReq
+	if json.Unmarshal(args, &req) != nil || req.Path == "" {
+		return ""
+	}
+	return "正在编辑 " + shortPath(req.Path)
 }
 
 func (t *EditTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolResult {
@@ -86,6 +98,12 @@ func (t *EditTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 	p, err := safePath(t.resolve(ctx), req.Path)
 	if err != nil {
 		return tool.ToolResult{Err: err}
+	}
+	// 写前必须读：old_string 与磁盘不一致时「匹配到别处」会改坏文件。
+	// 只在本轮 run 内校验（跨轮文件可能已被外部改动），无 run 身份时不设限。
+	if _, serr := os.Stat(p); serr == nil && !tool.FileWasRead(ctx, p) {
+		return tool.ToolResult{Err: pkg.New(4001,
+			"编辑前必须先 file_read 该文件：old_string 需与磁盘内容逐字一致，凭记忆拼接会改错位置", req.Path)}
 	}
 	bs, err := os.ReadFile(p)
 	if err != nil {

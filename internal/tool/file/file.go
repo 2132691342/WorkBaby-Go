@@ -94,6 +94,20 @@ type readReq struct {
 	MaxLines int    `json:"maxLines"`
 }
 
+// Meta 声明：纯读、文件组、信息类动作。
+func (t *ReadTool) Meta() tool.ToolMeta {
+	return tool.ToolMeta{Group: tool.GroupFile, ReadOnly: true, Category: tool.CategoryInfo, ActivityDesc: "读取文件", MaxResultChars: 40_000, PathParams: []string{"path"}}
+}
+
+// ActivityDescription 时间线上显示「正在读取 xxx」（比裸工具名有用得多）。
+func (t *ReadTool) ActivityDescription(args json.RawMessage) string {
+	var req readReq
+	if json.Unmarshal(args, &req) != nil || req.Path == "" {
+		return ""
+	}
+	return "正在读取 " + shortPath(req.Path)
+}
+
 func (t *ReadTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolResult {
 	var req readReq
 	if err := json.Unmarshal(args, &req); err != nil {
@@ -107,6 +121,8 @@ func (t *ReadTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 	if err != nil {
 		return tool.ToolResult{Err: pkg.Wrap(4007, "read file failed", err)}
 	}
+	// 读态登记：file_edit 的「写前必须读」据此校验（本轮 run 内有效）
+	tool.MarkFileRead(ctx, p)
 	content := string(bs)
 	if req.MaxLines > 0 {
 		lines := strings.Split(content, "\n")
@@ -115,6 +131,15 @@ func (t *ReadTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 		}
 	}
 	return tool.ToolResult{Content: content}
+}
+
+// shortPath 动作描述里的路径只留文件名：时间线一行放不下绝对路径。
+func shortPath(p string) string {
+	p = filepath.ToSlash(p)
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
 }
 
 // ===== file_write =====
@@ -164,6 +189,23 @@ func (t *WriteTool) Schema() tool.ToolSchema {
 			}
 		}`),
 	}
+}
+
+// Meta 声明：写文件、文件组、编辑类动作。
+func (t *WriteTool) Meta() tool.ToolMeta {
+	return tool.ToolMeta{Group: tool.GroupFile, Category: tool.CategoryEdit, ActivityDesc: "写入文件", PathParams: []string{"path"}}
+}
+
+// ActivityDescription 时间线文案。
+func (t *WriteTool) ActivityDescription(args json.RawMessage) string {
+	var req writeReq
+	if json.Unmarshal(args, &req) != nil || req.Path == "" {
+		return ""
+	}
+	if req.Append {
+		return "正在追加 " + shortPath(req.Path)
+	}
+	return "正在写入 " + shortPath(req.Path)
 }
 
 type writeReq struct {

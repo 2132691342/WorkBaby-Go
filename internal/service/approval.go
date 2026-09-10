@@ -38,9 +38,25 @@ type ApprovalService struct {
 	approved map[string]bool // 已批准的命令（needs_approval 免审表；进程内存，重启清空更安全）
 }
 
+// 放行有效期：与前端「允许一次 / 本会话允许」两档一一对应。
+const (
+	scopeOnce    = "once"
+	scopeSession = "session"
+)
+
+// approvalDecision 一次审批决策：是否放行 + 是否记入本会话免审表。
+type approvalDecision struct {
+	approved bool
+	remember bool
+}
+
+// canRemember 只有 needs_approval 允许「本会话免审」。
+// 不可逆操作（危险正则命中）每次都问——给一次性放行是授权，给永久放行是隐患。
+func canRemember(risk string) bool { return risk == tool.RiskApprovalNeeds }
+
 // pendingApproval 单条未决审批。
 type pendingApproval struct {
-	ch        chan bool
+	ch        chan approvalDecision
 	command   string
 	risk      string
 	runID     string
@@ -115,7 +131,7 @@ func (s *ApprovalService) Approve(ctx context.Context, command string, risk stri
 	id := pkg.NewID("APR")
 	now := time.Now()
 	item := &pendingApproval{
-		ch:        make(chan bool, 1),
+		ch:        make(chan approvalDecision, 1),
 		command:   command,
 		risk:      risk,
 		runID:     harness.RunIDFromCtx(ctx),
@@ -134,22 +150,24 @@ func (s *ApprovalService) Approve(ctx context.Context, command string, risk stri
 	s.persistPending(ctx, id, domain.ApprovalKindApproval, command, risk, item.expiresAt)
 
 	s.emit(ctx, "chat:approval", map[string]any{
-		"id":      id,
-		"command": command,
-		"reason":  approvalReason(risk),
-		"risk":    risk,
+		"id":           id,
+		"command":      command,
+		"reason":       approvalReason(risk),
+		"risk":         risk,
+		"can_remember": canRemember(risk),
 	})
 
 	select {
-	case ok := <-item.ch:
-		if ok && risk == tool.RiskApprovalNeeds {
+	case d := <-item.ch:
+		// 「本会话允许」由用户显式选择（remember）；irreversible 永不免审。
+		if d.approved && d.remember && canRemember(risk) {
 			s.mu.Lock()
 			s.approved[command] = true
 			s.mu.Unlock()
 		}
-		s.settleRecord(id, map[bool]string{true: domain.ApprovalStatusApproved, false: domain.ApprovalStatusDenied}[ok], "")
-		s.emitDecided(ctx, id, command, map[bool]string{true: "approved", false: "denied"}[ok])
-		return ok
+		s.settleRecord(id, map[bool]string{true: domain.ApprovalStatusApproved, false: domain.ApprovalStatusDenied}[d.approved], "")
+		s.emitDecided(ctx, id, command, map[bool]string{true: "approved", false: "denied"}[d.approved])
+		return d.approved
 	case <-time.After(approvalWaitTimeout):
 		pkg.L.Warn("approval timed out, deny", "id", id)
 		s.settleRecord(id, domain.ApprovalStatusTimeout, "")
@@ -275,7 +293,8 @@ func (s *ApprovalService) DrainStale(ctx context.Context) {
 }
 
 // Decide 用户决策回填（api 层 DecideApproval 绑定调用）。
-func (s *ApprovalService) Decide(id string, approved bool) error {
+// scope=session 表示「本会话允许」——只对 needs_approval 生效，其余按一次性放行处理。
+func (s *ApprovalService) Decide(id string, approved bool, scope string) error {
 	s.mu.Lock()
 	item, ok := s.pending[id]
 	if ok {
@@ -288,7 +307,7 @@ func (s *ApprovalService) Decide(id string, approved bool) error {
 		}
 		return pkg.New(4003, "审批请求不存在或已过期", id)
 	}
-	item.ch <- approved
+	item.ch <- approvalDecision{approved: approved, remember: scope == scopeSession}
 	return nil
 }
 
@@ -308,7 +327,7 @@ func (s *ApprovalService) Skip(id string) error {
 	s.mu.Unlock()
 	switch {
 	case isApproval:
-		item.ch <- false
+		item.ch <- approvalDecision{approved: false}
 		return nil
 	case isInput:
 		ch <- inputAnswer{ok: false}
@@ -330,13 +349,14 @@ func (s *ApprovalService) Pending() []domain.ApprovalPendingRESP {
 			continue
 		}
 		out = append(out, domain.ApprovalPendingRESP{
-			ID:        id,
-			RunID:     it.runID,
-			SessionID: it.sessionID,
-			Command:   it.command,
-			Reason:    approvalReason(it.risk),
-			Risk:      it.risk,
-			ExpiresAt: it.expiresAt,
+			ID:          id,
+			RunID:       it.runID,
+			SessionID:   it.sessionID,
+			Command:     it.command,
+			Reason:      approvalReason(it.risk),
+			Risk:        it.risk,
+			ExpiresAt:   it.expiresAt,
+			CanRemember: canRemember(it.risk),
 		})
 	}
 	// 补充输入与审批同属「暂停等用户」，必须一并回传，否则刷新后提问卡片永久丢失

@@ -11,15 +11,16 @@ import (
 	"gorm.io/gorm"
 )
 
-// Hit 检索命中项。
+// Hit 检索命中项。ChunkIdx 是块在文档内的序号，与 DocID 一起构成可溯源坐标。
 type Hit struct {
-	DocID   string            `json:"docID"`
-	DocName string            `json:"docName"`
-	ChunkID string            `json:"chunkID"`
-	Content string            `json:"content"`
-	Score   float64           `json:"score"`
-	Source  string            `json:"source"`
-	Meta    map[string]string `json:"meta"`
+	DocID    string            `json:"docID"`
+	DocName  string            `json:"docName"`
+	ChunkID  string            `json:"chunkID"`
+	ChunkIdx int               `json:"chunkIdx"`
+	Content  string            `json:"content"`
+	Score    float64           `json:"score"`
+	Source   string            `json:"source"`
+	Meta     map[string]string `json:"meta"`
 }
 
 // Retriever 统一检索接口；上层不感知底层实现。
@@ -27,16 +28,13 @@ type Retriever interface {
 	Search(ctx context.Context, query string, topK int) ([]Hit, error)
 }
 
-// FTS5Retriever 检索实现：trigram tokenizer + BM25 排序；token 全部短于 3 字时 LIKE 兜底。
+// FTS5Retriever 检索实现：unicode61 tokenizer + BM25 排序；token 全部过短时 LIKE 兜底。
 type FTS5Retriever struct {
 	db *gorm.DB
 }
 
 // NewFTS5Retriever 构造检索器。
 func NewFTS5Retriever(db *gorm.DB) *FTS5Retriever { return &FTS5Retriever{db: db} }
-
-// minGramLen trigram tokenizer 的最小可查长度；短于它的 token 匹配不到任何 3-gram。
-const minGramLen = pkg.MinGramLen
 
 // BuildMatchQuery 自由文本 → FTS5 MATCH 表达式。
 // 实现收口在 pkg：知识库与记忆共用同一套切词 / OR 口径，避免两处漂移。
@@ -52,7 +50,7 @@ func (r *FTS5Retriever) Search(ctx context.Context, query string, topK int) ([]H
 	}
 	match := BuildMatchQuery(query)
 	if match == "" {
-		// 所有 token 都短于 trigram 最小窗口：走 LIKE 兜底而不是静默无结果
+		// 所有 token 都短于 trigram 最小窗口：走带打分子串兜底，而不是静默无结果
 		return r.searchLike(ctx, query, topK)
 	}
 
@@ -60,6 +58,7 @@ func (r *FTS5Retriever) Search(ctx context.Context, query string, topK int) ([]H
 		ChunkID  string  `gorm:"column:chunk_id"`
 		DocID    string  `gorm:"column:doc_id"`
 		DocName  string  `gorm:"column:doc_name"`
+		ChunkIdx int     `gorm:"column:chunk_idx"`
 		Source   string  `gorm:"column:source"`
 		Content  string  `gorm:"column:content"`
 		MetaJSON string  `gorm:"column:meta_json"`
@@ -67,6 +66,7 @@ func (r *FTS5Retriever) Search(ctx context.Context, query string, topK int) ([]H
 	}
 	err := r.db.WithContext(ctx).Raw(`
 		SELECT kc.id AS chunk_id, kc.doc_id AS doc_id, kd.name AS doc_name,
+		       kc.sequence AS chunk_idx,
 		       kd.source AS source, kc.content AS content, kc.meta_json AS meta_json,
 		       bm25(knowledge_chunks_fts) AS score
 		FROM knowledge_chunks_fts
@@ -87,22 +87,21 @@ func (r *FTS5Retriever) Search(ctx context.Context, query string, topK int) ([]H
 	out := make([]Hit, 0, len(rows))
 	for i := range rows {
 		out = append(out, Hit{
-			DocID:   rows[i].DocID,
-			DocName: rows[i].DocName,
-			ChunkID: rows[i].ChunkID,
-			Content: rows[i].Content,
-			Score:   -rows[i].Score,
-			Source:  rows[i].Source,
-			Meta:    parseMeta(rows[i].MetaJSON),
+			DocID:    rows[i].DocID,
+			DocName:  rows[i].DocName,
+			ChunkID:  rows[i].ChunkID,
+			ChunkIdx: rows[i].ChunkIdx,
+			Content:  rows[i].Content,
+			Score:    -rows[i].Score,
+			Source:   rows[i].Source,
+			Meta:     parseMeta(rows[i].MetaJSON),
 		})
 	}
 	return out, nil
 }
 
-// searchLike FTS5 兜底：trigram 最小窗口是 3 字符，「部署」「报错」「下载」这类
-// 2 字中文高频查询在 MATCH 上永远零命中——这是中文场景最常见的查询长度。
-//
-// 退化为 LIKE 子串扫描，本地单库规模下代价可接受。命中条件：整串 LIKE OR 任一 token
+// searchLike FTS5 兜底：MATCH 对 1 字 token 与部分专名无解（token 过短或库中没有该词形），
+// 此时退化成 LIKE 子串扫描——本地单库规模下代价可接受。命中条件：整串 LIKE OR 任一 token
 // LIKE——多 token 短查询（"怎么 部署 服务"）不会因要求整串连续而漏命中。
 //
 // 相关性打分在 Go 侧完成（LIKE 无法用 bm25）：整串命中 > 多 token 命中计数。
@@ -138,6 +137,7 @@ func (r *FTS5Retriever) searchLike(ctx context.Context, query string, topK int) 
 
 	sql := `
 		SELECT kc.id AS chunk_id, kc.doc_id AS doc_id, kd.name AS doc_name,
+		       kc.sequence AS chunk_idx,
 		       kd.source AS source, kc.content AS content, kc.meta_json AS meta_json
 		FROM knowledge_chunks kc
 		JOIN knowledge_docs kd ON kd.id = kc.doc_id
@@ -146,6 +146,7 @@ func (r *FTS5Retriever) searchLike(ctx context.Context, query string, topK int) 
 		ChunkID  string `gorm:"column:chunk_id"`
 		DocID    string `gorm:"column:doc_id"`
 		DocName  string `gorm:"column:doc_name"`
+		ChunkIdx int    `gorm:"column:chunk_idx"`
 		Source   string `gorm:"column:source"`
 		Content  string `gorm:"column:content"`
 		MetaJSON string `gorm:"column:meta_json"`
@@ -155,28 +156,23 @@ func (r *FTS5Retriever) searchLike(ctx context.Context, query string, topK int) 
 		return nil, pkg.Wrap(7004, "like search failed", err)
 	}
 
-	// 相关性打分：整串命中（最强信号）+ token 命中计数；同分保持 SQL 返回序（稳定排序）
-	lq := strings.ToLower(q)
+	// 相关性打分：与记忆侧共用 pkg.ScoreSubstring 口径；同分保持 SQL 返回序（稳定排序）
+	tokens := make([]string, 0, len(seen))
+	for t := range seen {
+		tokens = append(tokens, t)
+	}
 	out := make([]Hit, 0, len(rows))
 	for i := range rows {
-		score := 0.0
-		lower := strings.ToLower(rows[i].Content)
-		if lq != "" && strings.Contains(lower, lq) {
-			score += 10
-		}
-		for t := range seen {
-			if strings.Contains(lower, t) {
-				score++
-			}
-		}
+		score := pkg.ScoreSubstring(rows[i].Content, q, tokens)
 		out = append(out, Hit{
-			DocID:   rows[i].DocID,
-			DocName: rows[i].DocName,
-			ChunkID: rows[i].ChunkID,
-			Content: rows[i].Content,
-			Score:   score,
-			Source:  rows[i].Source,
-			Meta:    parseMeta(rows[i].MetaJSON),
+			DocID:    rows[i].DocID,
+			DocName:  rows[i].DocName,
+			ChunkID:  rows[i].ChunkID,
+			ChunkIdx: rows[i].ChunkIdx,
+			Content:  rows[i].Content,
+			Score:    score,
+			Source:   rows[i].Source,
+			Meta:     parseMeta(rows[i].MetaJSON),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
@@ -212,6 +208,8 @@ func FormatHits(hits []Hit) string {
 			sb.WriteString(" · ")
 			sb.WriteString(h.Meta["title"])
 		}
+		sb.WriteString(" · 段")
+		sb.WriteString(strconv.Itoa(h.ChunkIdx))
 		sb.WriteString("\n")
 		sb.WriteString(h.Content)
 		sb.WriteString("\n\n")

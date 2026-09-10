@@ -35,15 +35,17 @@ func (s *ToolService) ListTools(ctx context.Context) ([]domain.ToolMeta, error) 
 		}
 		meta := tool.MetaOf(t)
 		out = append(out, domain.ToolMeta{
-			Name:        t.Name(),
-			Description: t.Description(),
-			RiskLevel:   string(t.RiskLevel()),
-			Group:       meta.Group,
-			ReadOnly:    meta.ReadOnly,
-			Destructive: meta.Destructive,
-			Enabled:     enabled,
-			Params:      parseParams(t.Schema().Parameters),
-			SchemaJSON:  string(t.Schema().Parameters),
+			Name:         t.Name(),
+			Description:  t.Description(),
+			RiskLevel:    string(t.RiskLevel()),
+			Group:        meta.Group,
+			Category:     meta.Category,
+			ActivityDesc: meta.ActivityDesc,
+			ReadOnly:     meta.ReadOnly,
+			Destructive:  meta.Destructive,
+			Enabled:      enabled,
+			Params:       parseParams(t.Schema().Parameters),
+			SchemaJSON:   string(t.Schema().Parameters),
 		})
 	}
 	return out, nil

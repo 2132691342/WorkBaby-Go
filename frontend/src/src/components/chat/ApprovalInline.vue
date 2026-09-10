@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   Check, Send, AlertTriangle, Lock, File as FileIcon
@@ -7,19 +7,12 @@ import {
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
 import { useToast } from '@/composables/useToast'
+import { diffLineClass, parseDiffLines, type DiffLine } from '@/chat/models/blocks'
+import { synthesizePatch } from '@/chat/models/editPatch'
 
 /**
- * 审批语义卡：从「命令文本块」升级为按工具分类的卡片。
- *
- * <p>按 tool 名称解析 approval.command（`name(jsonArgs)`）→ 不同工具给不同预览：
- *   - file_write / file_edit：目标路径 + 内容/替换预览；
- *   - exec：命令白名单状态说明 + 参数数组；
- *   - 其它：args JSON pretty-print。
- *
- * <p>风险徽标：needs_approval（warning）/ irreversible（error）。
- * 会话级免审的语义由后端 ApprovalService 承担（同命令 needs_approval 批准后免审，
- * irreversible 每次必问），前端只展示约定。
- * 已响应态：决策成功后按钮区变绿勾并禁用（后端清卡片前的一瞬也不可重复提交）。
+ * 审批语义卡：按工具类型渲染不同预览（文件写入/编辑 → 路径 + 内容 diff；exec → 白名单状态 + 参数；其余 → args JSON）。
+ * 风险徽标区分可恢复与不可逆；决策后按钮区置为已完成并禁用，防重复提交。
  */
 const chat = useChatStore()
 const toast = useToast()
@@ -28,6 +21,14 @@ const { pendingApproval } = storeToRefs(chat)
 /** 已响应标记（approved / denied）：防重复提交 + 绿勾反馈。 */
 const settled = ref<'' | 'approved' | 'denied'>('')
 const deciding = ref(false)
+
+/**
+ * 等待秒数：run 正阻塞在审批上，用户看不到任何进度提示会以为卡死。
+ * 卡片本身只在待决期存在，挂载即开始计时。
+ */
+const waitSec = ref(0)
+const waitTimer = window.setInterval(() => { waitSec.value += 1 }, 1000)
+onUnmounted(() => { window.clearInterval(waitTimer) })
 
 /** 补充输入模式（request_input 工具）：卡片变为问答形态而非批准/拒绝。 */
 const isInput = computed(() => pendingApproval.value?.risk === 'input_required')
@@ -50,6 +51,12 @@ const riskType = computed<'error' | 'warning'>(() =>
 )
 
 const reasonText = computed(() => pendingApproval.value?.reason ?? '')
+
+/**
+ * 是否提供「本会话允许」：以服务端声明为准（不可逆操作恒 false）。
+ * 前端不再自行按 risk 判断——两边各判一次就会出现「按钮显示但后端不认」的裂缝。
+ */
+const canRemember = computed(() => pendingApproval.value?.canRemember === true)
 
 interface ParsedArgs { [k: string]: unknown }
 
@@ -138,6 +145,15 @@ const fileWritePreview = computed(() => {
   return previewContent(a.content)
 })
 
+/** file_edit 的本地补丁行（非编辑 / 缺 old 时为空，模板据此退回普通预览）。 */
+const editPatchLines = computed<DiffLine[]>(() => {
+  const a = fileWriteArgs.value
+  if (!a?.edit || a.content == null) return []
+  const patch = synthesizePatch(a.oldContent ?? '', a.content)
+  if (!patch) return []
+  return parseDiffLines(previewContent(patch).text)
+})
+
 const argsJson = computed(() => {
   const p = parsed.value
   if (!p || !p.rawArgs) return null
@@ -152,6 +168,19 @@ async function approve(): Promise<void> {
     await chat.approveApproval()
     settled.value = 'approved'
     toast.success(t('chat.approvalApproved'))
+  } finally {
+    deciding.value = false
+  }
+}
+
+/** 本会话允许：放行并记住该命令（后端 scope=session；不可逆操作不提供该选项）。 */
+async function approveForSession(): Promise<void> {
+  if (deciding.value || settled.value) return
+  deciding.value = true
+  try {
+    await chat.approveApprovalForSession()
+    settled.value = 'approved'
+    toast.success(t('chat.approvalAllowedSession'))
   } finally {
     deciding.value = false
   }
@@ -205,6 +234,8 @@ async function sendAnswer(): Promise<void> {
           </el-icon>
           {{ isInput ? t('chat.inputTag') : riskLabel }}
         </el-tag>
+        <!-- 等待计时：run 正阻塞在这里，没有进度感用户会以为卡死 -->
+        <span v-if="!settled" class="text-[11px] text-wb-muted">{{ t('chat.waitingConfirm', waitSec) }}</span>
       </div>
     </template>
 
@@ -237,9 +268,17 @@ async function sendAnswer(): Promise<void> {
           {{ t('chat.approvalAppend') }}
         </el-tag>
       </div>
-      <div v-if="fileWriteArgs.edit && fileWriteArgs.oldContent" class="mb-2">
-        <pre class="overflow-x-auto rounded-md border border-wb-border bg-wb-surface-2 px-3 py-2 font-mono text-[11px] leading-relaxed text-wb-muted line-through">{{ previewContent(fileWriteArgs.oldContent).text }}</pre>
-      </div>
+      <!-- file_edit：本地合成补丁——执行前就能看清「改哪一行、改成什么」，
+           而不是让用户对两段文本自行比对 -->
+      <pre
+        v-if="editPatchLines.length > 0"
+        class="mb-2 overflow-x-auto rounded-md border border-wb-border bg-wb-surface-2 px-3 py-2 font-mono text-[11px] leading-relaxed"
+      ><span
+          v-for="(line, i) in editPatchLines"
+          :key="i"
+          class="block"
+          :class="diffLineClass(line.type)"
+        >{{ line.text }}</span></pre>
       <div v-if="fileWriteArgs.content === ''" class="rounded-md border border-dashed border-wb-border bg-wb-surface-2 px-3 py-2 text-xs text-wb-muted">
         {{ t('chat.approvalEmptyWrite') }}
       </div>
@@ -303,14 +342,23 @@ async function sendAnswer(): Promise<void> {
         <el-icon class="text-wb-mint"><Check /></el-icon>
         {{ settled === 'approved' ? t('chat.approvalApproved') : t('chat.approvalDenied') }}
       </div>
-      <div v-else class="mt-3 flex gap-2">
+      <div v-else class="mt-3 flex flex-wrap gap-2">
         <el-button
           :type="isIrreversible ? 'danger' : 'primary'"
           size="small"
           :loading="deciding"
           @click="approve"
         >
-          {{ isIrreversible ? t('chat.approvalApproveIrreversible') : t('chat.approvalApprove') }}
+          {{ isIrreversible ? t('chat.approvalApproveIrreversible') : t('chat.approvalAllowOnce') }}
+        </el-button>
+        <!-- 本会话允许：只有后端声明可记住时出现（不可逆操作恒不出现，避免「选了却无效」） -->
+        <el-button
+          v-if="canRemember"
+          size="small"
+          :disabled="deciding"
+          @click="approveForSession"
+        >
+          {{ t('chat.approvalAllowSession') }}
         </el-button>
         <el-button size="small" :disabled="deciding" @click="deny">{{ t('chat.approvalDeny') }}</el-button>
       </div>

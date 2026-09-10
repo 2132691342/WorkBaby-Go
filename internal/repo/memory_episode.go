@@ -3,6 +3,7 @@ package repo
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"WorkBaby/internal/domain"
@@ -57,22 +58,60 @@ func (r *MemoryEpisodeRepo) SearchFTS(ctx context.Context, query string, topK in
 		LIMIT ?`, match, topK).Scan(&rows).Error; err != nil {
 		return nil, pkg.Wrap(6004, "search memory fts failed", err)
 	}
+	// MATCH 零命中（query 混有 2 字短词等）→ 子串兜底续查，不静默返回空
+	if len(rows) == 0 {
+		return r.searchEpisodeLike(ctx, q, topK)
+	}
 	return rows, nil
 }
 
-// searchEpisodeLike 兜底：所有 token 都短于 trigram 最小窗口（如 2 字中文「部署」）时
-// 走 LIKE 子串扫描，本地单库规模下代价可接受。
+// searchEpisodeLike 子串兜底：trigram 最小窗口是 3 字符，「跑腿」「报错」这类 2 字中文
+// 查询在 MATCH 上必然零命中。退化为 LIKE 扫描并按相关性重排——禁止按 created_at 排序，
+// 那会让结果只取决于记忆新旧而不是相关性。
 func (r *MemoryEpisodeRepo) searchEpisodeLike(ctx context.Context, q string, topK int) ([]domain.MemoryEpisodeDO, error) {
-	like := "%" + pkg.EscapeLike(q) + "%"
+	toks := pkg.SplitTokens(q)
+	seen := make(map[string]bool, len(toks))
+	clauses := make([]string, 0, len(toks)+1)
+	args := make([]any, 0, len(toks)+2)
+	clauses = append(clauses, "me.summary LIKE ? ESCAPE '\\'")
+	args = append(args, "%"+pkg.EscapeLike(q)+"%")
+	for _, t := range toks {
+		t = strings.TrimSpace(t)
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		clauses = append(clauses, "me.summary LIKE ? ESCAPE '\\'")
+		args = append(args, "%"+pkg.EscapeLike(t)+"%")
+	}
+	args = append(args, topK*4)
+
 	var rows []domain.MemoryEpisodeDO
 	if err := r.db.WithContext(ctx).Raw(`
 		SELECT me.* FROM memory_episodes me
-		WHERE me.summary LIKE ? ESCAPE '\'
-		ORDER BY me.created_at DESC
-		LIMIT ?`, like, topK).Scan(&rows).Error; err != nil {
+		WHERE `+strings.Join(clauses, " OR ")+`
+		LIMIT ?`, args...).Scan(&rows).Error; err != nil {
 		return nil, pkg.Wrap(6004, "search memory like failed", err)
 	}
-	return rows, nil
+	tokens := make([]string, 0, len(seen))
+	for t := range seen {
+		tokens = append(tokens, t)
+	}
+	scored := make([]domain.MemoryEpisodeDO, 0, len(rows))
+	scores := make(map[string]float64, len(rows))
+	for i := range rows {
+		s := pkg.ScoreSubstring(rows[i].Summary, q, tokens)
+		if s <= 0 {
+			continue
+		}
+		scored = append(scored, rows[i])
+		scores[rows[i].ID] = s
+	}
+	sort.SliceStable(scored, func(i, j int) bool { return scores[scored[i].ID] > scores[scored[j].ID] })
+	if len(scored) > topK {
+		scored = scored[:topK]
+	}
+	return scored, nil
 }
 
 // ListBySession 某会话的最近 episodes（供记忆面板展示）。

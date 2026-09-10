@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"WorkBaby/internal/llm"
@@ -261,7 +262,22 @@ func (c *Client) buildBody(req *llm.ChatRequest, stream bool) map[string]any {
 	if req.User != "" {
 		body["user"] = req.User
 	}
+	// 上游自动按前缀缓存；prompt_cache_key 让同一会话固定落在同一缓存分片，避免被其他流量挤掉。
+	// 只有官方端点认这个字段，第三方兼容层传未知字段可能 400，按 host 判定后再发。
+	if req.SessionID != "" && isOfficialEndpoint(c.BaseURL) {
+		body["prompt_cache_key"] = req.SessionID
+	}
 	return body
+}
+
+// isOfficialEndpoint 判断 BaseURL 是否指向官方 OpenAI（第三方兼容层不认 prompt_cache_key）。
+func isOfficialEndpoint(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "api.openai.com"
 }
 
 func (c *Client) toChatResponse(r *OpenAIResponse) (*llm.ChatResponse, error) {

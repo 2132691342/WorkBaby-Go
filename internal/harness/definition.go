@@ -100,6 +100,30 @@ func (d Definition) FilterTools(defs []llm.ToolDefinition) []llm.ToolDefinition 
 	return out
 }
 
+// ToolDefBudgetPercent 工具定义占上下文预算的份额（%）。
+// 工具 schema 与历史消息抢同一个 prompt 预算，MCP 挂载几十个工具时会挤掉对话历史。
+const ToolDefBudgetPercent = 15
+
+// TrimToolDefs 按 token 预算裁剪工具定义：超限时从尾部（调用方给定的优先级序）丢弃，
+// 保留至少 minToolDefs 个，返回保留集与被丢弃的工具名。
+//
+// 只在下游明确给出预算时生效；maxTokens<=0 视为不限。
+func TrimToolDefs(defs []llm.ToolDefinition, maxTokens int) ([]llm.ToolDefinition, []string) {
+	if maxTokens <= 0 || len(defs) <= minToolDefs {
+		return defs, nil
+	}
+	out := defs
+	var dropped []string
+	for len(out) > minToolDefs && EstimateToolTokens(out) > maxTokens {
+		dropped = append(dropped, out[len(out)-1].Name)
+		out = out[:len(out)-1]
+	}
+	return out, dropped
+}
+
+// minToolDefs 裁剪下限：低于该数量宁可超预算，也不把主力工具裁没。
+const minToolDefs = 8
+
 // matchAnyGlob 判断 name 命中任一 glob 模式（path.Match 语义）。
 func matchAnyGlob(name string, pats []string) bool {
 	for _, p := range pats {
@@ -125,6 +149,7 @@ const (
 4. 用工具验证结果：写完代码就 exec 跑构建或测试，改完文件读回来确认——不要凭记忆断言「已完成」。
 5. 失败要改道，不要硬重试：同一调用连续失败两次就换工具、换参数或向用户说明，禁止原样重复。
 6. 不确定就问：关键前提缺失且无法自行推断时，用 request_input 向用户确认，不要替用户假设。
+7. 成果必须可核验：严禁声称「已创建/已生成/已保存」任何文件或「已执行」任何操作，除非本轮确实调用了对应工具且成功；没有可用工具（如缺少技能/运行时）就如实说明缺什么，绝不虚构完成过程或编造产出路径。
 
 ## 输出
 - 简洁中文，先结论后过程；不复述工具返回的原文，只给结论与必要证据。

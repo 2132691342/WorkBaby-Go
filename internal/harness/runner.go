@@ -401,10 +401,16 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		// 折算后等价于「估算 × 系数 ≤ 真实预算」，无需改动压缩器实现。
 		if r.cfg.ContextBudget > 0 && r.compressor != nil {
 			budget := r.calibratedBudget(r.cfg.ContextBudget)
+			before := msgs
 			if cc, ok := r.compressor.(ContextCompressor); ok {
 				msgs = cc.CompressCtx(ctx, msgs, budget)
 			} else {
 				msgs = r.compressor.Compress(msgs, budget)
+			}
+			// 压缩证据化：按实际差异发边界（谁被移出上下文、涉及哪些 tool_call_id 锚点），
+			// 上游据此提示用户并可对账「哪一轮被折叠」。
+			if boundary, changed := CompressDiff(CompressorKey(r.compressor), before, msgs); changed {
+				r.sink.Emit(Event{Kind: EventCompressed, RunID: runID, SessionID: sessionID, Turn: turn, Payload: boundary})
 			}
 		}
 
@@ -415,10 +421,11 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 
 		r.sink.Emit(Event{Kind: EventTurnStart, RunID: runID, SessionID: sessionID, Turn: turn})
 		req := &llm.ChatRequest{
-			Model:    model,
-			Messages: msgs,
-			User:     "local",
-			Tools:    r.toolDefs,
+			Model:     model,
+			Messages:  msgs,
+			User:      "local",
+			Tools:     r.toolDefs,
+			SessionID: sessionID,
 		}
 		// 三层合并：请求级 > Provider 级 > 全局默认
 		resolved := llm.ResolveParams(req, r.providerParams, r.defaults)
@@ -473,7 +480,7 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			if chunk.ToolCall != nil {
 				tc := *chunk.ToolCall
 				toolCalls = append(toolCalls, tc)
-				r.sink.Emit(Event{Kind: EventToolCall, RunID: runID, SessionID: sessionID, Turn: turn, Payload: ToolCallPayload{ID: tc.ID, Name: tc.Name, Arguments: string(tc.Arguments)}})
+				r.emitToolCall(runID, sessionID, turn, tc)
 			}
 			if chunk.FinalUsage != nil {
 				usage = *chunk.FinalUsage
@@ -506,7 +513,7 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			if textCalls := parseTextToolCalls(content.String(), r.toolDefs); len(textCalls) > 0 {
 				toolCalls = textCalls
 				for _, tc := range textCalls {
-					r.sink.Emit(Event{Kind: EventToolCall, RunID: runID, SessionID: sessionID, Turn: turn, Payload: ToolCallPayload{ID: tc.ID, Name: tc.Name, Arguments: string(tc.Arguments)}})
+					r.emitToolCall(runID, sessionID, turn, tc)
 				}
 			}
 		}
@@ -584,6 +591,12 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			normalStop = true
 			break
 		}
+	}
+	// 取消优先：ctx 在流式等待中被取消时，轮首那次 ctx.Err() 检查已经错过，
+	// 退出时会把「用户点停止」误报成 end_turn（静默断流）或 error（上游报 canceled）；
+	// 终态归一为 cancelled，前端才能区分「用户主动停」与「模型说完 / 出错」。
+	if ctx.Err() != nil {
+		finalReason = ReasonCancelled
 	}
 	// 循环跑满 MaxTurns 仍想继续（最后一轮还在发起工具调用）→ 真实原因是 max_turns
 	if !normalStop && turnsRun == r.cfg.MaxTurns-startTurn && finalReason == ReasonEndTurn {
@@ -770,154 +783,28 @@ func (r *Runner) toolExposed(name string) bool {
 	return false
 }
 
-// execOne 执行单次工具调用：暴露校验 → 查找 → 参数校验 → 目录信任 → 工具策略门 → 停滞检测 → 执行（panic 恢复）。
+// emitToolCall 统一发工具调用事件，并附上动作描述（"正在编辑 app.ts"）。
+// 由工具自述而非前端维护「工具名 → 措辞」映射：新增工具不改前端。
+func (r *Runner) emitToolCall(runID, sessionID string, turn int, tc llm.NormalizedToolCall) {
+	activity := ""
+	if t, ok := r.tools.Get(tc.Name); ok {
+		activity = tool.ActivityOf(t, tc.Arguments)
+	}
+	r.sink.Emit(Event{Kind: EventToolCall, RunID: runID, SessionID: sessionID, Turn: turn,
+		Payload: ToolCallPayload{ID: tc.ID, Name: tc.Name, Arguments: string(tc.Arguments), Activity: activity}})
+}
+
+// execOne 执行单次工具调用：守卫顺序与语义全部收敛在 toolChain（见 toolchain.go）。
 func (r *Runner) execOne(ctx context.Context, runID, sessionID string, turn int, call llm.NormalizedToolCall, state *RunState) *llm.Message {
 	if state != nil {
 		state.ToolCallCount++
 	}
-
-	// 执行侧策略收紧：未暴露的工具直接 Refused（不计失败熔断，模型可换路）
-	if !r.toolExposed(call.Name) {
-		return r.refused(runID, sessionID, turn, call, "tool not exposed in this run")
-	}
-
-	t, ok := r.tools.Get(call.Name)
-	if !ok {
-		if state != nil {
-			state.ConsecutiveToolFails++
-		}
-		return llm.ToolMessage(call.ID, call.Name, "tool not found: "+call.Name)
-	}
-	if err := tool.ValidateArgs(t.Schema().Parameters, call.Arguments); err != nil {
-		if state != nil {
-			state.ConsecutiveToolFails++
-		}
-		return llm.ToolMessage(call.ID, call.Name, "invalid args: "+err.Error())
-	}
-
-	// 提示注入防护：参数里嵌着伪工具调用标记（多来自网页/文件内容的诱导文本）→ 拒绝执行。
-	// 拒绝走 refused（结构化回执），模型与用户都能看到原因。
-	if HasNestedToolCallMarker(string(call.Arguments)) {
-		return r.refused(runID, sessionID, turn, call, "args contain nested tool-call markers (possible prompt injection)")
-	}
-
-	// 目录信任闸门：先于工具策略门——目录都没授权，不必再问命令白名单
-	if msg := r.trustTool(ctx, runID, sessionID, turn, call); msg != nil {
+	tc := &toolCallCtx{ctx: ctx, runID: runID, sessionID: sessionID, turn: turn, call: call, state: state}
+	if msg := r.toolChain()(tc); msg != nil {
 		return msg
 	}
-
-	// 工具策略门：deny / ask 前置（默认未启用，不改变既有行为）
-	if msg := r.gateTool(ctx, runID, sessionID, turn, call, t); msg != nil {
-		return msg
-	}
-
-	// 停滞检测：同名同参连续出现（仅串行路径共享 state）
-	if state != nil {
-		key := call.Name + "|" + string(call.Arguments)
-		if key == state.LastToolKey {
-			state.SameKeyCount++
-		} else {
-			state.SameKeyCount = 1
-			state.LastToolKey = key
-		}
-		if state.SameKeyCount >= r.cfg.StagnationLimit {
-			state.Stagnant = true
-			return llm.ToolMessage(call.ID, call.Name, "stagnation guard: repeated identical tool call")
-		}
-	}
-
-	// 循环护栏 + 工具预算：与停滞检测互补。
-	// 停滞只认「连续重复」，抓不到 A→B→A→B 这类交替循环，故再叠一层全 run 的 name+args 计数；
-	// 预算则在工具执行前拦截，避免一轮内几十次调用要等到下一轮轮首才停。
-	// 命中走 refused（结构化回执）而非错误——模型看得到原因，可自行换路而不是硬失败。
-	if r.cfg.LoopLimit > 0 || r.cfg.MaxToolCalls > 0 {
-		key := call.Name + "|" + string(call.Arguments)
-		r.loopMu.Lock()
-		if r.loopHits == nil {
-			r.loopHits = map[string]int{}
-		}
-		r.loopHits[key]++
-		hits := r.loopHits[key]
-		r.toolCallsRun++
-		used := r.toolCallsRun
-		r.loopMu.Unlock()
-		if r.cfg.LoopLimit > 0 && hits >= r.cfg.LoopLimit {
-			return r.refused(runID, sessionID, turn, call,
-				fmt.Sprintf("loop guard: identical call repeated %d times (limit %d)", hits, r.cfg.LoopLimit))
-		}
-		if r.cfg.MaxToolCalls > 0 && used > r.cfg.MaxToolCalls {
-			return r.refused(runID, sessionID, turn, call,
-				fmt.Sprintf("tool budget exhausted: %d/%d calls used", used-1, r.cfg.MaxToolCalls))
-		}
-	}
-
-	// 幂等恢复（Resume 场景）：同名同参已完成的成功调用直接复用结果，不重放副作用
-	if rec, ok := r.stepHit(call); ok {
-		r.sink.Emit(Event{Kind: EventToolResult, RunID: runID, SessionID: sessionID, Turn: turn, Payload: ToolResultPayload{
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			Content:    rec.Content,
-			DurationMs: 0,
-			Meta:       map[string]string{"reused": "true"},
-		}})
-		return llm.ToolMessage(call.ID, call.Name, rec.Content)
-	}
-
-	r.sink.Emit(Event{Kind: EventToolStart, RunID: runID, SessionID: sessionID, Turn: turn, Payload: ToolCallPayload{ID: call.ID, Name: call.Name, Arguments: string(call.Arguments)}})
-
-	// 单工具元数据覆盖：声明超时 / 结果截断优先于全局默认
-	meta := tool.MetaOf(t)
-	timeout := r.cfg.ToolCallTimeout
-	if meta.TimeoutSec > 0 {
-		timeout = time.Duration(meta.TimeoutSec) * time.Second
-	}
-	resultLimit := r.cfg.MaxToolResultLen
-	if meta.MaxResultChars > 0 {
-		resultLimit = meta.MaxResultChars
-	}
-
-	start := time.Now()
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
-	result := r.execWithRecover(execCtx, t, call.Arguments)
-	cancel()
-	durationMs := time.Since(start).Milliseconds()
-
-	// 工具后处理缝：逐字段覆盖结果（脱敏 / 富化），先于事件与幂等记忆
-	if r.hooks.AfterToolCall != nil {
-		r.hooks.AfterToolCall(ctx, call.Name, call.Arguments, &result)
-	}
-
-	content := truncate(result.Content, resultLimit)
-	errMsg := ""
-	if result.Err != nil {
-		errMsg = result.Err.Error()
-		if state != nil {
-			state.ConsecutiveToolFails++
-		}
-	} else if state != nil {
-		state.ConsecutiveToolFails = 0
-	}
-	r.sink.Emit(Event{Kind: EventToolResult, RunID: runID, SessionID: sessionID, Turn: turn, Payload: ToolResultPayload{
-		ToolCallID: call.ID,
-		Name:       call.Name,
-		Content:    content,
-		Err:        errMsg,
-		DurationMs: durationMs,
-		Meta:       result.Meta,
-		Data:       result.Data,
-		Refused:    result.Refused,
-	}})
-
-	// 幂等记忆：仅记成功调用（失败/拒绝不记，Resume 时重试）
-	if result.Err == nil && !result.Refused {
-		r.stepRecord(call, StepRecord{Content: content, DurationMs: durationMs})
-	}
-
-	toolContent := content
-	if errMsg != "" {
-		toolContent = "error: " + errMsg + "\n" + content
-	}
-	return llm.ToolMessage(call.ID, call.Name, toolContent)
+	// 链最后执行层必返回回填消息；走到这里说明链被改坏了（守卫链不变量）
+	return llm.ToolMessage(call.ID, call.Name, "(工具未产生结果)")
 }
 
 // stepKey 工具调用幂等键：name + 原始参数（模型同参重试/Resume 重发时命中）。
@@ -951,85 +838,6 @@ func (r *Runner) execWithRecover(ctx context.Context, t tool.Tool, args json.Raw
 	return t.Execute(ctx, args)
 }
 
-// trustTool 目录信任闸门；未启用（pathTrust nil）返回 nil。
-// 拒绝一律走 refused（结构化回执、不计失败熔断），与策略门拒绝同构。
-func (r *Runner) trustTool(ctx context.Context, runID, sessionID string, turn int, call llm.NormalizedToolCall) *llm.Message {
-	if r.hooks.BeforeToolCall == nil {
-		return nil
-	}
-	if ok, reason := r.hooks.BeforeToolCall(ctx, call.Name, call.Arguments); !ok {
-		return r.refused(runID, sessionID, turn, call, reason)
-	}
-	return nil
-}
-
-// gateTool 工具策略门——统一护栏链的单层裁决点。
-// 实现 RiskClassifier 的工具（exec / run_skill_script）按 per-call 命令级风险裁决；
-// 其余工具显式 Allow 即放行、ask 才按静态风险问。拒绝一律 refused（结构化回执），
-// 不计失败熔断，模型可据此换方案自愈。放行后 ctx 标记 GuardChain（单层闸门）。
-func (r *Runner) gateTool(ctx context.Context, runID, sessionID string, turn int, call llm.NormalizedToolCall, t tool.Tool) *llm.Message {
-	if r.hooks.ToolGate == nil {
-		return nil
-	}
-	desc := t.Name() + "(" + string(call.Arguments) + ")"
-	risk := ""
-	cmdLevel := false // 工具给出了 per-call 命令级裁决
-	if rc, ok := t.(tool.RiskClassifier); ok {
-		if d, rr := rc.ClassifyArgs(call.Arguments); d != "" {
-			desc, risk, cmdLevel = d, rr, true
-		}
-	}
-	switch r.hooks.ToolGate.Decide(call.Name, t.RiskLevel()) {
-	case tool.DecisionDeny:
-		return r.refused(runID, sessionID, turn, call, "denied by policy")
-	case tool.DecisionAllow:
-		// YOLO（完全访问）：用户已授权全部动作，命令级风险一并放行
-		if r.hooks.ToolGate.Mode() == tool.SessionModeYolo {
-			return nil
-		}
-		if !cmdLevel {
-			return nil
-		}
-	case tool.DecisionAsk:
-		if !cmdLevel {
-			risk = gateApprovalRisk(t.RiskLevel())
-		}
-	}
-	if risk == "" || r.hooks.Approver == nil {
-		return nil
-	}
-	if !r.hooks.Approver(ctx, desc, risk) {
-		return r.refused(runID, sessionID, turn, call, "denied by user")
-	}
-	return nil
-}
-
-// refused 发结构化拒绝结果事件并返回 tool 消息（Refused 语义；不推进停滞计数）。
-func (r *Runner) refused(runID, sessionID string, turn int, call llm.NormalizedToolCall, reason string) *llm.Message {
-	content := refusedContent(call.Name, reason)
-	r.sink.Emit(Event{Kind: EventToolResult, RunID: runID, SessionID: sessionID, Turn: turn, Payload: ToolResultPayload{
-		ToolCallID: call.ID,
-		Name:       call.Name,
-		Content:    content,
-		Refused:    true,
-	}})
-	return llm.ToolMessage(call.ID, call.Name, content)
-}
-
-// refusedContent 审批拒绝 → 结构化 JSON 回执：模型据此自适应（换工具 / 调整参数 / 放弃）。
-func refusedContent(name, reason string) string {
-	bs, err := json.Marshal(map[string]any{
-		"refused": true,
-		"tool":    name,
-		"reason":  reason,
-		"hint":    "该工具调用被用户拒绝。不要原样重试；请调整方案、改用其他工具，或向用户说明并给出替代建议。",
-	})
-	if err != nil {
-		return `{"refused":true,"reason":"` + reason + `"}`
-	}
-	return string(bs)
-}
-
 // gateApprovalRisk 工具风险 → 审批风险语义（与 ApprovalService 前端展示对齐）。
 func gateApprovalRisk(risk tool.RiskLevel) string {
 	if risk == tool.RiskDestructive || risk == tool.RiskExec {
@@ -1039,8 +847,7 @@ func gateApprovalRisk(risk tool.RiskLevel) string {
 }
 
 // saveCheckpoint 每轮工具执行后落一行检查点；失败仅发事件，不阻断 run。
-// 增量化：Messages 仅存本轮新增切片（adapter 通过对比上轮 seq 起点过滤），
-// Resume 由 sql_checkpoint.LoadLast 重组：DB 历史 + 增量 → 完整上下文。
+// 快照语义：由存储实现覆盖/清理同 run 的更早轮次，调用方只管投最新一轮。
 func (r *Runner) saveCheckpoint(runID, sessionID, assistantMessageID string, turn int, msgs []*llm.Message, state *RunState, content, thinking string) {
 	if r.checkpoints == nil {
 		return
@@ -1055,7 +862,6 @@ func (r *Runner) saveCheckpoint(runID, sessionID, assistantMessageID string, tur
 		Content:        content,
 		Thinking:       thinking,
 		Usage:          r.usage.Snapshot(),
-		LastSeq:        checkpointLastSeq(r.checkpoints, sessionID, runID),
 	}
 	r.stepsMu.Lock()
 	if len(r.steps) > 0 {
@@ -1071,16 +877,6 @@ func (r *Runner) saveCheckpoint(runID, sessionID, assistantMessageID string, tur
 	}
 	_ = r.checkpoints.Cleanup(sessionID, checkpointKeepRuns)
 	r.sink.Emit(Event{Kind: EventCheckpoint, RunID: runID, SessionID: sessionID, Turn: turn})
-}
-
-// checkpointLastSeq 增量起点：读取同一 run 的上一轮检查点，取其首条消息 seq。
-// 旧实现无此字段（fallback = 0 = 全量落库）→ 与新历史数据兼容。
-func checkpointLastSeq(store CheckpointStore, sessionID, runID string) int64 {
-	prev, err := store.LoadLast(sessionID, runID)
-	if err != nil || prev == nil || len(prev.Messages) == 0 {
-		return 0
-	}
-	return prev.Messages[0].Seq
 }
 
 // truncate 工具结果回填截断：按 rune 切（中文安全），避免落在多字节序列中间

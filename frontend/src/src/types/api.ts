@@ -1,14 +1,6 @@
 /**
- * 后端 ApiResponse<T> 字段类型契约（接口契约）。
- *
- * <p>与后端 {@code server.Response} 字段一一对应：
- * <ul>
- *   <li>{@code code}：number，0 = OK，非 0 为 AppError 错误码</li>
- *   <li>{@code message}：string，默认 "ok"</li>
- *   <li>{@code data}：泛型 T</li>
- * </ul>
- *
- * <p>字段规范：全部 snake_case（下划线小驼峰），与后端 domain json tag 严格一致。
+ * 统一响应包裹：code（0 = OK，非 0 为错误码）、message、data。
+ * 全域字段 snake_case，与后端 json tag 严格一致。
  */
 export interface ApiResponse<T> {
   code: number
@@ -637,6 +629,8 @@ export interface ApprovalPending {
   reason: string
   risk: 'needs_approval' | 'irreversible' | string
   expires_at: number
+  /** 是否允许「本会话允许」（不可逆操作恒 false）。 */
+  can_remember?: boolean
 }
 
 // ===== Skills =====

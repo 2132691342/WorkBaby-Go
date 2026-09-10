@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { apiGet, apiPost } from '@/api/client'
 import { streamChat, type StreamHandle } from '@/api/stream'
 import { toolsToBlocks } from '@/chat/models/blocks'
@@ -68,17 +68,8 @@ export function backendModeToPermission(mode: string | null | undefined): Permis
 }
 
 /**
- * Chat store（E.3 · Pinia 重构）。
- *
- * <p>职责：当前 session 列表 / 选中会话的消息 / 流式发送 + 事件解析 + 取消。
- * 替代原 ChatView.vue 内的本地 ref。
- *
- * <p><b>关键不变式</b>：
- * <ul>
- *   <li>{@code currentID} 一旦设置，{@code messages} 总是该会话的最新消息</li>
- *   <li>{@code streaming} === true 时 SSE 监听中，UI 应显示 streamingContent/streamingTools</li>
- *   <li>SSE 断流后调用 {@link loadMessages} 拉权威数据</li>
- * </ul>
+ * Chat store：会话列表与当前会话、消息、流式状态、发送与取消、审批与上下文占用。
+ * 不变式：currentID 一经设置，messages 恒为该会话最新消息；streaming 为真时以流式状态为准。
  */
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<Session[]>([])
@@ -117,6 +108,10 @@ export const useChatStore = defineStore('chat', () => {
   const pendingApprovals = ref<ApprovalPending[]>([])
   /** 流终止原因（stopped 事件写入；用户主动停止 → 'cancelled'，中性终态不弹错误）。 */
   const stopReason = ref<string | null>(null)
+  /** 本轮 run 起始时刻；终止时算出耗时，让横幅能说「你在 12s 后停止」。 */
+  const runStartedAt = ref<number | null>(null)
+  /** 本轮 run 的终止耗时（仅在收到 stopped 时冻结）。 */
+  const stopElapsedMs = ref<number | null>(null)
   /** 本轮流是否由用户主动取消。 */
   const userCancelled = ref(false)
   const pendingApproval = ref<ApprovalRequest | null>(null)
@@ -290,6 +285,17 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /** 勾选/取消计划项：以服务端返回的快照为准（避免本地状态与模型侧分叉）。 */
+  async function toggleTodo(itemID: string): Promise<void> {
+    const sid = currentID.value
+    if (!sid || !itemID) return
+    try {
+      todoState.value = await apiPost<TodoStateRESP>(`/api/v1/chat/sessions/${sid}/todos/${itemID}/toggle`)
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
   /** 拉取会话计划快照（页面刷新后由 EventLog 之外的权威数据兜底）。 */
   async function loadTodoState(sessionID: string): Promise<void> {
     try {
@@ -393,7 +399,8 @@ export const useChatStore = defineStore('chat', () => {
           id: first.id,
           command: first.command,
           reason: first.reason,
-          risk: first.risk === 'irreversible' ? 'irreversible' : 'needs_approval'
+          risk: first.risk === 'irreversible' ? 'irreversible' : 'needs_approval',
+          canRemember: first.can_remember === true
         }
       }
     } catch {
@@ -447,6 +454,45 @@ export const useChatStore = defineStore('chat', () => {
       return null
     }
   }
+
+  // ===== 流式中随 chat:stats 实时刷新上下文占用 =====
+  // 之前只在整轮结束后才 loadContextUsage，右下角与顶栏的 ContextRing 整轮纹丝不动。
+  // 现在：stats 事件（每轮 LLM 调用结束）先用 input_tokens 本地补丁总量（实测口径，
+  // prompt = system + tools + history 的真实值），再以 3s 节流拉权威快照校准分段明细。
+  const CTX_REFRESH_MS = 3000
+  let ctxLastRefresh = 0
+  let ctxTrailingTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** 用本轮实测 input_tokens 就地补丁上下文占用总量（分段明细等权威快照再校准）。 */
+  function patchContextUsageFromStats(input: number): void {
+    const cu = contextUsage.value
+    if (!cu || input <= 0 || cu.context_window <= 0) return
+    cu.used_tokens = input
+    cu.free_tokens = Math.max(0, cu.context_window - input)
+    cu.used_ratio = Math.min(1000, Math.round((input * 1000) / cu.context_window))
+    cu.estimated = false
+  }
+
+  watch(streamingStats, (s) => {
+    const sid = currentID.value
+    if (!sid || !s) return
+    patchContextUsageFromStats(s.input_tokens ?? 0)
+    const now = Date.now()
+    if (now - ctxLastRefresh >= CTX_REFRESH_MS) {
+      ctxLastRefresh = now
+      void loadContextUsage(sid)
+      return
+    }
+    if (ctxTrailingTimer !== null) return
+    ctxTrailingTimer = setTimeout(
+      () => {
+        ctxTrailingTimer = null
+        ctxLastRefresh = Date.now()
+        if (currentID.value) void loadContextUsage(currentID.value)
+      },
+      CTX_REFRESH_MS - (now - ctxLastRefresh)
+    )
+  })
 
   /**
    * 新建会话并把用户选择的模型（id）一并写进 session。
@@ -613,6 +659,8 @@ export const useChatStore = defineStore('chat', () => {
     streamingRetry.value = null
     error.value = null
     stopReason.value = null
+    stopElapsedMs.value = null
+    runStartedAt.value = Date.now()
     userCancelled.value = false
     pendingApproval.value = null
     // 注：本轮新增的 file_changes / artifacts 由流式事件增量累积；
@@ -677,6 +725,8 @@ export const useChatStore = defineStore('chat', () => {
     streamingRetry.value = null
     error.value = null
     stopReason.value = null
+    stopElapsedMs.value = null
+    runStartedAt.value = Date.now()
     userCancelled.value = false
     pendingApproval.value = null
     try {
@@ -792,12 +842,21 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** 批准待审批的危险命令。 */
+  /** 允许一次：只放行本次，同命令下次仍会询问。 */
   async function approveApproval(): Promise<void> {
     const a = pendingApproval.value
     if (!a) return
     await settleApproval(a, () =>
       apiPost(`/api/v1/chat/approval/${a.id}/decide`, { approved: true })
+    )
+  }
+
+  /** 本会话允许：本次放行并记住该命令（仅 needs_approval 可选）。 */
+  async function approveApprovalForSession(): Promise<void> {
+    const a = pendingApproval.value
+    if (!a) return
+    await settleApproval(a, () =>
+      apiPost(`/api/v1/chat/approval/${a.id}/decide`, { approved: true, scope: 'session' })
     )
   }
 
@@ -842,10 +901,21 @@ export const useChatStore = defineStore('chat', () => {
         useToast().info(t('chat.autoCompressed', update.setCompressed.removed_messages))
         continue
       }
+      // chat:context-trimmed → system 段被预算裁掉（如 Skill 正文）：回答质量下降必须可解释，
+      // 否则用户只会觉得「模型变笨了」。
+      if (update.setContextTrimmed) {
+        useToast().warning(t('chat.contextTrimmed', update.setContextTrimmed.dropped_segments.join('、')))
+        continue
+      }
       // chat:warn → 工作区越界写入：AI 把文件落到了 .workbaby/ 之外，
       // 必须以红色 toast + 文件路径强制提示用户清理；这是污染既有目录的硬伤，
       // 不能仅靠 message block 静默展示。
       if (update.setWarn) {
+        // 反幻觉核验：模型声称产出文件但本轮零工具调用——比普通错误更伤信任，红色强提示
+        if (update.setWarn.kind === 'unbacked_claim') {
+          useToast().error(t('chat.unbackedClaimTitle'), update.setWarn.message)
+          continue
+        }
         const title = update.setWarn.rel_path
           ? t('chat.sandboxViolation', update.setWarn.rel_path)
           : t('chat.sandboxViolationNoPath')
@@ -876,6 +946,9 @@ export const useChatStore = defineStore('chat', () => {
         streaming.value = false
         // run 已终止：还挂着 running 的工具不会再有结果回来，落成明确终态
         settleRunningTools()
+        // 冻结本轮耗时：终止原因横幅据此把系统状态翻译成用户做过的事
+        //（「你在 12s 后停止」比裸「已停止」有信息量得多）
+        stopElapsedMs.value = runStartedAt.value != null ? Date.now() - runStartedAt.value : null
       }
     }
   })
@@ -988,6 +1061,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingRetry,
     error,
     stopReason,
+    stopElapsedMs,
     pendingApproval,
     // ===== P2 扩展 =====
     todoState,
@@ -1002,6 +1076,7 @@ export const useChatStore = defineStore('chat', () => {
     loadModels,
     loadCommands,
     loadTodoState,
+    toggleTodo,
     loadFileChanges,
     loadFileChangeDetail,
     rollbackFileChange,
@@ -1035,6 +1110,7 @@ export const useChatStore = defineStore('chat', () => {
     resendFrom,
     forkFrom,
     approveApproval,
+    approveApprovalForSession,
     answerApproval,
     denyApproval,
     skipApproval,

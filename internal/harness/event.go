@@ -14,6 +14,7 @@ const (
 	EventToolStart    EventKind = "agent.tool.start"  // 工具开始执行
 	EventToolResult   EventKind = "agent.tool.result" // 工具执行完成
 	EventCheckpoint   EventKind = "agent.checkpoint"  // 检查点已写入
+	EventCompressed   EventKind = "agent.compressed"  // 上下文被压缩（附带边界证据）
 	EventRunDone      EventKind = "agent.run.done"
 	EventError        EventKind = "agent.error"
 	EventRetry        EventKind = "agent.retry" // 建流瞬时错误退避重试（限流/5xx/超时）
@@ -48,6 +49,8 @@ type ToolCallPayload struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"` // JSON 字符串
+	// Activity 面向用户的一行动作描述（"正在编辑 app.ts"），由工具自述。
+	Activity string `json:"activity,omitempty"`
 }
 
 // ToolResultPayload 工具执行结果事件载荷。
@@ -62,6 +65,8 @@ type ToolResultPayload struct {
 	Meta       map[string]string `json:"meta,omitempty"`
 	Data       map[string]any    `json:"data,omitempty"`
 	Refused    bool              `json:"refused,omitempty"`
+	// RefusedReason 拒绝原因枚举（harness.RefusedReason）：前端与上层可编程式反应，不解析文案。
+	RefusedReason string `json:"refused_reason,omitempty"`
 }
 
 // UsagePayload run 终止/轮次结束事件的 token 用量。

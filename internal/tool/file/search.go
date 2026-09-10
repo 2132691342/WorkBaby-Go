@@ -74,9 +74,22 @@ func (t *GrepTool) Schema() tool.ToolSchema {
 	}
 }
 
-// Meta 声明：纯读、文件组。
+// Meta 声明：纯读、文件组、信息类动作。
 func (t *GrepTool) Meta() tool.ToolMeta {
-	return tool.ToolMeta{Group: tool.GroupFile, ReadOnly: true, MaxResultChars: 20_000}
+	return tool.ToolMeta{Group: tool.GroupFile, ReadOnly: true, Category: tool.CategoryInfo, ActivityDesc: "检索内容", MaxResultChars: 20_000}
+}
+
+// ActivityDescription 时间线文案。
+func (t *GrepTool) ActivityDescription(args json.RawMessage) string {
+	var req grepReq
+	if json.Unmarshal(args, &req) != nil || req.Pattern == "" {
+		return ""
+	}
+	p := req.Pattern
+	if r := []rune(p); len(r) > 40 {
+		p = string(r[:40]) + "…"
+	}
+	return "正在检索「" + p + "」"
 }
 
 type grepReq struct {
@@ -117,9 +130,16 @@ func (t *GrepTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 	matchedFiles := 0
 	hits := 0
 	fileErrs := 0
+	ig := NewIgnoreChecker(root, base)
 	walkErr := filepath.WalkDir(base, func(p string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			return nil // 单个不可访问路径不中断检索
+		}
+		if rel, rerr := filepath.Rel(root, p); rerr == nil && ig.Ignored(rel, d.IsDir()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() {
 			if skipDirs[d.Name()] {
@@ -161,7 +181,7 @@ func (t *GrepTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 					text = string(r[:200]) + "…"
 				}
 				rel, _ := filepath.Rel(root, p)
-				fmt.Fprintf(&sb, "%s:%d: %s\n", rel, lineNo, text)
+				fmt.Fprintf(&sb, "%s:%d: %s\n", filepath.ToSlash(rel), lineNo, text)
 				hits++
 				fileHit = true
 				if hits >= limit {
@@ -218,9 +238,20 @@ func (t *GlobTool) Schema() tool.ToolSchema {
 	}
 }
 
-// Meta 声明：纯读、文件组。
+// Meta 声明：纯读、文件组、信息类动作。
 func (t *GlobTool) Meta() tool.ToolMeta {
-	return tool.ToolMeta{Group: tool.GroupFile, ReadOnly: true, MaxResultChars: 20_000}
+	return tool.ToolMeta{Group: tool.GroupFile, ReadOnly: true, Category: tool.CategoryInfo, ActivityDesc: "查找文件", MaxResultChars: 20_000}
+}
+
+// ActivityDescription 时间线文案。
+func (t *GlobTool) ActivityDescription(args json.RawMessage) string {
+	var req struct {
+		Pattern string `json:"pattern"`
+	}
+	if json.Unmarshal(args, &req) != nil || req.Pattern == "" {
+		return ""
+	}
+	return "正在查找 " + req.Pattern
 }
 
 // globRe 把通配模式（支持 **）转成正则：** → 任意路径段（含空）、* → 单段内任意、? → 单字符。
@@ -268,8 +299,16 @@ func (t *GlobTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 	}
 	root := t.resolve(ctx)
 	var out []string
+	ig := NewIgnoreChecker(root, "")
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, werr error) error {
 		if werr != nil {
+			return nil
+		}
+		rel, rerr := filepath.Rel(root, p)
+		if rerr == nil && ig.Ignored(rel, d.IsDir()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if d.IsDir() {
@@ -278,7 +317,6 @@ func (t *GlobTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 			}
 			return nil
 		}
-		rel, rerr := filepath.Rel(root, p)
 		if rerr != nil {
 			return nil
 		}

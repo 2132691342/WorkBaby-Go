@@ -162,20 +162,8 @@ func skillScriptsFromZip(files []*zip.File, dir string) ([]domain.SkillScript, e
 }
 
 // zipScriptLanguage 脚本扩展名 → 语言（与 run_skill_script 解释器映射一致）。
-func zipScriptLanguage(name string) (string, bool) {
-	switch strings.ToLower(path.Ext(name)) {
-	case ".js", ".ts", ".mjs":
-		return "javascript", true
-	case ".py":
-		return "python", true
-	case ".ps1":
-		return "powershell", true
-	case ".sh":
-		return "bash", true
-	default:
-		return "", false
-	}
-}
+// 与目录发现 skill.ScriptLanguageForFile 共用同一张表，避免两条导入路径对同一文件漂移。
+func zipScriptLanguage(name string) (string, bool) { return skill.ScriptLanguageForFile(name) }
 
 // findZipFile 在 dir（目录名，根目录为 "."）下找 basename 命中的文件。
 func findZipFile(files []*zip.File, dir, base string) *zip.File {

@@ -251,7 +251,7 @@ package platform
 |---|---|
 | 统一错误 | AppError + 错误码分段 |
 | 日志 | slog 仅 info/warn/error 三等级；warn、error 单独落文件（workbaby-warn.log / workbaby-error.log）+ 轮转；ctx 注入 sessionID/runID |
-| 上下文压缩 | HistoryTruncator（v1）+ Compaction（v2） |
+| 上下文压缩 | MicroCompressor（确定性折叠）+ AutoCompressor（LLM 摘要，失败降级 Micro） |
 | 并发控制 | 有界 goroutine 池 |
 | 事件总线 | event.Bus + server/sse 桥接 |
 | Token 计量 | 每次 LLM 调用一行 token_usages（harness TurnUsage → service.persistUsage），仪表盘三线图唯一数据源 |
@@ -349,10 +349,13 @@ powershell -ExecutionPolicy Bypass -File scripts/check-boundaries.ps1
 ## 6. 验收命令
 
 ```bash
-go build ./...
-go test ./...
-wails dev          # 开发模式
-wails build -nsis -ldflags "-s -w" -trimpath
+go build ./...                                     # 全量编译
+go test ./internal/...                             # 后端测试
+go vet ./internal/...                              # 静态检查
+cd frontend && npm run typecheck && npm test        # 前端类型检查 + 测试
+powershell -ExecutionPolicy Bypass -File scripts/check-boundaries.ps1   # 架构门禁
+wails dev                                          # 开发模式
+wails build -nsis -ldflags "-s -w" -trimpath       # 生产构建（NSIS 安装包）
 ```
 
 ---

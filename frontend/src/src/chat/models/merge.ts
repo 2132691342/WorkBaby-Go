@@ -32,21 +32,9 @@ export function toUiMessages(loaded: ApiMessage[]): ApiMessage[] {
 }
 
 /**
- * 流式收尾决策：权威快照替换后，判断本次 run 的回复落位。
- *
- * <p>返回值语义：
- * <ul>
- *   <li>{@code dedupe} —— 权威快照已含本次回复（全文相等，或末尾 assistant 内容
- *       与本地流式累积不同但以权威为准），绝不本地再 push</li>
- *   <li>{@code fill} —— 本 run 的 assistant 是空占位（chat:done 早于落库的窗口），
- *       用流式累积内容补齐</li>
- *   <li>{@code missing} —— 权威快照没有任何本 run 的 assistant（后端未落库等异常），
- *       允许本地兜底 push</li>
- * </ul>
- *
- * <p>本 run 的 assistant 定位为「最后一条 user 之后的消息中的 assistant」：
- * 工具调用场景权威快照为 [user, assistant, …]，assistant 不在末条——只查末条
- * 会漏判去重，本地再 push 一份即整段重复展示。
+ * 流式收尾决策：判断本次 run 的回复在权威快照中的落位。
+ * 返回 dedupe（快照已含，不重复 push）/ fill（空占位，用流式内容补齐）/ missing（快照缺失，允许本地兜底）。
+ * 本 run 的 assistant 取「最后一条 user 之后的消息」，工具场景下它不在末条。
  */
 export function resolveRunAssistant(
   messages: ApiMessage[],

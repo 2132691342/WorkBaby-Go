@@ -12,5 +12,4 @@ var (
 	ErrApprovalNeeded = pkg.New(4003, "approval required", "")
 	ErrToolTimeout    = pkg.New(4006, "tool execution timeout", "")
 	ErrPathEscape     = pkg.New(4007, "path escapes workspace root", "")
-	ErrResultTooLong  = pkg.New(4008, "tool result too long, truncated", "")
 )
