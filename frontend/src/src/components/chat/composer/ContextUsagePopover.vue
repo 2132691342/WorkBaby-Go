@@ -45,15 +45,10 @@ const SIZE = 14
 const R = 5
 const CIRC = 2 * Math.PI * R
 
-/** 段颜色（与 ContextRing 同源）。 */
-const SEGMENT_COLOR: Record<string, string> = {
-  system: 'var(--wb-primary)',
-  memory: 'var(--wb-lavender)',
-  tools: 'var(--wb-sky)',
-  history: 'var(--wb-mint)'
-}
+// segmentColor → 共享工具（避免 ContextRing / Popover 两份表漂移）。
+import { colorForSegment } from '@/chat/models/contextSegments'
 function segmentColor(key: string): string {
-  return SEGMENT_COLOR[key] ?? 'var(--wb-primary)'
+  return colorForSegment(key)
 }
 </script>
 

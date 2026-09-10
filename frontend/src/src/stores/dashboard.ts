@@ -85,6 +85,8 @@ export interface TokenTrendData {
   output: number[]
   cache_read: number[]
   total: number
+  /** 区间费用合计（USD；未配置模型单价时为 0）。 */
+  cost_usd: number
 }
 
 /** 趋势查询参数；custom 时传 start_at/end_at（毫秒，精确到天）。 */

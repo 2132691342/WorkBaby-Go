@@ -38,6 +38,7 @@ import {
 import { t } from '@/i18n'
 import type { SkillHit } from '@/types/api'
 import { looksLikeDiff, parseDiffLines, diffLineClass } from '@/chat/models/blocks'
+import { fmtTurnDuration, summarizeToolCalls, totalToolMs, type ReceiptPart } from '@/chat/models/toolGroupSummary'
 
 /** 流式工具调用（与 chat store ToolCallInfo 对齐；含耗时）。 */
 export interface ToolCall {
@@ -283,6 +284,14 @@ function fmtDuration(ms?: number): string {
   const sec = Math.round(totalSec % 60)
   return `${min}m${String(sec).padStart(2, '0')}s`
 }
+
+// ===== 回合级 receipt：把一串工具调用收敛成一句人话（nomifun 的 receipt 模式）=====
+//
+// fail closed：无法归类的调用进 generic 独立计数，绝不猜测合并。
+const receipt = computed<ReceiptPart[]>(() => summarizeToolCalls(props.tools))
+
+/** 回合总耗时：已完成求和 + running 实时（有 running 时随 1s tick 刷新）。 */
+const turnDuration = computed<string>(() => fmtTurnDuration(totalToolMs(props.tools, now.value)))
 </script>
 
 <template>
@@ -292,7 +301,10 @@ function fmtDuration(ms?: number): string {
     <div class="tl-hd">
       <ListTree class="ic" style="width: 13px; height: 13px" />
       <span>{{ t('chat.processTitle') }}</span>
-      <span class="cnt">{{ props.tools.length + (props.skillHit ? 1 : 0) }}</span>
+      <!-- receipt 聚合：读取 3 个文件 · 执行 2 条命令 · 12s —— 一眼看懂这轮做了什么 -->
+      <span v-for="p in receipt" :key="p.action" class="rcpt">{{ t(`tool.receipt.${p.action}`, p.count) }}</span>
+      <span v-if="turnDuration" class="cnt" :class="{ 'rcpt-shift': receipt.length > 0 }">{{ turnDuration }}</span>
+      <span v-if="receipt.length === 0" class="cnt">{{ props.tools.length + (props.skillHit ? 1 : 0) }}</span>
       <button v-if="props.tools.length > 1" type="button" @click="setAll(!allExpanded)">
         {{ allExpanded ? t('chat.collapseAll') : t('chat.expandAll') }}
       </button>

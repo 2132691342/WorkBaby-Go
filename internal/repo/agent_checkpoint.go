@@ -19,7 +19,7 @@ func NewAgentCheckpointRepo(db *gorm.DB) *AgentCheckpointRepo { return &AgentChe
 func (r *AgentCheckpointRepo) Save(ctx context.Context, row *domain.AgentCheckpointDO) error {
 	if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "run_id"}, {Name: "turn"}},
-		DoUpdates: clause.AssignmentColumns([]string{"messages_json", "state_json", "usage_json", "content", "thinking", "created_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"messages_json", "state_json", "usage_json", "content", "thinking", "last_seq", "created_at"}),
 	}).Create(row).Error; err != nil {
 		return pkg.Wrap(2015, "save agent checkpoint failed", err)
 	}

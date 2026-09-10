@@ -26,6 +26,7 @@ import {
 import { apiGet, apiPost } from '@/api/client'
 import { UploadFile, OpenFileDialog } from '@/wailsjs/go/main/App'
 import { useToast } from '@/composables/useToast'
+import { useDialog } from '@/composables/useDialog'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
 import { ElMessageBox } from 'element-plus'
@@ -81,6 +82,7 @@ const emit = defineEmits<{
 }>()
 
 const toast = useToast()
+const dialog = useDialog()
 const router = useRouter()
 
 /** 输入上限：canSend 在超限时返回 false，真正拦截发送（计数同时标红提示）。
@@ -175,6 +177,7 @@ watch(mentionOpen, (open) => {
 })
 
 const queue = ref<QueuedMessage[]>([])
+const queuePaused = ref(false)
 const isDragging = ref(false)
 const dragCounter = ref(0)
 
@@ -186,7 +189,7 @@ const canSend = computed(() => {
   return (hasText || hasAttach) && !isComposing.value
 })
 
-const isEnqueueMode = computed(() => props.streaming === true)
+
 
 const permissionLevel = computed<PermissionLevel>(() => props.permission ?? 'auto')
 
@@ -332,10 +335,11 @@ function submit(): void {
   if (slashOpen.value && /^\/\w*\s*$/.test(draft.value)) {
     return
   }
-  if (isEnqueueMode.value) {
-    enqueueMessage(text)
+  if (props.streaming) {
+    // 流式中发送 = 立即插入（steer）：store 的 sendMessage 检测到流式会走 /steer 注入缝；
+    // 「入队」走独立的 Plus 按钮与队列 flush。输入保持可写，插话/排队两不误。
+    emit('send', text, [], currentParams())
     draft.value = ''
-    attachments.value = []
     slashOpen.value = false
     slashQuery.value = ''
     mentionOpen.value = false
@@ -351,10 +355,6 @@ function submit(): void {
   mentionOpen.value = false
   resetHeight()
   void nextTick(() => textareaRef.value?.focus())
-}
-
-function enqueueMessage(text: string): void {
-  queue.value.push({ id: `q-${Date.now()}`, text })
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -565,6 +565,10 @@ function pickSlash(cmd: SlashCommand): void {
       toast.success(t('slash.trustHint', t(labelKey)))
       break
     }
+    case 'context':
+      window.dispatchEvent(new Event('workbaby:open-context'))
+      executed(cmd)
+      break
     case 'export':
       void exportSessionMd()
       break
@@ -721,14 +725,77 @@ function removeQueueItem(id: string): void {
   emit('remove-queue', id)
 }
 
+/** 逐条编辑：弹窗改文本（复用全局 prompt 对话框）。 */
+async function editQueueItem(id: string, current: string): Promise<void> {
+  const text = await dialog.prompt({
+    title: t('queue.edit'),
+    defaultValue: current
+  })
+  if (text == null) return
+  const trimmed = text.trim()
+  const item = queue.value.find((m) => m.id === id)
+  if (!item) return
+  if (!trimmed) {
+    removeQueueItem(id)
+    return
+  }
+  item.text = trimmed
+}
+
+/** 上下移动排序。 */
+function moveQueueItem(id: string, dir: -1 | 1): void {
+  const i = queue.value.findIndex((m) => m.id === id)
+  const j = i + dir
+  if (i < 0 || j < 0 || j >= queue.value.length) return
+  const next = [...queue.value]
+  ;[next[i], next[j]] = [next[j], next[i]]
+  queue.value = next
+}
+
+/** 暂停 / 恢复自动出队。 */
+function toggleQueuePause(): void {
+  queuePaused.value = !queuePaused.value
+}
+
 function flushQueue(): void {
-  if (queue.value.length === 0) return
+  if (queuePaused.value || queue.value.length === 0) return
   const next = queue.value.shift()
   if (next) {
     emit('remove-queue', next.id)
     emit('send-queued', next.text)
   }
 }
+
+// ===== 队列持久化：按会话存 localStorage，导航 / 刷新不丢 =====
+const QUEUE_KEY_PREFIX = 'wb.queue.'
+function queueKey(): string {
+  return QUEUE_KEY_PREFIX + (chat.currentID ?? 'none')
+}
+function loadQueue(): void {
+  try {
+    const raw = localStorage.getItem(queueKey())
+    queue.value = raw ? (JSON.parse(raw) as QueuedMessage[]) : []
+  } catch {
+    queue.value = []
+  }
+}
+watch(
+  () => chat.currentID,
+  () => loadQueue(),
+  { immediate: true }
+)
+watch(
+  [queue, () => chat.currentID],
+  () => {
+    try {
+      if (queue.value.length > 0) localStorage.setItem(queueKey(), JSON.stringify(queue.value))
+      else localStorage.removeItem(queueKey())
+    } catch {
+      // 隐私模式不可写：队列退化为会话内有效
+    }
+  },
+  { deep: true }
+)
 
 onMounted(() => {
   textareaRef.value?.focus()
@@ -885,7 +952,16 @@ defineExpose({
     <!-- 输入容器（原型 .composer-in）：聚焦时主色描边 + 光晕。队列 / 技能提及 / 附件
          条带都收进容器内，视觉上属于「这一条消息」的一部分 -->
     <div class="composer-in">
-      <MidTurnQueue class="comp-strip" :queue="queue" @remove="removeQueueItem" @flush="flushQueue" />
+      <MidTurnQueue
+        class="comp-strip"
+        :queue="queue"
+        :paused="queuePaused"
+        @remove="removeQueueItem"
+        @edit="editQueueItem"
+        @move="moveQueueItem"
+        @toggle-pause="toggleQueuePause"
+        @flush="flushQueue"
+      />
 
       <div v-if="activeSkillMentions.length > 0" class="skill-mention-strip">
         <span
@@ -921,8 +997,8 @@ defineExpose({
           rows="1"
           class="ta-input"
           :class="{ 'is-mirror': mirrorVisible }"
-          :placeholder="t('chat.placeholder')"
-          :disabled="disabled || streaming"
+          :placeholder="streaming ? t('chat.placeholderSteer') : t('chat.placeholder')"
+          :disabled="disabled"
           @input="onInput(); autoResize()"
           @keydown="onKeydown"
           @scroll="syncMirrorScroll"
@@ -1062,9 +1138,22 @@ defineExpose({
         >
           <Send />
         </button>
-        <button v-else type="button" class="send send--stop" :aria-label="t('chat.stop')" @click="stop">
-          <Square class="fill-current" />
-        </button>
+        <!-- 流式中：⚡立即插入（steer，下一轮前注入不打断执行）+ 停止，并排可用 -->
+        <template v-else>
+          <button
+            type="button"
+            class="send send--steer"
+            :disabled="!canSend"
+            :aria-label="t('chat.steerNow')"
+            :title="t('chat.steerNow')"
+            @click="submit"
+          >
+            <Zap />
+          </button>
+          <button type="button" class="send send--stop" :aria-label="t('chat.stop')" @click="stop">
+            <Square class="fill-current" />
+          </button>
+        </template>
       </div>
 
       <!-- 斜杠命令执行反馈：贴近输入区，2.5s 后淡出，避免被桌面壳遮挡 -->
@@ -1150,10 +1239,13 @@ defineExpose({
   color: var(--wb-danger);
 }
 
-/* 发送键：禁用弱化；停止键 danger 底 + 呼吸动画 */
+/* 发送键：禁用弱化；插入键主色底（流式中与停止键并排）；停止键 danger 底 + 呼吸动画 */
 .send:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+.send--steer {
+  background: var(--wb-primary);
 }
 .send--stop {
   background: var(--wb-danger);

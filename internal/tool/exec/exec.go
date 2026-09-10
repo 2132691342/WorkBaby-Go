@@ -2,8 +2,10 @@
 package exec
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,7 +156,32 @@ type execReq struct {
 	Cwd     string   `json:"cwd"`
 }
 
-// Execute 执行命令并返回 CombinedOutput。
+// execMaxOutputBytes 回填前的输出读取硬上限：先限流再截断，避免 `find /`、
+// `cat 大文件` 之类命令把全量输出读进内存（CombinedOutput 无上限）造成 OOM。
+const execMaxOutputBytes = 200 << 10 // 200KB
+
+// cappedWriter 合并 stdout/stderr 的限流写入器：达到上限后丢弃后续字节
+//（继续计数但不缓存，保证子进程不因管道写满而阻塞，Wait 能正常结束）。
+type cappedWriter struct {
+	buf     bytes.Buffer
+	dropped int64
+}
+
+func (w *cappedWriter) Write(p []byte) (int, error) {
+	if room := execMaxOutputBytes - w.buf.Len(); room > 0 {
+		if len(p) > room {
+			w.buf.Write(p[:room])
+			w.dropped += int64(len(p) - room)
+			return len(p), nil
+		}
+		w.buf.Write(p)
+		return len(p), nil
+	}
+	w.dropped += int64(len(p))
+	return len(p), nil
+}
+
+// Execute 执行命令并返回合并输出（限流读取，上限 execMaxOutputBytes）。
 func (t *ExecTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolResult {
 	var req execReq
 	if err := json.Unmarshal(args, &req); err != nil {
@@ -225,19 +252,27 @@ func (t *ExecTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // Windows 不弹控制台
 
-	output, err := cmd.CombinedOutput()
+	// stdout/stderr 合并限流读取（CombinedOutput 无上限，全量入内存有 OOM 风险）
+	out := &cappedWriter{}
+	cmd.Stdout = out
+	cmd.Stderr = out
+	err := cmd.Run()
 	exitCode := 0
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 	meta := map[string]string{"exitCode": strconv.Itoa(exitCode)}
+	output := out.buf.String()
+	if out.dropped > 0 {
+		output += fmt.Sprintf("\n... (output truncated, %d bytes dropped)", out.dropped)
+	}
 	if err != nil {
 		if execCtx.Err() != nil {
-			return tool.ToolResult{Content: string(output), Meta: meta, Err: pkg.Wrap(4006, "exec timeout or cancelled", err)}
+			return tool.ToolResult{Content: output, Meta: meta, Err: pkg.Wrap(4006, "exec timeout or cancelled", err)}
 		}
-		return tool.ToolResult{Content: string(output), Meta: meta, Err: pkg.Wrap(4006, "exec failed", err)}
+		return tool.ToolResult{Content: output, Meta: meta, Err: pkg.Wrap(4006, "exec failed", err)}
 	}
-	return tool.ToolResult{Content: string(output), Meta: meta}
+	return tool.ToolResult{Content: output, Meta: meta}
 }
 
 // envWithPath 返回在现有环境基础上把 dirs 前置到 PATH 的环境切片。

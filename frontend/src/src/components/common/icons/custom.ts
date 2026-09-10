@@ -41,6 +41,25 @@ export const Mail = createIcon('Mail', [
   ['path', { d: 'm22 7-10 6L2 7' }],
 ])
 
+export const Pause = createIcon('Pause', [
+  ['rect', { width: '4', height: '16', x: '6', y: '4' }],
+  ['rect', { width: '4', height: '16', x: '14', y: '4' }],
+])
+
+export const Play = createIcon('Play', [
+  ['polygon', { points: '6 3 20 12 6 21 6 3' }],
+])
+
+export const ArrowUp = createIcon('ArrowUp', [
+  ['path', { d: 'm5 12 7-7 7 7' }],
+  ['path', { d: 'M12 19V5' }],
+])
+
+export const ArrowDown = createIcon('ArrowDown', [
+  ['path', { d: 'M12 5v14' }],
+  ['path', { d: 'm19 12-7 7-7-7' }],
+])
+
 export const AtSign = createIcon('AtSign', [
   ['circle', { cx: '12', cy: '12', r: '4' }],
   ['path', { d: 'M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8' }],

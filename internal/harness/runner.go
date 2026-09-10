@@ -93,7 +93,6 @@ type Runner struct {
 	usage           *TokenUsageAccumulator
 	tools           *tool.Registry
 	toolDefs        []llm.ToolDefinition
-	middlewares     []Middleware
 	cfg             Config
 	checkpoints     CheckpointStore            // 可选；nil = 不落检查点（JSONL 或 SQL 实现）
 	hooks           LoopHooks                  // 循环缝集合（nil 字段 = 关闭）
@@ -113,6 +112,9 @@ type Runner struct {
 	stepsMu         sync.Mutex                 // 工具并发路径保护 steps
 	delegateMu      sync.Mutex                 // 委派去重保护
 	delegateFlights map[string]*delegateFlight // 同参委派在飞表（agent|task → flight）
+	// OnDelegateUsage 子 Agent 委派用量回调（可选）：委派子 run 的消耗单独上报，
+	// 不上报会让总消耗统计系统性漏计（一次委派可达 12 轮 + 几十次工具调用）。
+	OnDelegateUsage func(agentName string, turns []TurnUsage)
 }
 
 // PathTrust 目录信任闸门。
@@ -247,20 +249,16 @@ func NewRunner(p llm.Provider, sink Sink, cfg Config) *Runner {
 	if cfg.MaxToolResultLen <= 0 {
 		cfg.MaxToolResultLen = 50_000
 	}
-	mws := defaultMiddlewares()
-	// CompressTrigger 仅在调用方关闭 ContextBudget 且仍想按阈值截断时显式追加 HistoryTruncator；
-	// 现代配置走 ContextBudget + Micro 压缩器每轮压缩，两者不并存。
-	if cfg.CompressTrigger > 0 {
-		mws = append(mws, NewHistoryTruncator(cfg.CompressTrigger, cfg.CompressRatio))
-	}
+	// 压缩走 ContextBudget + MicroCompressor（每轮压缩）；CompressTrigger 是 v1
+	// 旧字段保留读兼容，但不再挂任何中间件——runner 直接持 TokenUsageAccumulator
+	// 唯一实例，每轮 AfterTurn 同步直调（中间件链接口本身未导出）。
 	return &Runner{
-		provider:    p,
-		sink:        sink,
-		usage:       &TokenUsageAccumulator{},
-		toolDefs:    nil,
-		middlewares: mws,
-		compressor:  MicroCompressor{},
-		cfg:         cfg,
+		provider:   p,
+		sink:       sink,
+		usage:      &TokenUsageAccumulator{},
+		toolDefs:   nil,
+		compressor: MicroCompressor{},
+		cfg:        cfg,
 	}
 }
 
@@ -268,12 +266,6 @@ func NewRunner(p llm.Provider, sink Sink, cfg Config) *Runner {
 func (r *Runner) WithTools(reg *tool.Registry, defs []llm.ToolDefinition) *Runner {
 	r.tools = reg
 	r.toolDefs = defs
-	return r
-}
-
-// WithMiddleware 追加中间件（默认链已含 TokenCounter/HistoryTruncator）。
-func (r *Runner) WithMiddleware(m ...Middleware) *Runner {
-	r.middlewares = append(r.middlewares, m...)
 	return r
 }
 
@@ -325,10 +317,15 @@ type RunResult struct {
 	Content    string
 	Thinking   string
 	StopReason string
-	Usage      llm.TokenUsage
-	Turns      []TurnUsage // 每轮明细；只在有用量时追加
-	Reason     RunStopReason
-	Err        error
+	// Usage 末轮 per-turn 口径：被 ContextUsage 当「当前上下文占用」展示，
+	// 用累计值会把一次 N 轮 run 显示成 N× input_tokens。
+	Usage llm.TokenUsage
+	// Accumulated 全 run 累计口径（含 Resume 跨段初始值）：run_records / 总消耗
+	// 统计据此落库，与 token_usages 明细的 SUM 对账一致。
+	Accumulated llm.TokenUsage
+	Turns       []TurnUsage // 每轮明细；只在有用量时追加
+	Reason      RunStopReason
+	Err         error
 }
 
 // RunMessages 跑一个多轮 ReAct 循环；返回完整 content/thinking 与 usage。
@@ -411,8 +408,8 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			}
 		}
 
-		// 中间件：截断/压缩（BeforeTurn 调整消息）
-		msgs = r.applyMiddlewares(msgs)
+		// 中间件已下线：BeforeTurn 调整由各压缩器（ContextCompressor / MicroCompressor）每轮处理，
+		// 这里直接走 compress 后的 msgs。
 		// 本轮实际送入模型的估算量（含工具定义），供实测回推校准
 		estAtTurn := EstimateTokens(msgs) + EstimateToolTokens(r.toolDefs)
 
@@ -638,13 +635,14 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 	}})
 
 	return RunResult{
-		Content:    contentAll.String(),
-		Thinking:   thinkingAll.String(),
-		StopReason: stopReason,
-		Usage:      finalUsage,
-		Turns:      turnUsages,
-		Reason:     finalReason,
-		Err:        runErr,
+		Content:     contentAll.String(),
+		Thinking:    thinkingAll.String(),
+		StopReason:  stopReason,
+		Usage:       finalUsage,
+		Accumulated: r.usage.Snapshot(),
+		Turns:       turnUsages,
+		Reason:      finalReason,
+		Err:         runErr,
 	}
 }
 
@@ -1041,6 +1039,8 @@ func gateApprovalRisk(risk tool.RiskLevel) string {
 }
 
 // saveCheckpoint 每轮工具执行后落一行检查点；失败仅发事件，不阻断 run。
+// 增量化：Messages 仅存本轮新增切片（adapter 通过对比上轮 seq 起点过滤），
+// Resume 由 sql_checkpoint.LoadLast 重组：DB 历史 + 增量 → 完整上下文。
 func (r *Runner) saveCheckpoint(runID, sessionID, assistantMessageID string, turn int, msgs []*llm.Message, state *RunState, content, thinking string) {
 	if r.checkpoints == nil {
 		return
@@ -1055,6 +1055,7 @@ func (r *Runner) saveCheckpoint(runID, sessionID, assistantMessageID string, tur
 		Content:        content,
 		Thinking:       thinking,
 		Usage:          r.usage.Snapshot(),
+		LastSeq:        checkpointLastSeq(r.checkpoints, sessionID, runID),
 	}
 	r.stepsMu.Lock()
 	if len(r.steps) > 0 {
@@ -1072,17 +1073,22 @@ func (r *Runner) saveCheckpoint(runID, sessionID, assistantMessageID string, tur
 	r.sink.Emit(Event{Kind: EventCheckpoint, RunID: runID, SessionID: sessionID, Turn: turn})
 }
 
-// applyMiddlewares 顺序执行 BeforeTurn。
-func (r *Runner) applyMiddlewares(msgs []*llm.Message) []*llm.Message {
-	for _, m := range r.middlewares {
-		msgs = m.BeforeTurn(msgs)
+// checkpointLastSeq 增量起点：读取同一 run 的上一轮检查点，取其首条消息 seq。
+// 旧实现无此字段（fallback = 0 = 全量落库）→ 与新历史数据兼容。
+func checkpointLastSeq(store CheckpointStore, sessionID, runID string) int64 {
+	prev, err := store.LoadLast(sessionID, runID)
+	if err != nil || prev == nil || len(prev.Messages) == 0 {
+		return 0
 	}
-	return msgs
+	return prev.Messages[0].Seq
 }
 
+// truncate 工具结果回填截断：按 rune 切（中文安全），避免落在多字节序列中间
+// 产生乱码回填（严格的上游会直接 400）。n 为 rune 数。
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "\n... (truncated)"
+	return string(r[:n]) + "\n... (truncated)"
 }

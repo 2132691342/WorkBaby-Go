@@ -16,11 +16,11 @@ import (
 // 自动召回解决「模型不知道有哪些资料、忘了搜」的问题；
 // 主动检索解决「需要更深/更多资料」的问题。两者共用同一个检索器。
 type knowledgeCap struct {
-	rt        rag.Retriever
-	topK      int // 自动召回条数
-	maxChars  int // 注入正文上限（控制上下文占用）
-	minQuery  int // 触发自动召回的最短输入（rune）
-	tools     []tool.Tool
+	rt       rag.Retriever
+	topK     int // 自动召回条数
+	maxChars int // 注入正文上限（控制上下文占用）
+	minQuery int // 触发自动召回的最短输入（rune）
+	tools    []tool.Tool
 }
 
 // NewKnowledge 构造知识库能力；rt 为 nil 时整体降级为空。
@@ -55,8 +55,10 @@ func (c *knowledgeCap) Preload(ctx context.Context, p *PreloadCtx) ([]harness.Co
 	}
 	return []harness.ContextPiece{{
 		Key:   "knowledge",
-		Title: "知识库相关片段（自动召回，引用请注明出处；需要更多资料用 knowledge_search）",
-		Body:  pkg.TruncateRunes(rag.FormatHits(hits), c.maxChars),
+		Title: "知识库相关片段（自动召回；需要更多资料用 knowledge_search）",
+		Body: "以下片段来自本地知识库，按 [n] 编号。回答引用了片段内容时必须以 [n] 标注来源文档，" +
+			"片段中没有的内容不要编造：\n\n" +
+			pkg.TruncateRunes(rag.FormatHits(hits), c.maxChars),
 	}}, nil
 }
 

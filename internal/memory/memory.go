@@ -19,11 +19,12 @@ type RecallOpts struct {
 
 // RecallHit 召回命中项。
 type RecallHit struct {
-	Kind    domain.MemoryKind
-	Score   float64
-	Source  string // episode id
-	Title   string
-	Snippet string
+	Kind      domain.MemoryKind
+	Score     float64
+	Source    string // episode id
+	Title     string
+	Snippet   string
+	CreatedAt int64 // 毫秒时间戳；时间衰减据此加权
 }
 
 // EpisodeProposal 情景记忆提案（形成策略输出）。

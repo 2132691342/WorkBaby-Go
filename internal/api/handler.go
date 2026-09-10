@@ -38,6 +38,7 @@ import (
 	filetool "WorkBaby/internal/tool/file"
 	functools "WorkBaby/internal/tool/functools"
 	httptool "WorkBaby/internal/tool/http"
+	"WorkBaby/internal/tool/planmode"
 	requestinput "WorkBaby/internal/tool/requestinput"
 	skillrun "WorkBaby/internal/tool/skillrun"
 	todotool "WorkBaby/internal/tool/todo"
@@ -309,11 +310,22 @@ func (h *Handler) Startup(ctx context.Context) error {
 	if err := toolReg.Register(filetool.NewRead(wsResolver, workspace)); err != nil {
 		return err
 	}
+	// 精确编辑：模型改文件的首选路径（唯一匹配校验 + diff 回执），file_write 退居新建/整篇覆盖
+	if err := toolReg.Register(filetool.NewEdit(wsResolver, workspace).
+		WithRecorder(service.NewFileChangeRecorder(h.changeSvc, h.artifactSvc, "file_edit"))); err != nil {
+		return err
+	}
 	if err := toolReg.Register(filetool.NewWrite(wsResolver, workspace).
 		WithRecorder(service.NewFileChangeRecorder(h.changeSvc, h.artifactSvc, "file_write"))); err != nil {
 		return err
 	}
 	if err := toolReg.Register(filetool.NewList(wsResolver, workspace)); err != nil {
+		return err
+	}
+	if err := toolReg.Register(filetool.NewGrep(wsResolver, workspace)); err != nil {
+		return err
+	}
+	if err := toolReg.Register(filetool.NewGlob(wsResolver, workspace)); err != nil {
 		return err
 	}
 	if err := toolReg.Register(webfetchtool.New()); err != nil {
@@ -354,6 +366,22 @@ func (h *Handler) Startup(ctx context.Context) error {
 	if err := toolReg.Register(todotool.New(h.todoStore, func(ctx context.Context) string {
 		return harness.SessionIDFromCtx(ctx)
 	})); err != nil {
+		return err
+	}
+
+	// 计划模式：enter/exit 工具 + 只读硬拦 Guard（exit 经审批门，拒绝则保持计划模式）
+	planStore := planmode.NewStore(func(toolName string) bool {
+		t, ok := toolReg.Get(toolName)
+		if !ok {
+			return false
+		}
+		m := tool.MetaOf(t)
+		return m.ReadOnly || t.RiskLevel() == tool.RiskReadOnly
+	})
+	if err := toolReg.Register(planmode.NewEnter(planStore)); err != nil {
+		return err
+	}
+	if err := toolReg.Register(planmode.NewExit(planStore, h.approvalSvc)); err != nil {
 		return err
 	}
 
@@ -440,6 +468,8 @@ func (h *Handler) Startup(ctx context.Context) error {
 			return h.approvalSvc.Approve(ctx, description, tool.RiskApprovalNeeds)
 		})
 	h.chatSvc.WithTrustService(h.trustSvc)
+	// 计划模式状态注入：run 装配时 Guard 挂进 PathTrust 组合闸门
+	h.chatSvc.WithPlanStore(planStore)
 
 	// 后台任务队列：长任务不阻塞聊天，任务中心看进度
 	h.taskSvc = service.NewTaskService(h.chatSvc, h.bus).WithEventLog(h.eventLog)

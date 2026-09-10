@@ -71,9 +71,10 @@ func (c *workflowCap) Preload(ctx context.Context, p *PreloadCtx) ([]harness.Con
 		return nil, nil
 	}
 	return []harness.ContextPiece{{
-		Key:   "workflows",
-		Title: "可用工作流（用 run_workflow 按 ID 触发）",
-		Body:  strings.TrimSpace(sb.String()),
+		Key:      "workflows",
+		Title:    "可用工作流（用 run_workflow 按 ID 触发）",
+		Body:     strings.TrimSpace(sb.String()),
+		Priority: harness.PriorityLowest,
 	}}, nil
 }
 

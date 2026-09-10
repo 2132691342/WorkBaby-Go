@@ -248,6 +248,8 @@ onMounted(async () => {
   registerPetEvents()
   registerFileOpenEvents()
   onReady()
+  // 斜杠命令元数据：启动期一次缓存（此前从未接线，后端命令从未出现在面板）
+  void chat.loadCommands()
   registerShortcut('ctrl+n', () => void onNewSessionShortcut())
   registerShortcut('ctrl+k', () => openPalette())
   registerShortcut('ctrl+/', () => window.dispatchEvent(new CustomEvent('wb:focus-input')))

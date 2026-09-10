@@ -32,5 +32,6 @@ func (c *environmentCap) Preload(_ context.Context, _ *PreloadCtx) ([]harness.Co
 		Body: "操作系统：" + runtime.GOOS + " / " + runtime.GOARCH + "\n" +
 			"当前时间：" + time.Now().Format("2006-01-02 15:04:05") + "\n" +
 			"命令执行：" + shellHint(),
+		Priority: harness.PriorityEssential,
 	}}, nil
 }

@@ -20,7 +20,7 @@ import WorkspacePanel from '@/components/chat/WorkspacePanel.vue'
 import WorkspacePickerDialog from '@/components/chat/WorkspacePickerDialog.vue'
 import FileChangesPanel from '@/components/chat/FileChangesPanel.vue'
 import TaskCenterPanel from '@/components/chat/TaskCenterPanel.vue'
-import TodoProgressCard from '@/components/chat/TodoProgressCard.vue'
+import PinnedPlan from '@/components/chat/PinnedPlan.vue'
 import ContextRing from '@/components/chat/ContextRing.vue'
 import ChatBackdrop from '@/components/chat/ChatBackdrop.vue'
 import type { AvailableModel, ContextUsageRESP, Session } from '@/types/api'
@@ -39,7 +39,6 @@ const {
   streaming,
   streamingStats,
   error,
-  todoState,
   contextUsage,
   fileChanges
 } = storeToRefs(chat)
@@ -161,6 +160,8 @@ onMounted(() => {
   window.addEventListener('workbaby:open-compact', onOpenCompact)
   // 提交后台任务后就地展开任务面板（跳 /tasks 是另一个页面，与任务中心无关）
   window.addEventListener('workbaby:open-tasks', onOpenTasks)
+  // /context 命令：打开上下文明细弹窗
+  window.addEventListener('workbaby:open-context', onOpenContext)
   // 从设置页改了 provider 温度/思考等参数后回到聊天，重拉当前会话生效参数（避免输入框 chip 显示旧值）
   if (currentID.value) void chat.loadEffectiveParams(currentID.value)
 })
@@ -168,7 +169,15 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('workbaby:open-compact', onOpenCompact)
   window.removeEventListener('workbaby:open-tasks', onOpenTasks)
+  window.removeEventListener('workbaby:open-context', onOpenContext)
 })
+
+/** /context：打开上下文明细弹窗（与顶栏 ContextRing 同一数据源）。 */
+function onOpenContext(): void {
+  if (!currentID.value) return
+  void chat.loadContextUsage(currentID.value)
+  showContext.value = true
+}
 
 /** 展开右侧任务面板（后台任务提交后的落地页）。 */
 function onOpenTasks(): void {
@@ -227,6 +236,7 @@ async function onDeleteSession(): Promise<void> {
 
 /** 手动压缩：可附带「保留指示」与自定义保留窗口。 */
 const showCompact = ref(false)
+const showContext = ref(false)
 const compactInstructions = ref('')
 const compactKeepRecent = ref(20)
 const { enabled: focusMode, toggle: focusToggle } = useFocusMode()
@@ -384,9 +394,6 @@ function onHeaderCommand(cmd: string): void {
   else if (cmd === 'clear') void onClearMessages()
   else if (cmd === 'delete') void onDeleteSession()
 }
-
-/** 当前会话 Todo 是否有进展（用于控制卡片的入场动画/折叠态）。 */
-const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
 </script>
 
 <template>
@@ -536,7 +543,22 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
     <!-- 工具审批已下移 MessageList，此处不再渲染 -->
 
     <div v-if="error" class="mx-5 mt-2">
-      <el-alert type="error" :title="error" :closable="false" show-icon />
+      <el-alert type="error" :title="error" show-icon closable @close="chat.dismissError()">
+        <!-- 运行出错可一键重试：重新生成最后一轮（中断的继续走 StopReasonBanner 的「继续」） -->
+        <template #default>
+          <el-button
+            size="small"
+            text
+            type="primary"
+            :disabled="streaming"
+            class="mt-1"
+            @click="onRegenerate"
+          >
+            <el-icon class="mr-1"><RefreshCw /></el-icon>
+            {{ t('chat.retryLastRun') }}
+          </el-button>
+        </template>
+      </el-alert>
     </div>
 
     <!-- 当前 session 实际模型与所选不一致时给用户一个明确提示，避免「界面 A、实际 B」困惑 -->
@@ -552,9 +574,6 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
     <!-- 主区：消息流 + 输入（左） | 工作区文件树面板（右，可折叠） -->
     <div class="flex min-h-0 flex-1">
       <div class="flex min-w-0 flex-1 flex-col">
-        <div v-if="hasTodo" class="mx-auto w-full max-w-3xl px-6 pt-4">
-          <TodoProgressCard />
-        </div>
         <MessageList
           :messages="messages"
           :streaming="streaming"
@@ -563,6 +582,9 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
 
         <!-- 桌宠陪伴体：抠好的形象浮在输入框上方，跟随会话状态 -->
         <PetCompanion :streaming="streaming" :failed="Boolean(error)" />
+
+        <!-- PinnedPlan：composer 上方的计划胶囊（3/7 常显，hover 展开清单） -->
+        <PinnedPlan />
 
         <ChatInput
           ref="chatInputRef"
@@ -625,6 +647,36 @@ const hasTodo = computed(() => (todoState.value?.items?.length ?? 0) > 0)
       @close="showPicker = false"
       @pick="onPickWorkspace"
     />
+
+    <!-- /context：上下文明细弹窗（与 ContextRing / ContextUsagePopover 同一数据源） -->
+    <el-dialog v-model="showContext" :title="t('ctx.title')" width="420px" align-center>
+      <template v-if="contextUsage">
+        <p class="mb-3 text-sm text-wb-ink">
+          {{ contextUsage.used_tokens.toLocaleString() }} / {{ ctxMax.toLocaleString() }}
+          <span class="text-wb-muted">（{{ Math.round(contextUsage.used_ratio / 10) }}%）</span>
+          <span v-if="contextUsage.estimated" class="ml-1 text-wb-muted">~</span>
+        </p>
+        <div v-if="contextUsage.segments.length > 0" class="space-y-2">
+          <div v-for="seg in contextUsage.segments" :key="seg.key">
+            <div class="mb-0.5 flex items-center justify-between text-xs">
+              <span class="text-wb-ink">{{ seg.title }}</span>
+              <span class="font-mono text-wb-muted">{{ seg.tokens.toLocaleString() }} · {{ (seg.ratio / 10).toFixed(1) }}%</span>
+            </div>
+            <div class="h-1.5 overflow-hidden rounded-full bg-wb-surface-hover">
+              <div
+                class="h-full rounded-full bg-wb-primary transition-all"
+                :style="{ width: Math.min(100, seg.ratio / 10) + '%' }"
+              />
+            </div>
+          </div>
+        </div>
+        <p v-else class="text-xs text-wb-muted">{{ t('ctx.hintNoSegments') }}</p>
+        <p class="mt-3 text-[11px] text-wb-muted">
+          {{ t('ctx.messages', contextUsage.message_count) }} · {{ t('ctx.tools', contextUsage.tool_count) }}
+        </p>
+      </template>
+      <p v-else class="text-xs text-wb-muted">{{ t('ctx.none') }}</p>
+    </el-dialog>
 
     <!-- 手动压缩：可附保留指示与保留窗口 -->
     <el-dialog v-model="showCompact" :title="t('chat.compact')" width="440px" align-center>

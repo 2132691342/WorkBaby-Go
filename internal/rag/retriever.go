@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -77,6 +78,11 @@ func (r *FTS5Retriever) Search(ctx context.Context, query string, topK int) ([]H
 	if err != nil {
 		return nil, pkg.Wrap(7004, "fts5 search failed", err)
 	}
+	// MATCH 零命中（query 混有 2 字短词、长词在库中不存在等）→ LIKE 兜底续查，
+	// 而不是静默空结果——静默空会让上层判定「知识库没有相关内容」，模型转而编造。
+	if len(rows) == 0 {
+		return r.searchLike(ctx, query, topK)
+	}
 
 	out := make([]Hit, 0, len(rows))
 	for i := range rows {
@@ -94,10 +100,13 @@ func (r *FTS5Retriever) Search(ctx context.Context, query string, topK int) ([]H
 }
 
 // searchLike FTS5 兜底：trigram 最小窗口是 3 字符，「部署」「报错」「下载」这类
-// 2 字中文高频查询在 MATCH 上永远零命中且静默无结果——这是中文场景最常见的查询长度。
+// 2 字中文高频查询在 MATCH 上永远零命中——这是中文场景最常见的查询长度。
 //
 // 退化为 LIKE 子串扫描，本地单库规模下代价可接受。命中条件：整串 LIKE OR 任一 token
 // LIKE——多 token 短查询（"怎么 部署 服务"）不会因要求整串连续而漏命中。
+//
+// 相关性打分在 Go 侧完成（LIKE 无法用 bm25）：整串命中 > 多 token 命中计数。
+// 禁止按 created_at 排序——那会让兜底结果完全取决于文档新旧而不是相关性。
 func (r *FTS5Retriever) searchLike(ctx context.Context, query string, topK int) ([]Hit, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {
@@ -118,16 +127,21 @@ func (r *FTS5Retriever) searchLike(ctx context.Context, query string, topK int) 
 		clauses = append(clauses, "kc.content LIKE ? ESCAPE '\\'")
 		args = append(args, "%"+pkg.EscapeLike(t)+"%")
 	}
-	args = append(args, topK)
+	// 候选放大若干倍取回，Go 侧按相关性重排后再截 topK
+	const likeCandidateScale = 4
+	const likeCandidateMax = 200
+	limit := topK * likeCandidateScale
+	if limit > likeCandidateMax {
+		limit = likeCandidateMax
+	}
+	args = append(args, limit)
 
 	sql := `
 		SELECT kc.id AS chunk_id, kc.doc_id AS doc_id, kd.name AS doc_name,
 		       kd.source AS source, kc.content AS content, kc.meta_json AS meta_json
 		FROM knowledge_chunks kc
 		JOIN knowledge_docs kd ON kd.id = kc.doc_id
-		WHERE kd.deleted_at IS NULL AND (` + strings.Join(clauses, " OR ") + `)
-		ORDER BY kc.created_at DESC
-		LIMIT ?`
+		WHERE kd.deleted_at IS NULL AND (` + strings.Join(clauses, " OR ") + `)`
 	var rows []struct {
 		ChunkID  string `gorm:"column:chunk_id"`
 		DocID    string `gorm:"column:doc_id"`
@@ -140,17 +154,34 @@ func (r *FTS5Retriever) searchLike(ctx context.Context, query string, topK int) 
 	if err != nil {
 		return nil, pkg.Wrap(7004, "like search failed", err)
 	}
+
+	// 相关性打分：整串命中（最强信号）+ token 命中计数；同分保持 SQL 返回序（稳定排序）
+	lq := strings.ToLower(q)
 	out := make([]Hit, 0, len(rows))
 	for i := range rows {
+		score := 0.0
+		lower := strings.ToLower(rows[i].Content)
+		if lq != "" && strings.Contains(lower, lq) {
+			score += 10
+		}
+		for t := range seen {
+			if strings.Contains(lower, t) {
+				score++
+			}
+		}
 		out = append(out, Hit{
 			DocID:   rows[i].DocID,
 			DocName: rows[i].DocName,
 			ChunkID: rows[i].ChunkID,
 			Content: rows[i].Content,
-			Score:   0,
+			Score:   score,
 			Source:  rows[i].Source,
 			Meta:    parseMeta(rows[i].MetaJSON),
 		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	if len(out) > topK {
+		out = out[:topK]
 	}
 	return out, nil
 }

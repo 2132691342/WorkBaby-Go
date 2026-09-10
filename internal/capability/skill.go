@@ -74,6 +74,13 @@ func (c *skillCap) Preload(_ context.Context, p *PreloadCtx) ([]harness.ContextP
 	if !ok || hit.Body == "" {
 		return nil, nil
 	}
+	// 正文预算双保险：本段自身先截断（超长 SKILL.md 会一口吃掉小窗口模型的全部预算），
+	// 再声明低优先级交给装配器在总预算超限时整体丢弃。
+	body := hit.Body
+	if r := []rune(body); len(r) > maxSkillBodyRunes {
+		body = string(r[:maxSkillBodyRunes]) +
+			"\n…(技能正文超预算已截断；需要完整细节时向用户说明或查看技能原文)"
+	}
 	// 命中详情经运行态回传装配方：工具白名单约束本轮可见工具，其余字段供前端时间线回放
 	if p.State != nil {
 		p.State.SkillTools = hit.Tools
@@ -81,13 +88,17 @@ func (c *skillCap) Preload(_ context.Context, p *PreloadCtx) ([]harness.ContextP
 		p.State.SkillSource = hit.Source
 		p.State.SkillVersion = hit.Version
 		p.State.SkillDescription = hit.Description
-		p.State.SkillInjectedLen = len(hit.Body)
+		p.State.SkillInjectedLen = len(body)
 	}
 	return []harness.ContextPiece{{
-		Key:   "skill",
-		Title: "触发 Skill「" + name + "」，请严格按其指导执行",
-		Body:  hit.Body,
+		Key:      "skill",
+		Title:    "触发 Skill「" + name + "」，请严格按其指导执行",
+		Body:     body,
+		Priority: harness.PriorityLow,
 	}}, nil
 }
+
+// maxSkillBodyRunes Skill 正文的注入上限（rune）。
+const maxSkillBodyRunes = 6000
 
 func (c *skillCap) Capture(_ context.Context, _ *CaptureCtx) error { return nil }

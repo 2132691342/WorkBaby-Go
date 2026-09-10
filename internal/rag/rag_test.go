@@ -98,6 +98,30 @@ func TestIndexAndSearchChinese(t *testing.T) {
 	}
 }
 
+// TestSearchShortChineseQuery 回归：「部署」「报错」这类 2 字中文查询落入 trigram
+// 盲区（最小 3 字符），必须经 LIKE 兜底召回相关内容并按相关性排序，
+// 而不是静默空结果（模型会据此编造答案）或按 created_at 返回无关内容。
+func TestSearchShortChineseQuery(t *testing.T) {
+	gdb := newRagTestDB(t)
+	ctx := context.Background()
+	docA := addTextDoc(t, gdb, "部署手册", "本手册说明服务的部署方式与回滚步骤。")
+	docB := addTextDoc(t, gdb, "无关文档", "这个文档讲的是烹饪与园艺，内容与主题完全无关。")
+	mustNoErr(t, NewIndexer(gdb, DefaultChunker()).Index(ctx, docA.ID))
+	mustNoErr(t, NewIndexer(gdb, DefaultChunker()).Index(ctx, docB.ID))
+
+	hits, err := NewFTS5Retriever(gdb).Search(ctx, "部署", 5)
+	mustNoErr(t, err)
+	if len(hits) == 0 {
+		t.Fatalf("2 字中文查询必须兜底召回")
+	}
+	if hits[0].DocName != "部署手册" {
+		t.Fatalf("top hit = %q, want 部署手册（兜底结果必须按相关性排序）", hits[0].DocName)
+	}
+	if !strings.Contains(hits[0].Content, "部署") {
+		t.Fatalf("top content mismatch: %q", hits[0].Content)
+	}
+}
+
 // TestReindexReplacesChunksAndFTS 重建索引必须替换（而非追加）chunks 与 FTS5 行：
 // 否则同一文档会出现历史脏数据 + 重复命中。
 //
@@ -144,13 +168,8 @@ func TestReindexReplacesChunksAndFTS(t *testing.T) {
 	}
 }
 
-
-
 // ===== 检索器 =====
 
-
 // ===== 加载器 =====
-
-
 
 // TestTextLoaderRejectsOversizedFile 超过 maxFileBytes 的输入必须直接失败（防 DoS / 误用）。

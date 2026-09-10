@@ -1424,6 +1424,19 @@ kbd.chip {
   color: var(--wb-muted);
   font-variant-numeric: tabular-nums;
 }
+/* receipt 聚合摘要：首个片段把右侧组推到最右，其余依次排列 */
+.tl-hd .rcpt {
+  font-size: 11px;
+  color: var(--wb-muted);
+  font-weight: 400;
+  white-space: nowrap;
+}
+.tl-hd .rcpt:first-of-type {
+  margin-left: auto;
+}
+.tl-hd .cnt.rcpt-shift {
+  margin-left: 0;
+}
 .tl-hd button {
   font-size: 11px;
   color: var(--wb-primary);

@@ -104,8 +104,8 @@ func (a *MCPAdapter) Execute(ctx context.Context, args json.RawMessage) tool.Too
 		sb.WriteString("\n")
 	}
 	content := strings.TrimSpace(sb.String())
-	if len(content) > mcpMaxResultChars {
-		content = content[:mcpMaxResultChars] + "\n... (truncated)"
+	if runes := []rune(content); len(runes) > mcpMaxResultChars {
+		content = string(runes[:mcpMaxResultChars]) + "\n... (truncated)"
 	}
 	out := tool.ToolResult{Content: content}
 	if res.IsError {

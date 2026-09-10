@@ -12,6 +12,7 @@ import ApprovalInline from '@/components/chat/ApprovalInline.vue'
 import StopReasonBanner from '@/components/chat/StopReasonBanner.vue'
 import AssistantAvatar from '@/components/chat/AssistantAvatar.vue'
 import { useToast } from '@/composables/useToast'
+import { RESUMABLE_STOP_REASONS } from '@/chat/models/blocks'
 import { useChatStore } from '@/stores/chat'
 
 /** 空状态的一键示例 prompt，点击直接填入输入框（文案走 i18n）。 */
@@ -84,11 +85,10 @@ function onScroll(): void {
  *
  * <p>「继续」= 发一条明确的续跑指令，走正常发送链路即可——会话历史整体回灌，
  * 模型看得见自己上一轮做到哪儿，不需要额外接口。
+ * 集合定义统一收口在 blocks.ts 的 RESUMABLE_STOP_REASONS。
  */
-const RESUMABLE_REASONS = new Set(['cancelled', 'tool_error_limit', 'max_turns', 'token_budget', 'interrupted'])
-
 const canContinue = computed(
-  () => !props.streaming && !!stopReason.value && RESUMABLE_REASONS.has(stopReason.value)
+  () => !props.streaming && !!stopReason.value && RESUMABLE_STOP_REASONS.has(stopReason.value)
 )
 
 async function onContinue(): Promise<void> {

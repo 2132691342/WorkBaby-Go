@@ -137,6 +137,19 @@ export function isRefusedResultBlock(block: ResolvedBlock): boolean {
 /** 终止原因 → 展示级别（与后端 domain.StopReasonSeverity 契约一致）。 */
 export type StopSeverity = 'info' | 'warning' | 'error'
 
+/**
+ * 可恢复终态集合（唯一权威，StopReasonBanner / MessageList 共用）：
+ * 这些终态意味着「任务没做完，但可以接着做」，展示「继续」按钮。
+ * 两处判断不一致会导致「文案说可续跑、按钮不出现」的断裂。
+ */
+export const RESUMABLE_STOP_REASONS = new Set([
+  'cancelled',
+  'tool_error_limit',
+  'max_turns',
+  'token_budget',
+  'interrupted'
+])
+
 const WARNING_REASONS = new Set([
   'cancelled',
   'max_turns',
@@ -153,25 +166,31 @@ export function stopReasonSeverity(reason: string | null | undefined): StopSever
   return 'error'
 }
 
-/** 终止原因 → 用户可读文案（i18n key 前缀 wb-stop-*，MessageList 直接消费）。 */
+/**
+ * 审批拒绝的协议文本常量：refused 块的展示文案与旧数据判定共用单一定义，
+ * 避免散落的中文字符串字面量（改一处漏一处）。
+ */
+export const REFUSED_RESULT_TEXT = '已拒绝：用户未批准该工具调用'
+
+/** 终止原因 → i18n key（字典 stop.reason.*）；未识别返回空串（消费方给兜底文案）。 */
 export function stopReasonText(reason: string | null | undefined): string {
   switch (reason) {
     case 'completed':
-      return '已完成'
+      return 'stop.reason.completed'
     case 'cancelled':
-      return '已停止'
+      return 'stop.reason.cancelled'
     case 'max_turns':
-      return '达到轮次上限，可继续'
+      return 'stop.reason.max_turns'
     case 'tool_error_limit':
-      return '工具连续失败，已中止'
+      return 'stop.reason.tool_error_limit'
     case 'token_budget':
-      return 'Token 预算耗尽'
+      return 'stop.reason.token_budget'
     case 'stagnation':
-      return '检测到重复调用，已熔断'
+      return 'stop.reason.stagnation'
     case 'interrupted':
-      return '上次运行被中断，可一键续跑'
+      return 'stop.reason.interrupted'
     case 'error':
-      return '运行出错'
+      return 'stop.reason.error'
     default:
       return ''
   }
@@ -262,7 +281,7 @@ export function toolsToBlocks(tools: ToolCallInfo[], messageId: string): Message
       created_at: now
     })
     if (t.result !== undefined) {
-      const refused = t.result.startsWith('已拒绝')
+      const refused = t.result.startsWith('已拒绝') || t.result === REFUSED_RESULT_TEXT
       const isError = t.state === 'error'
       const content = isError ? t.result.replace(/^error: [^\n]*\n?/, '') : t.result
       blocks.push({
@@ -301,14 +320,14 @@ export function blocksToToolCalls(blocks: ResolvedBlock[]): ToolCallInfo[] {
       const text = d.error ? `error: ${d.error}\n${d.content ?? ''}` : (d.content ?? '')
       const hit = calls.get(d.tool_call_id ?? '')
       if (hit) {
-        hit.result = d.refused ? '已拒绝：用户未批准该工具调用' : text
+        hit.result = d.refused ? REFUSED_RESULT_TEXT : text
         hit.state = d.error && !d.refused ? 'error' : 'success'
         hit.duration_ms = d.duration_ms
       } else {
         calls.set(d.tool_call_id ?? '', {
           id: d.tool_call_id ?? '',
           name: d.name ?? 'unknown',
-          result: d.refused ? '已拒绝：用户未批准该工具调用' : text,
+          result: d.refused ? REFUSED_RESULT_TEXT : text,
           state: d.error && !d.refused ? 'error' : 'success',
           duration_ms: d.duration_ms
         })

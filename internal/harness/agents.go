@@ -22,6 +22,7 @@ func DefaultAgents() []Definition {
 					"websearch", "webfetch", "http",
 					"knowledge_search", "memory_write",
 					"todo", "request_input",
+					"enter_plan_mode", "exit_plan_mode",
 				},
 			},
 			Memory: MemoryPolicy{Enabled: true, RecallLimit: 6, Formation: true},

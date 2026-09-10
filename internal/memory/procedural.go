@@ -80,11 +80,12 @@ func (p *procedural) Search(ctx context.Context, query string, topK int) []Recal
 			continue
 		}
 		out = append(out, RecallHit{
-			Kind:    domain.MemoryKindProcedural,
-			Score:   1,
-			Source:  rows[i].ID,
-			Title:   rows[i].Name,
-			Snippet: snippet(parseSteps(rows[i].Steps), 200),
+			Kind:      domain.MemoryKindProcedural,
+			Score:     1,
+			Source:    rows[i].ID,
+			Title:     rows[i].Name,
+			Snippet:   snippet(parseSteps(rows[i].Steps), 200),
+			CreatedAt: rows[i].CreatedAt,
 		})
 		if len(out) >= topK {
 			break

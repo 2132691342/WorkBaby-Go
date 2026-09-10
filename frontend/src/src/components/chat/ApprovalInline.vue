@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
-  Pencil, Send, AlertTriangle, Lock, File as FileIcon
+  Check, Send, AlertTriangle, Lock, File as FileIcon
 } from '@/components/common/icons'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
@@ -12,17 +12,22 @@ import { useToast } from '@/composables/useToast'
  * 审批语义卡：从「命令文本块」升级为按工具分类的卡片。
  *
  * <p>按 tool 名称解析 approval.command（`name(jsonArgs)`）→ 不同工具给不同预览：
- *   - file_write：显示目标路径 + 写入预览（before 长度 + after 内容片段 + append 标记）；
+ *   - file_write / file_edit：目标路径 + 内容/替换预览；
  *   - exec：命令白名单状态说明 + 参数数组；
  *   - 其它：args JSON pretty-print。
  *
  * <p>风险徽标：needs_approval（warning）/ irreversible（error）。
- * 总会话免审的语义由后端 ApprovalService 承担（同命令 needs_approval 批准后免审，
+ * 会话级免审的语义由后端 ApprovalService 承担（同命令 needs_approval 批准后免审，
  * irreversible 每次必问），前端只展示约定。
+ * 已响应态：决策成功后按钮区变绿勾并禁用（后端清卡片前的一瞬也不可重复提交）。
  */
 const chat = useChatStore()
 const toast = useToast()
 const { pendingApproval } = storeToRefs(chat)
+
+/** 已响应标记（approved / denied）：防重复提交 + 绿勾反馈。 */
+const settled = ref<'' | 'approved' | 'denied'>('')
+const deciding = ref(false)
 
 /** 补充输入模式（request_input 工具）：卡片变为问答形态而非批准/拒绝。 */
 const isInput = computed(() => pendingApproval.value?.risk === 'input_required')
@@ -72,7 +77,7 @@ function parseCommand(cmd: string): ParsedCommand | null {
 
 const toolKind = computed(() => {
   const n = parsed.value?.name ?? ''
-  if (n === 'file_write' || n === 'file_read' || n === 'file_list') return 'file'
+  if (n === 'file_write' || n === 'file_edit' || n === 'file_read' || n === 'file_list') return 'file'
   if (n === 'exec' || n === 'run_skill_script') return 'exec'
   if (n === 'webfetch' || n === 'http') return 'http'
   return 'generic'
@@ -81,6 +86,7 @@ const toolKind = computed(() => {
 const toolTitle = computed(() => {
   switch (parsed.value?.name) {
     case 'file_write': return t('chat.approvalToolFileWrite')
+    case 'file_edit': return t('chat.approvalToolFileEdit')
     case 'file_read': return t('chat.approvalToolFileRead')
     case 'file_list': return t('chat.approvalToolFileList')
     case 'exec': return t('chat.approvalToolExec')
@@ -92,11 +98,15 @@ const toolTitle = computed(() => {
 })
 
 const fileWriteArgs = computed(() => {
-  if (toolKind.value !== 'file' || parsed.value?.name !== 'file_write') return null
+  if (toolKind.value !== 'file') return null
+  const name = parsed.value?.name
+  if (name !== 'file_write' && name !== 'file_edit') return null
   const a = parsed.value!.args
   return {
+    edit: name === 'file_edit',
     path: typeof a.path === 'string' ? a.path : '',
-    content: typeof a.content === 'string' ? a.content : '',
+    content: name === 'file_edit' ? (typeof a.new_string === 'string' ? a.new_string : '') : typeof a.content === 'string' ? a.content : '',
+    oldContent: name === 'file_edit' && typeof a.old_string === 'string' ? a.old_string : '',
     append: a.append === true
   }
 })
@@ -136,13 +146,27 @@ const argsJson = computed(() => {
 })
 
 async function approve(): Promise<void> {
-  await chat.approveApproval()
-  toast.success(t('chat.approvalApproved'))
+  if (deciding.value || settled.value) return
+  deciding.value = true
+  try {
+    await chat.approveApproval()
+    settled.value = 'approved'
+    toast.success(t('chat.approvalApproved'))
+  } finally {
+    deciding.value = false
+  }
 }
 
 /** 拒绝执行（安全审批语义）。 */
 async function deny(): Promise<void> {
-  await chat.denyApproval()
+  if (deciding.value || settled.value) return
+  deciding.value = true
+  try {
+    await chat.denyApproval()
+    settled.value = 'denied'
+  } finally {
+    deciding.value = false
+  }
 }
 
 /** 跳过补充输入：走后端 /skip；补充输入用 /decide 会因通道不匹配报 4003。 */
@@ -204,7 +228,7 @@ async function sendAnswer(): Promise<void> {
       <p class="mt-1 text-[11px] text-wb-muted">{{ t('chat.inputHint') }}</p>
     </template>
 
-    <!-- file_write：路径 + before/after 预览 -->
+    <!-- file_write / file_edit：路径 + 内容预览（编辑态展示替换前→替换后） -->
     <template v-else-if="fileWriteArgs">
       <div class="mb-2 flex items-center gap-1.5 text-xs text-wb-muted">
         <el-icon class="text-wb-primary"><FileIcon /></el-icon>
@@ -213,13 +237,16 @@ async function sendAnswer(): Promise<void> {
           {{ t('chat.approvalAppend') }}
         </el-tag>
       </div>
+      <div v-if="fileWriteArgs.edit && fileWriteArgs.oldContent" class="mb-2">
+        <pre class="overflow-x-auto rounded-md border border-wb-border bg-wb-surface-2 px-3 py-2 font-mono text-[11px] leading-relaxed text-wb-muted line-through">{{ previewContent(fileWriteArgs.oldContent).text }}</pre>
+      </div>
       <div v-if="fileWriteArgs.content === ''" class="rounded-md border border-dashed border-wb-border bg-wb-surface-2 px-3 py-2 text-xs text-wb-muted">
         {{ t('chat.approvalEmptyWrite') }}
       </div>
       <pre
         v-else
         class="overflow-x-auto rounded-md border border-wb-border bg-wb-surface-2 px-3 py-2 font-mono text-[11px] leading-relaxed text-wb-ink"
-      ><span class="block text-wb-muted">/* {{ t('chat.approvalAfterPreview') }} */</span>{{ fileWritePreview?.text }}</pre>
+      ><span class="block text-wb-muted">/* {{ fileWriteArgs.edit ? t('chat.approvalNewPreview') : t('chat.approvalAfterPreview') }} */</span>{{ fileWritePreview?.text }}</pre>
       <p v-if="fileWritePreview?.truncated" class="mt-1 text-[10px] text-wb-muted">
         {{ t('chat.approvalTruncated', PREVIEW_LIMIT) }}
       </p>
@@ -271,16 +298,21 @@ async function sendAnswer(): Promise<void> {
         <span v-else>{{ t('chat.approvalSessionHint') }}</span>
       </p>
 
-      <div class="mt-3 flex gap-2">
+      <!-- 已响应态：绿勾 + 禁用（nomifun 模式——决策后卡片不再可点，杜绝重复提交） -->
+      <div v-if="settled" class="mt-3 flex items-center gap-2 rounded-md border border-wb-mint/40 bg-wb-mint/10 px-3 py-2 text-xs text-wb-ink">
+        <el-icon class="text-wb-mint"><Check /></el-icon>
+        {{ settled === 'approved' ? t('chat.approvalApproved') : t('chat.approvalDenied') }}
+      </div>
+      <div v-else class="mt-3 flex gap-2">
         <el-button
           :type="isIrreversible ? 'danger' : 'primary'"
           size="small"
+          :loading="deciding"
           @click="approve"
         >
-          <el-icon class="mr-1"><Pencil /></el-icon>
           {{ isIrreversible ? t('chat.approvalApproveIrreversible') : t('chat.approvalApprove') }}
         </el-button>
-        <el-button size="small" @click="deny">{{ t('chat.approvalDeny') }}</el-button>
+        <el-button size="small" :disabled="deciding" @click="deny">{{ t('chat.approvalDeny') }}</el-button>
       </div>
     </template>
   </el-alert>

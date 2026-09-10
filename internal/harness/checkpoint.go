@@ -14,17 +14,21 @@ import (
 )
 
 // Checkpoint 单轮结束后的运行快照。
-// Messages 是完整对话上下文，Resume 据此从下一轮续跑。
+//
+// Messages 仅存本轮新增切片（自 LastSeq 起），Resume 由 adapter 与 DB 完整历史拼接：
+// 旧实现每轮全量落库（30 轮 run ≈ 30× 全文），新版 1× 全量 + 29× 增量，磁盘占用降一个数量级。
 type Checkpoint struct {
-	RunID            string         `json:"runID"`
-	SessionID        string         `json:"sessionID"`
-	Turn             int            `json:"turn"`
-	Messages         []*llm.Message `json:"messages"`
-	State            RunState       `json:"state"`
-	AssistantMsgID   string         `json:"assistantMsgID,omitempty"` // Resume 续跑落回同一条 assistant 消息
-	Content          string         `json:"content,omitempty"`        // 已累积正文
-	Thinking         string         `json:"thinking,omitempty"`       // 已累积推理
-	Usage            llm.TokenUsage `json:"usage,omitempty"`
+	RunID     string `json:"runID"`
+	SessionID string `json:"sessionID"`
+	Turn      int    `json:"turn"`
+	// LastSeq 增量起点：Messages[0].Seq 之前的消息由 adapter 从 chat_messages 重建。
+	LastSeq        int64          `json:"lastSeq"`
+	Messages       []*llm.Message `json:"messages"`
+	State          RunState       `json:"state"`
+	AssistantMsgID string         `json:"assistantMsgID,omitempty"` // Resume 续跑落回同一条 assistant 消息
+	Content        string         `json:"content,omitempty"`        // 已累积正文
+	Thinking       string         `json:"thinking,omitempty"`       // 已累积推理
+	Usage          llm.TokenUsage `json:"usage,omitempty"`
 	// StepRecords 幂等恢复：已完成（成功）工具调用按 tool:{name}:{args} 记结果，Resume 命中复用不重放副作用。
 	StepRecords map[string]StepRecord `json:"stepRecords,omitempty"`
 	CreatedAt   int64                 `json:"createdAt"`

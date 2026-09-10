@@ -20,7 +20,7 @@ func (c *personaCap) Preload(_ context.Context, p *PreloadCtx) ([]harness.Contex
 	if msg == nil {
 		return nil, nil
 	}
-	return []harness.ContextPiece{{Key: "persona", Title: "角色", Body: msg.Content}}, nil
+	return []harness.ContextPiece{{Key: "persona", Title: "角色", Body: msg.Content, Priority: harness.PriorityEssential}}, nil
 }
 
 func (c *personaCap) Tools() []tool.Tool { return nil }

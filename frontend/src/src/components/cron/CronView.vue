@@ -14,6 +14,7 @@ import { Clock, Lightbulb, Play, Pencil, Trash2 } from '@/components/common/icon
 import { useCronStore } from '@/stores/cron'
 import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
+import { formatDateTime } from '@/utils/time'
 import type { CronJob } from '@/types/api'
 
 type Mode = 'simple' | 'advanced'
@@ -35,9 +36,9 @@ const recentRuns = computed(() =>
     .slice(0, 5)
 )
 
+// fmtTime → utils/time.formatDateTime（保持本地名字以避免模板改动）
 function fmtTime(ts: number | null): string {
-  if (!ts) return '—'
-  return new Date(ts).toLocaleString('zh-CN', { hour12: false })
+  return formatDateTime(ts)
 }
 
 // ===== 简单模式 =====

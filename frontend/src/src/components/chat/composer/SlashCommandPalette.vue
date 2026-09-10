@@ -74,6 +74,10 @@ const LOCAL_COMMANDS: SlashCommand[] = [
   { id: 'model', labelKey: 'slash.model', descKey: 'slash.modelDesc', icon: Cpu, group: 'model' },
   { id: 'theme', labelKey: 'slash.theme', descKey: 'slash.themeDesc', icon: Palette, group: 'system' },
   { id: 'tasks', labelKey: 'slash.tasks', descKey: 'slash.tasksDesc', icon: ListTree, group: 'system' },
+  { id: 'compact', labelKey: 'slash.compact', descKey: 'slash.compactDesc', icon: Eraser, group: 'session' },
+  { id: 'export', labelKey: 'slash.export', descKey: 'slash.exportDesc', icon: ListTree, group: 'session' },
+  { id: 'context', labelKey: 'slash.context', descKey: 'slash.contextDesc', icon: Cpu, group: 'system' },
+  { id: 'help', labelKey: 'slash.help', descKey: 'slash.helpDesc', icon: Sparkles, group: 'system' },
   { id: 'agent', labelKey: 'slash.agent', descKey: 'slash.agentDesc', icon: Bot, group: 'agent' },
   { id: 'trust', labelKey: 'slash.trust', descKey: 'slash.trustDesc', icon: Shield, group: 'agent' }
 ]

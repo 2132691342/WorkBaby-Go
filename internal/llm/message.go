@@ -30,6 +30,9 @@ type Message struct {
 	ToolCallID string     `json:"toolCallID,omitempty"`
 	ToolName   string     `json:"toolName,omitempty"`
 	Name       string     `json:"name,omitempty"`
+	// Seq 源消息在 chat_messages 中的序列号（用于 checkpoint 增量切片与 Resume 拼接）；
+	// 不参与上游协议，仅作为持久化侧的去重锚点。
+	Seq int64 `json:"seq,omitempty"`
 }
 
 // ToolCall 模型返回的工具调用；只在 assistant 消息出现。

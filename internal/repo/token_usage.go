@@ -44,16 +44,18 @@ func (r *TokenUsageRepo) ListBySession(ctx context.Context, sessionID string, li
 func (r *TokenUsageRepo) Summarize(ctx context.Context, startMs, endMs int64) (domain.TokenSummaryRESP, error) {
 	var out domain.TokenSummaryRESP
 	row := struct {
-		Input  int64 `gorm:"column:input"`
-		Output int64 `gorm:"column:output"`
-		Cache  int64 `gorm:"column:cache"`
-		Calls  int64 `gorm:"column:calls"`
+		Input  int64   `gorm:"column:input"`
+		Output int64   `gorm:"column:output"`
+		Cache  int64   `gorm:"column:cache"`
+		Cost   float64 `gorm:"column:cost"`
+		Calls  int64   `gorm:"column:calls"`
 	}{}
 	if err := r.db.WithContext(ctx).Model(&domain.TokenUsageDO{}).
 		Where("created_at >= ? AND created_at < ?", startMs, endMs).
 		Select(`COALESCE(SUM(input_tokens),0) AS input,
 		        COALESCE(SUM(output_tokens),0) AS output,
 		        COALESCE(SUM(cache_read_tokens),0) AS cache,
+		        COALESCE(SUM(cost_usd),0) AS cost,
 		        COUNT(1) AS calls`).
 		Scan(&row).Error; err != nil {
 		return out, pkg.Wrap(2010, "summarize token usage failed", err)
@@ -61,6 +63,7 @@ func (r *TokenUsageRepo) Summarize(ctx context.Context, startMs, endMs int64) (d
 	out.InputTokens = row.Input
 	out.OutputTokens = row.Output
 	out.CacheReadTokens = row.Cache
+	out.CostUSD = row.Cost
 	// 总消耗 = 输入 + 输出。缓存命中是输入的一个拆解维度（OpenAI 的 cached_tokens
 	// 本身已计入 prompt_tokens），再加一次会重复计数。
 	out.TotalTokens = row.Input + row.Output

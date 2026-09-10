@@ -55,9 +55,12 @@ func (l *longTerm) Append(_ context.Context, sessionID string, delta string) err
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return domain.ErrMemoryIO
 	}
-	// 超限保护：提示但不写入
+	// 超限滚动压缩：保留较新的约 60%（从「## 」行边界切开），头部插入压缩标记后继续追加。
+	// 旧实现满额直接拒绝写入——记忆静默停止积累，用户无感知。
 	if fi, err := os.Stat(p); err == nil && fi.Size() > maxLongTermBytes {
-		return domain.ErrMemoryClean
+		if rerr := l.rotate(p); rerr != nil {
+			return domain.ErrMemoryIO
+		}
 	}
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -69,4 +72,25 @@ func (l *longTerm) Append(_ context.Context, sessionID string, delta string) err
 		return domain.ErrMemoryIO
 	}
 	return nil
+}
+
+// rotate 满额滚动：保留约后 60% 条目（从「## 」行边界切开），头部插入压缩标记。
+// 确定性裁剪，不调 LLM。
+func (l *longTerm) rotate(p string) error {
+	bs, err := os.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(bs), "\n")
+	start := len(lines) * 2 / 5
+	for start < len(lines) && !strings.HasPrefix(lines[start], "## ") {
+		start++
+	}
+	if start >= len(lines) {
+		start = len(lines) * 2 / 5
+	}
+	var kept strings.Builder
+	kept.WriteString("[早期记忆已滚动压缩]\n\n")
+	kept.WriteString(strings.Join(lines[start:], "\n"))
+	return os.WriteFile(p, []byte(kept.String()), 0o644)
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"WorkBaby/internal/llm"
+	"WorkBaby/internal/pkg"
 )
 
 // ContextCompressor 可选增强压缩接口：需要 ctx 的压缩（LLM 摘要）；
@@ -74,6 +75,17 @@ func (a *AutoCompressor) CompressCtx(ctx context.Context, msgs []*llm.Message, b
 	for tailStart > 1 && msgs[tailStart] != nil && msgs[tailStart].Role == llm.RoleTool {
 		tailStart--
 	}
+	// 保护最后一轮：tailStart 不越过最后一个 user 锚点——那是模型正在处理的上下文，
+	// 被摘要吞掉会直接导致「忘了刚才说啥」的幻觉。
+	lastUser := 1
+	for i := 1; i < len(msgs); i++ {
+		if msgs[i] != nil && msgs[i].Role == llm.RoleUser {
+			lastUser = i
+		}
+	}
+	if tailStart < lastUser {
+		tailStart = lastUser
+	}
 	head := msgs[1:tailStart]
 	if len(head) == 0 {
 		return a.fallback.Compress(msgs, budgetTokens)
@@ -104,7 +116,8 @@ func (a *AutoCompressor) CompressCtx(ctx context.Context, msgs []*llm.Message, b
 	// 3) 组装：system + 交接摘要 + 完整尾部；仍超预算再 Micro 兜底
 	out := make([]*llm.Message, 0, len(msgs)-len(head)+2)
 	out = append(out, msgs[0])
-	out = append(out, llm.SystemMessage("[上下文交接摘要·早期过程已压缩]\n"+summary))
+	out = append(out, llm.SystemMessage(
+		"[上下文交接摘要·早期过程已压缩：此前的对话轮次与工具结果已归档，结果均已消费，请勿重跑有副作用的工具；如需细节请重新读取对应文件]\n"+summary))
 	out = append(out, msgs[tailStart:]...)
 	if EstimateTokens(out) > budgetTokens {
 		out = a.fallback.Compress(out, budgetTokens)
@@ -190,12 +203,18 @@ func serializeForSummary(m *llm.Message) string {
 	}
 }
 
-// estimateOne 单条消息 token 估算（与 EstimateTokens 同口径）。
+// estimateOne 单条消息 token 估算（与 EstimateTokens 完全同口径：CJK 计权 +
+// tool_calls 计入 + 消息固定开销）。口径不一会让 Auto 压缩的尾部保留量失准
+//（中文按字符/4 会低估数倍，摘要吞掉本该保留的近期上下文）。
 func estimateOne(m *llm.Message) int {
 	if m == nil {
 		return 0
 	}
-	return (len([]rune(m.Content)) + len([]rune(m.Thinking))) / 4
+	n := pkg.EstimateTextTokens(m.Content) + pkg.EstimateTextTokens(m.Thinking)
+	for _, tc := range m.ToolCalls {
+		n += pkg.EstimateTextTokens(tc.Function.Name) + pkg.EstimateTextTokens(tc.Function.Arguments)
+	}
+	return n + MessageOverheadTokens
 }
 
 // hashMessages 消息序列指纹（fnv64：序号+角色+长度+正文前缀），供迭代摘要前缀判定。

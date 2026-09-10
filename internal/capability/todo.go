@@ -57,8 +57,9 @@ func (t *Todo) Preload(ctx context.Context, c *PreloadCtx) ([]harness.ContextPie
 	b.WriteString("进度 " + strconv.Itoa(done) + "/" + strconv.Itoa(len(items)) +
 		"。执行中持续对照此计划：完成一项立即 todo(mark_done)，新增步骤先 todo(plan) 补录。")
 	return []harness.ContextPiece{{
-		Key:   "plan",
-		Title: "当前计划（会话待办）",
-		Body:  b.String(),
+		Key:      "plan",
+		Title:    "当前计划（会话待办）",
+		Body:     b.String(),
+		Priority: harness.PriorityLow,
 	}}, nil
 }

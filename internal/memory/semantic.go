@@ -84,11 +84,12 @@ func factsToHits(rows []domain.MemoryFactDO) []RecallHit {
 	out := make([]RecallHit, 0, len(rows))
 	for i := range rows {
 		out = append(out, RecallHit{
-			Kind:    domain.MemoryKindSemantic,
-			Score:   rows[i].Confidence,
-			Source:  rows[i].ID,
-			Title:   rows[i].Key,
-			Snippet: snippet(rows[i].Value, 200),
+			Kind:      domain.MemoryKindSemantic,
+			Score:     rows[i].Confidence,
+			Source:    rows[i].ID,
+			Title:     rows[i].Key,
+			Snippet:   snippet(rows[i].Value, 200),
+			CreatedAt: rows[i].CreatedAt,
 		})
 	}
 	return out

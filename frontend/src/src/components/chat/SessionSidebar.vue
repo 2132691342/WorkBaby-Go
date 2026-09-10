@@ -4,6 +4,7 @@ import { Search, CircleCheck, Circle, Delete, GitBranch } from '@/components/com
 import type { Session } from '@/types/api'
 import { t } from '@/i18n'
 import { useDialog } from '@/composables/useDialog'
+import { useChatStore } from '@/stores/chat'
 
 /**
  * 会话侧边栏：树形分组 + 搜索 + 多选批量删除。
@@ -26,9 +27,25 @@ const emit = defineEmits<{
 }>()
 
 const dialog = useDialog()
+const chat = useChatStore()
 const multiSelect = ref(false)
 const selectedIds = ref<Set<string>>(new Set())
 const search = ref('')
+
+// 后端内容搜索：输入去抖后跨会话检索（标题 + 正文），
+// 命中的会话合并进列表——本地标题过滤抓不到「内容里提过」的会话。
+let searchTimer: number | undefined
+watch(search, (q) => {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = window.setTimeout(() => void chat.searchSessions(q), 250)
+})
+
+/** 后端内容搜索命中且尚未在加载列表里的会话（搜索态下并入展示）。 */
+const remoteHits = computed<Session[]>(() => {
+  if (!search.value.trim()) return []
+  const known = new Set(props.sessions.map((s) => s.id))
+  return chat.searchResults.filter((s) => !known.has(s.id))
+})
 
 function toggleSelect(id: string): void {
   const next = new Set(selectedIds.value)
@@ -92,6 +109,8 @@ function buildTree(): { roots: Session[]; children: Map<string, Session[]> } {
       children.set(s.parent_id, arr)
     }
   }
+  // 后端内容搜索命中、未在加载列表里的会话并入根列表
+  roots.push(...remoteHits.value)
   // 子分支按时段倒序
   for (const arr of children.values()) {
     arr.sort((a, b) => (b.last_message_at ?? 0) - (a.last_message_at ?? 0))

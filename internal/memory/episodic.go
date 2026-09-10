@@ -62,11 +62,12 @@ func (e *episodic) Search(ctx context.Context, query string, topK int) []RecallH
 	out := make([]RecallHit, 0, len(rows))
 	for i := range rows {
 		out = append(out, RecallHit{
-			Kind:    domain.MemoryKindEpisodic,
-			Score:   rows[i].Score,
-			Source:  rows[i].ID,
-			Title:   snippet(rows[i].Summary, 40),
-			Snippet: snippet(rows[i].Summary, 200),
+			Kind:      domain.MemoryKindEpisodic,
+			Score:     rows[i].Score,
+			Source:    rows[i].ID,
+			Title:     snippet(rows[i].Summary, 40),
+			Snippet:   snippet(rows[i].Summary, 200),
+			CreatedAt: rows[i].CreatedAt,
 		})
 	}
 	return out

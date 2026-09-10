@@ -16,7 +16,7 @@ const router = useRouter()
 const { stats } = storeToRefs(dashboard)
 
 // ===== 缓存命中率 =====
-interface CacheSummary { input: number; output: number; cache: number; uncached: number; rate: number }
+interface CacheSummary { input: number; output: number; cache: number; uncached: number; rate: number; costUSD: number }
 const cacheSummary = computed2<CacheSummary | null>(() => {
   const s = dashboard.tokenTrend
   if (!s) return null
@@ -30,7 +30,8 @@ const cacheSummary = computed2<CacheSummary | null>(() => {
     output,
     cache,
     uncached: Math.max(input - cache, 0),
-    rate: Math.round((cache / input) * 100)
+    rate: Math.round((cache / input) * 100),
+    costUSD: s.cost_usd ?? 0
   }
 })
 
@@ -110,6 +111,8 @@ function fmtTokens(n: number): string {
           <p>{{ t('dashboard.cacheRead', fmtTokens(cacheSummary.cache)) }}</p>
           <p>{{ t('dashboard.cacheCharged', fmtTokens(cacheSummary.uncached)) }}</p>
           <p>{{ t('dashboard.cacheOutput', fmtTokens(cacheSummary.output)) }}</p>
+          <!-- 费用为估算值：按 pricing.<model> 单价 KV 计算；未配置单价的模型不计入 -->
+          <p v-if="cacheSummary.costUSD > 0">{{ t('dashboard.costUSD', cacheSummary.costUSD.toFixed(4)) }}</p>
         </div>
       </div>
       <div v-else class="empty fs11" style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 12px 0">{{ t('dashboard.noTokenData') }}</div>

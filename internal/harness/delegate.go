@@ -113,6 +113,11 @@ func (r *Runner) Delegate(ctx context.Context, agentName, task string) (string, 
 	defer cancel()
 
 	res := child.RunMessages(childCtx, childRunID, sessionID, "", r.model, msgs)
+	// 子 run 的消耗单独上报（turn 沿子 run 编号，由 service 决定落库口径）；
+	// 丢弃会让 token_usages 系统性漏计整个委派的用量。
+	if r.OnDelegateUsage != nil && len(res.Turns) > 0 {
+		r.OnDelegateUsage(def.Name, res.Turns)
+	}
 	if res.Err != nil {
 		flight.err = pkg.Wrap(5008, "子任务执行失败", res.Err)
 		return "", flight.err

@@ -265,8 +265,17 @@ export const useChatStore = defineStore('chat', () => {
       loadTodoState(id),
       loadFileChanges(id),
       loadArtifacts(id),
-      loadContextUsage(id)
+      loadContextUsage(id),
+      // 页面刷新后恢复本会话的未决审批（此前该方法从未被调用，刷新即丢卡片）
+      loadPendingApprovals()
     ])
+    // 终态回灌：stop_reason 落在消息上，会话快照里取最后一条 assistant 的值——
+    // 刷新/切走再切回时「继续」入口仍然可用；completed 或无值时清空（error 同步清，
+    // 错误横幅属于上一条消息的语境，跨会话残留会误导）。
+    const lastAssistant = [...messages.value].reverse().find((m) => m.role === 'assistant')
+    const sr = lastAssistant?.stop_reason ?? null
+    stopReason.value = sr && sr !== 'completed' ? sr : null
+    error.value = null
   }
 
   /** 加载内置斜杠命令元数据（命令面板的数据源，）。
@@ -606,9 +615,8 @@ export const useChatStore = defineStore('chat', () => {
     stopReason.value = null
     userCancelled.value = false
     pendingApproval.value = null
-    // 本轮文件变更/工件重置为会话已知状态（流式增量会重新累计）
-    fileChanges.value = []
-    artifacts.value = []
+    // 注：本轮新增的 file_changes / artifacts 由流式事件增量累积；
+    // 这里不清空——变更面板承载「本会话全部变更历史」，按 run 分组展示。
 
     try {
       const handle = streamChat(
@@ -758,6 +766,11 @@ export const useChatStore = defineStore('chat', () => {
   /** 关闭终止原因横幅（用户手动关闭；下轮发送时还会自动复位）。 */
   function dismissStopReason(): void {
     stopReason.value = null
+  }
+
+  /** 关闭错误横幅（用户手动关闭；重试走视图层的重新生成入口）。 */
+  function dismissError(): void {
+    error.value = null
   }
 
   /**
@@ -1017,6 +1030,7 @@ export const useChatStore = defineStore('chat', () => {
     resumeRun,
     cancelStream,
     dismissStopReason,
+    dismissError,
     deleteMessage,
     resendFrom,
     forkFrom,

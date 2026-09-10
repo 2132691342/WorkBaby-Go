@@ -147,7 +147,7 @@ func (t *WriteTool) WithRecorder(r Recorder) *WriteTool {
 func (t *WriteTool) Name() string              { return "file_write" }
 func (t *WriteTool) RiskLevel() tool.RiskLevel { return tool.RiskWriteLocal }
 func (t *WriteTool) Description() string {
-	return "写入/覆盖工作区内文本文件；单次最大 2MB。"
+	return "写入/覆盖工作区内文本文件（单次最大 2MB）。修改已有文件优先用 file_edit（局部替换 + diff）；本工具用于新建文件或整篇重写。"
 }
 
 func (t *WriteTool) Schema() tool.ToolSchema {

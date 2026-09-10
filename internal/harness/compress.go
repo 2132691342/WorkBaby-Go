@@ -3,6 +3,7 @@ package harness
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"WorkBaby/internal/llm"
 	"WorkBaby/internal/pkg"
@@ -47,13 +48,7 @@ func (MicroCompressor) Compress(msgs []*llm.Message, budgetTokens int) []*llm.Me
 		for j < len(out) && out[j] != nil && out[j].Role == llm.RoleTool {
 			j++
 		}
-		folded := &llm.Message{
-			Role: llm.RoleAssistant,
-			Content: fmt.Sprintf(
-				"[早期工具段已折叠（%d 个调用），结果已消费，请勿重跑以避免副作用]",
-				j-i,
-			),
-		}
+		folded := &llm.Message{Role: llm.RoleAssistant, Content: foldedPlaceholder(out[i+1 : j])}
 		out = append(out[:i], append([]*llm.Message{folded}, out[j:]...)...)
 		i-- // 折叠点前移一格，下一轮从当前位置继续
 	}
@@ -61,12 +56,9 @@ func (MicroCompressor) Compress(msgs []*llm.Message, budgetTokens int) []*llm.Me
 		return out
 	}
 
-	// 第二遍：仍超预算时按安全切点对半截断（保留首条 system 与尾部一半）
-	keep := len(out) / 2
-	if keep < 2 {
-		keep = 2
-	}
-	cut := safeTailStart(out, len(out)-keep)
+	// 第二遍：仍超预算时按「轮」（user 锚点）截断，从最旧轮开始丢；
+	// 最后一轮永不丢——那是模型正在处理的上下文。切点永远落在 user 上，工具对完整。
+	cut := truncateCutByRounds(out, budgetTokens)
 	if cut > 1 {
 		trimmed := make([]*llm.Message, 0, len(out)-cut+1)
 		trimmed = append(trimmed, out[0])
@@ -74,6 +66,50 @@ func (MicroCompressor) Compress(msgs []*llm.Message, budgetTokens int) []*llm.Me
 		out = trimmed
 	}
 	return out
+}
+
+// truncateCutByRounds 返回按轮截断的切点：最早的、使剩余部分回到预算内的 user 锚点；
+// 全部尝试都超预算时丢到只剩最后一轮（cut=倒数第二个锚点）。无锚点或不足两轮返回 1（不截）。
+func truncateCutByRounds(ms []*llm.Message, budgetTokens int) int {
+	var anchors []int
+	for i := 1; i < len(ms); i++ {
+		if ms[i] != nil && ms[i].Role == llm.RoleUser {
+			anchors = append(anchors, i)
+		}
+	}
+	if len(anchors) <= 1 {
+		return 1
+	}
+	cut := 0
+	for _, i := range anchors[:len(anchors)-1] {
+		if EstimateTokens(ms[i:]) <= budgetTokens {
+			cut = i
+			break
+		}
+		cut = i
+	}
+	return cut
+}
+
+// foldedPlaceholder 折叠占位文案：明确「已成功执行、结果已消费、勿重跑」，
+// 并保留工具名清单——模型据此判断哪些信息曾经拿到，而不是把它当成执行失败重放副作用。
+func foldedPlaceholder(toolMsgs []*llm.Message) string {
+	var names []string
+	seen := map[string]bool{}
+	for _, m := range toolMsgs {
+		if m != nil && m.ToolName != "" && !seen[m.ToolName] {
+			seen[m.ToolName] = true
+			names = append(names, m.ToolName)
+		}
+	}
+	if len(names) > 4 {
+		names = append(names[:4], "…")
+	}
+	return fmt.Sprintf(
+		"[早期工具段已折叠（%d 条结果，涉及工具：%s）。这些调用均已成功执行、结果已被消费，请勿重跑以避免副作用。"+
+			"如确需该信息，请用更精确的范围重新执行只读工具（如 file_read 指定行区间）。]",
+		len(toolMsgs), strings.Join(names, ", "),
+	)
 }
 
 // safeTailStart 从 want 起向前（索引减小方向）找最近的「尾部安全切点」：切点消息不是 tool。

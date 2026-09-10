@@ -50,10 +50,10 @@ func NewFormationPolicy(t Thresholds) *FormationPolicy {
 var (
 	rememberRe = regexp.MustCompile(`(?i)(记住|记得|remember)`)
 	preferRe   = regexp.MustCompile(`(?i)(我喜欢|我偏好|prefer|favorite)`)
-	// dislikeRe 不含「不要」「报错」——这类词在工作上下文里高频出现
-	//（「不要删这个文件」「这个报错…」「不要错把它当故障」），不属于负反馈。
-	// 留作匹配明确表达不满的词（不喜欢 / 错误理解 / 别这样 / 不好用 / dislike / wrong）。
-	dislikeRe   = regexp.MustCompile(`(?i)(不喜欢|错误|别这样|不好用|dislike|wrong)`)
+	// dislikeRe 只认明确的负反馈表达——「错误」「wrong」在技术对话里高频出现
+	//（「这个报错…」「错误处理」），命中会把正常排错对话一票否决，
+	// 导致排错经验完全不沉淀记忆。
+	dislikeRe   = regexp.MustCompile(`(?i)(不喜欢|不满意|太难用|没法用|别这样|太烂|dislike|hate it)`)
 	correctedRe = regexp.MustCompile(`(?i)(更正|纠正|不对|其实应该)`)
 )
 

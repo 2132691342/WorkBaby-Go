@@ -135,6 +135,7 @@ func (s *DashboardService) TokenTrend(ctx context.Context, req domain.TokenTrend
 		Output:      make([]int64, len(labels)),
 		CacheRead:   make([]int64, len(labels)),
 		Total:       summary.TotalTokens,
+		CostUSD:     summary.CostUSD,
 	}
 	// 对齐：桶起点与聚合 SQL 用同一套取整规则（(ts+offset)/step*step），故可直接索引换算
 	base := (start + offsetMs) / stepMs * stepMs

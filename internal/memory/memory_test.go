@@ -99,8 +99,61 @@ func TestFormationTriggers(t *testing.T) {
 	}
 }
 
-// ===== 三层记忆写读 + 召回 =====
+// TestDislikeRegexRegression 回归：技术高频词「错误 / wrong」不能触发负反馈一票否决，
+// 否则正常排错对话会被整体抑制，排错经验完全不沉淀记忆。
+func TestDislikeRegexRegression(t *testing.T) {
+	nonNegative := []string{
+		"这个错误需要排查",
+		"错误处理逻辑在哪",
+		"返回了 wrong answer，看看哪一步错了",
+		"不要把报错当成故障",
+	}
+	for _, s := range nonNegative {
+		if dislikeRe.MatchString(s) {
+			t.Fatalf("技术语境不应命中 dislike: %q", s)
+		}
+	}
+	positive := []string{"我不满意这个结果", "太难用了，换一个方案", "别这样操作"}
+	for _, s := range positive {
+		if !dislikeRe.MatchString(s) {
+			t.Fatalf("明确负反馈应命中 dislike: %q", s)
+		}
+	}
+}
 
+// ===== 召回治理：时间衰减 + 近重复合并 =====
+
+// TestRecallDecayAndDedupe 回归：旧记忆长期霸占召回头部、不同会话沉淀的重复
+// 结论重复注入——两者都会稀释上下文。衰减让新记忆优先，去重保住信息密度。
+func TestRecallDecayAndDedupe(t *testing.T) {
+	now := int64(1_800_000_000_000)
+	day := int64(86400000)
+
+	// 衰减：30 天半衰期，同分下旧记录权重约减半
+	fresh := rrfMerge([][]RecallHit{{{Kind: "episodic", Source: "a", Score: 1, Snippet: "new"}}}, 5, now)
+	old := rrfMerge([][]RecallHit{{{Kind: "episodic", Source: "b", Score: 1, CreatedAt: now - 30*day, Snippet: "old"}}}, 5, now)
+	if old[0].Score < fresh[0].Score*0.49 || old[0].Score > fresh[0].Score*0.51 {
+		t.Fatalf("30 天衰减应约等于半衰: fresh=%f old=%f", fresh[0].Score, old[0].Score)
+	}
+
+	// 去重：归一化后互为包含的片段只留高分者
+	merged := rrfMerge([][]RecallHit{
+		{{Kind: "episodic", Source: "a", Score: 1, Snippet: "用户偏好 Go 语言 开发"}},
+		{{Kind: "semantic", Source: "b", Score: 1, Snippet: "用户偏好Go语言"}},
+		{{Kind: "procedural", Source: "c", Score: 1, Snippet: "完全不同的内容"}},
+	}, 5, now)
+	if len(merged) != 2 {
+		t.Fatalf("重复片段应合并, got %d: %+v", len(merged), merged)
+	}
+
+	// 无时间戳的命中不衰减
+	noTime := rrfMerge([][]RecallHit{{{Kind: "episodic", Source: "d", Score: 1, Snippet: "x"}}}, 5, now)
+	if noTime[0].Score != 1.0/(rrfK+1) {
+		t.Fatalf("无时间戳不应衰减: %f", noTime[0].Score)
+	}
+}
+
+// ===== 三层记忆写读 + 召回 =====
 
 // TestSearchEpisodes 关键词搜索情景记忆：空 query 必须无命中而非报错。
 func TestSearchEpisodes(t *testing.T) {
@@ -127,6 +180,5 @@ func TestSearchEpisodes(t *testing.T) {
 		t.Fatalf("empty query: want 0 hits, got %d (%v)", len(rows), err)
 	}
 }
-
 
 // ===== 长期记忆：append 顺序 / 累积 =====

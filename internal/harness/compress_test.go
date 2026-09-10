@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"WorkBaby/internal/llm"
 	"WorkBaby/internal/tool"
@@ -117,4 +118,28 @@ func TestRunnerContextBudgetCompress(t *testing.T) {
 	require.NoError(t, res.Err)
 	assert.Equal(t, ReasonEndTurn, res.Reason)
 	assert.Contains(t, res.Content, "done")
+}
+
+// TestToolResultTruncateRuneSafe 回归：截断必须落在 rune 边界——旧实现按 byte 切，
+// 50k 边界会把 3 字节汉字劈成残片，乱码回填给 LLM（严格上游直接 400）。
+func TestToolResultTruncateRuneSafe(t *testing.T) {
+	s := strings.Repeat("汉", 51_000) // 153_000 bytes，超 rune 限
+	got := truncate(s, 50_000)
+	assert.True(t, utf8.ValidString(got), "截断结果必须是合法 UTF-8")
+	assert.True(t, strings.HasSuffix(got, "\n... (truncated)"))
+	assert.LessOrEqual(t, len([]rune(got)), 50_000+len("\n... (truncated)"))
+	assert.True(t, strings.HasPrefix(got, strings.Repeat("汉", 10)), "内容前缀无损")
+}
+
+// TestEstimateOneMatchesEstimateTokens 回归：estimateOne 与 EstimateTokens 必须同口径。
+// 旧实现按「字符数/4」估算，中文低估 3~4 倍，Auto 压缩的尾部保留量随之失准，
+// 摘要会吞掉本该保留的近期上下文。
+func TestEstimateOneMatchesEstimateTokens(t *testing.T) {
+	text := &llm.Message{Role: llm.RoleUser, Content: strings.Repeat("部署配置", 100)}
+	assert.Equal(t, EstimateTokens([]*llm.Message{text}), estimateOne(text))
+
+	withCall := &llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+		Function: llm.FunctionCall{Name: "exec", Arguments: `{"cmd":"ls -la"}`},
+	}}}
+	assert.Equal(t, EstimateTokens([]*llm.Message{withCall}), estimateOne(withCall))
 }

@@ -49,6 +49,8 @@ func (s *ChatService) startRunRecord(ctx context.Context, runID string, ses *dom
 }
 
 // finishRunRecord 回填终态与用量；错误终态按 status=error 落，便于历史页筛选失败运行。
+// 用量取 Accumulated（全 run 累计）：Usage 是末轮 per-turn 口径（供上下文占用展示），
+// 历史页展示「本次运行消耗」必须与 token_usages 明细 SUM 对得上。
 func (s *ChatService) finishRunRecord(ctx context.Context, runID string, res harness.RunResult) {
 	if s.runRec == nil || runID == "" {
 		return
@@ -61,10 +63,10 @@ func (s *ChatService) finishRunRecord(ctx context.Context, runID string, res har
 		"status":        status,
 		"reason":        string(res.Reason),
 		"turns":         len(res.Turns),
-		"input_tokens":  res.Usage.InputTokens,
-		"output_tokens": res.Usage.OutputTokens,
-		"cache_read":    res.Usage.CacheReadTokens,
-		"total_tokens":  res.Usage.TotalTokens,
+		"input_tokens":  res.Accumulated.InputTokens,
+		"output_tokens": res.Accumulated.OutputTokens,
+		"cache_read":    res.Accumulated.CacheReadTokens,
+		"total_tokens":  res.Accumulated.TotalTokens,
 		"ended_at":      time.Now().UnixMilli(),
 	}
 	if err := s.runRec.Finish(ctx, runID, upd); err != nil {

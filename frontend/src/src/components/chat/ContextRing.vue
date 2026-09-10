@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import type { ContextSegment, ContextUsageRESP } from '@/types/api'
 import { t } from '@/i18n'
+import { SEGMENT_COLOR as SHARED_SEGMENT_COLOR } from '@/chat/models/contextSegments'
 
 /**
  * 上下文占用环形图。
@@ -17,12 +18,7 @@ const R = (SIZE - STROKE) / 2
 const CIRCUMFERENCE = 2 * Math.PI * R
 
 /** 段颜色：与 wb-* 设计令牌一致，靠 dark mode 自动适配。 */
-const SEGMENT_COLOR: Record<string, string> = {
-  system: 'var(--wb-primary)',
-  memory: 'var(--wb-lavender)',
-  tools: 'var(--wb-sky)',
-  history: 'var(--wb-mint)'
-}
+const SEGMENT_COLOR = SHARED_SEGMENT_COLOR
 
 const segments = computed<ContextSegment[]>(() => props.usage?.segments ?? [])
 

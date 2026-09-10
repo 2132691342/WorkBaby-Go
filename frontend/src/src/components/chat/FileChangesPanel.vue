@@ -11,6 +11,8 @@ import { useChatStore } from '@/stores/chat'
 import { useDialog } from '@/composables/useDialog'
 import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
+import { looksLikeDiff, parseDiffLines, diffLineClass } from '@/chat/models/blocks'
+import { formatDateTime } from '@/utils/time'
 import type { FileChange, FileChangeDetail } from '@/types/api'
 import {
   FilePlus2,
@@ -36,6 +38,27 @@ const detailLoading = ref(false)
 const changes = computed(() => fileChanges.value)
 const arts = computed(() => artifacts.value)
 
+/** 详情是否为 unified diff（决定着色渲染还是裸文本）。 */
+const isDiff = computed(() => looksLikeDiff(detail.value?.diff ?? ''))
+const diffLines = computed(() => parseDiffLines(detail.value?.diff ?? ''))
+
+/**
+ * 变更按 run 分组：run_id 相邻相同的归为一组（列表按时间倒序，分组保序）。
+ * 组标题展示首条时间——用户回滚时能对上「那一轮改了哪些文件」。
+ */
+const groupedChanges = computed<{ runID: string; label: string; items: FileChange[] }[]>(() => {
+  const groups: { runID: string; label: string; items: FileChange[] }[] = []
+  for (const c of changes.value) {
+    const last = groups[groups.length - 1]
+    if (last && last.runID === c.run_id) {
+      last.items.push(c)
+    } else {
+      groups.push({ runID: c.run_id, label: fmtTime(c.created_at), items: [c] })
+    }
+  }
+  return groups
+})
+
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n}B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`
@@ -44,9 +67,7 @@ function fmtBytes(n: number): string {
 
 function fmtTime(ms: number): string {
   if (!ms) return ''
-  const d = new Date(ms)
-  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  return `${d.getMonth() + 1}/${d.getDate()} ${hm}`
+  return formatDateTime(ms).replace(/^\d{4}-/, '')
 }
 
 function actionIcon(action: string): Component {
@@ -165,44 +186,59 @@ watch(tab, (v) => {
           <span class="truncate text-[10px] text-wb-muted">{{ detail.rel_path }}</span>
         </div>
         <div v-if="detailLoading" class="text-xs text-wb-muted">{{ t('common.loading') }}</div>
+        <!-- diff 着色渲染（与工具时间线同一套 parseDiffLines，裸 pre 只在非 diff 文本时兜底） -->
+        <pre
+          v-else-if="detail.diff && isDiff"
+          class="min-h-0 flex-1 overflow-auto rounded-md border border-wb-border bg-wb-surface-2 p-2 font-mono text-[11px] leading-relaxed"
+        ><span
+          v-for="(ln, li) in diffLines"
+          :key="li"
+          :class="diffLineClass(ln.type)"
+        >{{ ln.text }}
+</span></pre>
         <pre v-else-if="detail.diff" class="min-h-0 flex-1 overflow-auto rounded-md border border-wb-border bg-wb-surface-2 p-2 font-mono text-[11px] leading-relaxed text-wb-ink">{{ detail.diff }}</pre>
         <div v-else class="rounded-md border border-wb-border bg-wb-surface-2 p-3 text-xs text-wb-muted">{{ t('changes.diffEmpty') }}</div>
     </div>
 
-      <!-- 变更列表 -->
-      <div v-else-if="tab === 'changes'" class="space-y-1.5">
+      <!-- 变更列表：按 run 分组（组标题 = 该轮首次变更时间） -->
+      <div v-else-if="tab === 'changes'" class="space-y-3">
         <div v-if="changes.length === 0" class="px-2 py-8 text-center text-xs text-wb-muted">
           {{ t('changes.empty') }}
         </div>
-        <button
-          v-for="c in changes"
-          :key="c.id"
-          type="button"
-          class="group block w-full rounded-md border border-wb-border bg-wb-surface px-2 py-2 text-left transition-colors hover:border-wb-primary/40"
-          :class="{ 'opacity-60': c.rolled_back }"
-          @click="showDetail(c)"
-        >
-          <div class="flex items-center gap-2">
-            <component :is="actionIcon(c.action)" class="h-3.5 w-3.5 shrink-0" :class="c.action === 'create' ? 'text-wb-mint' : c.action === 'delete' ? 'text-wb-danger' : 'text-wb-info'" />
-            <span class="truncate text-xs font-medium text-wb-ink">{{ c.rel_path }}</span>
-            <span v-if="c.rolled_back" class="ml-auto rounded border border-wb-border px-1 py-0.5 text-[9px] text-wb-muted">{{ t('changes.rolledBackBadge') }}</span>
-          </div>
-          <div class="mt-1 flex items-center gap-2 text-[10px] text-wb-muted">
-            <span>{{ actionLabel(c.action) }}</span>
-            <span>·</span>
-            <span class="font-mono">{{ fmtBytes(c.bytes_before) }} → {{ fmtBytes(c.bytes_after) }}</span>
-            <span v-if="c.added_lines > 0 || c.removed_lines > 0" class="ml-auto font-mono">
-              <span class="text-wb-mint">+{{ c.added_lines }}</span>
-              <span class="ml-1 text-wb-danger">-{{ c.removed_lines }}</span>
-            </span>
-          </div>
-          <div v-if="!c.rolled_back" class="mt-1.5 flex justify-end opacity-0 transition-opacity group-hover:opacity-100">
-            <el-button size="small" text type="primary" @click.stop="rollback(c)">
-              <el-icon class="mr-1"><RotateCcw /></el-icon>
-              <span class="text-[10px]">{{ t('changes.rollback') }}</span>
-            </el-button>
-          </div>
-        </button>
+        <div v-for="g in groupedChanges" :key="g.runID || g.label" class="space-y-1.5">
+          <p v-if="g.runID" class="px-1 text-[10px] font-medium uppercase tracking-wider text-wb-muted">
+            {{ t('changes.runGroup', g.label, g.items.length) }}
+          </p>
+          <button
+            v-for="c in g.items"
+            :key="c.id"
+            type="button"
+            class="group block w-full rounded-md border border-wb-border bg-wb-surface px-2 py-2 text-left transition-colors hover:border-wb-primary/40"
+            :class="{ 'opacity-60': c.rolled_back }"
+            @click="showDetail(c)"
+          >
+            <div class="flex items-center gap-2">
+              <component :is="actionIcon(c.action)" class="h-3.5 w-3.5 shrink-0" :class="c.action === 'create' ? 'text-wb-mint' : c.action === 'delete' ? 'text-wb-danger' : 'text-wb-info'" />
+              <span class="truncate text-xs font-medium text-wb-ink">{{ c.rel_path }}</span>
+              <span v-if="c.rolled_back" class="ml-auto rounded border border-wb-border px-1 py-0.5 text-[9px] text-wb-muted">{{ t('changes.rolledBackBadge') }}</span>
+            </div>
+            <div class="mt-1 flex items-center gap-2 text-[10px] text-wb-muted">
+              <span>{{ actionLabel(c.action) }}</span>
+              <span>·</span>
+              <span class="font-mono">{{ fmtBytes(c.bytes_before) }} → {{ fmtBytes(c.bytes_after) }}</span>
+              <span v-if="c.added_lines > 0 || c.removed_lines > 0" class="ml-auto font-mono">
+                <span class="text-wb-mint">+{{ c.added_lines }}</span>
+                <span class="ml-1 text-wb-danger">-{{ c.removed_lines }}</span>
+              </span>
+            </div>
+            <div v-if="!c.rolled_back" class="mt-1.5 flex justify-end opacity-0 transition-opacity group-hover:opacity-100">
+              <el-button size="small" text type="primary" @click.stop="rollback(c)">
+                <el-icon class="mr-1"><RotateCcw /></el-icon>
+                <span class="text-[10px]">{{ t('changes.rollback') }}</span>
+              </el-button>
+            </div>
+          </button>
+        </div>
       </div>
 
       <!-- 工件列表 -->

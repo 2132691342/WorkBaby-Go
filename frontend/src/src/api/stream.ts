@@ -208,10 +208,14 @@ const EVENT_NAMES = [
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8000
 /**
- * watchdog 阈值：心跳 30s 一次，容忍连续两跳丢失 + 调度抖动。
- * 触发即判定连接假死（TCP 未断但数据不通），主动断开走退避重连。
+ * 双看门狗阈值（对齐 go-micro / trpc-agent 的 transport 设计）：
+ *   - IDLE_MS：完全无任何事件（含 ping）的最大容忍时间——TCP 未断但数据不通；
+ *   - STALL_MS：仅 ping 而无业务事件的最大容忍时间——服务端心跳还在发，
+ *     但 chat:stream / chat:thinking 都卡住，常见于模型侧抽风或 SSE 缓冲满。
+ * 两个独立计时器：任一超时都判定假死，主动断开走退避重连。
  */
-const WATCHDOG_MS = 75_000
+const IDLE_MS = 75_000
+const STALL_MS = 5 * 60_000
 
 /**
  * 整轮 run 的总超时兜底：后端 runLLM 墙钟上限 10 分钟（default Agent 未配 MaxWallTime），
@@ -231,7 +235,17 @@ export function streamChat(
   let lastEventId = ''
   let reconnectAttempt = 0
   let watchdog: ReturnType<typeof setTimeout> | null = null
+  let stallWatchdog: ReturnType<typeof setTimeout> | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+  // clearWatchdogs 在闭包间共享（resetWatchdogs / cancel / 总超时收尾都用到）。
+  // 必须挂在最外层 let 上，TS 才能正确推断各调用点的可访问性。
+  const clearWatchdogs = (): void => {
+    if (watchdog !== null) clearTimeout(watchdog)
+    watchdog = null
+    if (stallWatchdog !== null) clearTimeout(stallWatchdog)
+    stallWatchdog = null
+  }
 
   const promise = (async (): Promise<void> => {
     // 计时起点必须在 POST 之前：run 在 POST 返回时就已在后端 goroutine 里开跑
@@ -268,23 +282,25 @@ export function streamChat(
       return
     }
 
-    const clearWatchdog = (): void => {
-      if (watchdog !== null) {
-        clearTimeout(watchdog)
-        watchdog = null
+    /**
+     * 重置两个看门狗：
+     *   - 全静默（idle）从「收到任意事件」算起，含 ping；
+     *   - 仅 ping（stall）从「收到任意业务事件」算起，ping 续期 idle 但不续期 stall。
+     * 这样 ping 既能防止 idle 误触发，又不会掩盖「心跳在但模型不动」的真假死。
+     */
+    const resetWatchdogs = (eventName: string): void => {
+      clearWatchdogs()
+      watchdog = setTimeout(() => scheduleReconnect(), IDLE_MS)
+      if (eventName !== 'ping') {
+        stallWatchdog = setTimeout(() => scheduleReconnect(), STALL_MS)
       }
-    }
-
-    const resetWatchdog = (): void => {
-      clearWatchdog()
-      watchdog = setTimeout(() => scheduleReconnect(), WATCHDOG_MS)
     }
 
     const scheduleReconnect = (): void => {
       if (finished || cancelled) return
       es?.close()
       es = null
-      clearWatchdog()
+      clearWatchdogs()
       if (reconnectTimer !== null) return
       const delay = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempt, RECONNECT_MAX_MS)
       reconnectAttempt++
@@ -301,17 +317,18 @@ export function streamChat(
       es = new EventSource(url)
 
       es.addEventListener('sse-ready', () => {
-        // 重连成功：先补快照（重放覆盖不到的窗口由 store 权威拉取兜底），再续命 watchdog
+        // 重连成功：先补快照（重放覆盖不到的窗口由 store 权威拉取兜底），再续命看门狗
         if (reconnectAttempt > 0) {
           opts.onReconnect?.()
           reconnectAttempt = 0
         }
-        resetWatchdog()
+        // sse-ready 不算业务事件——只续 idle，不续 stall（让 stall 能识别「连上了但模型卡」）
+        resetWatchdogs('sse-ready')
       })
 
       const handle = (name: string) => (e: MessageEvent<string>) => {
         if (cancelled) return
-        resetWatchdog()
+        resetWatchdogs(name)
         if (e.lastEventId) lastEventId = e.lastEventId
         let data: unknown
         try {
@@ -326,7 +343,7 @@ export function streamChat(
         // 终态缺失的风险由 MAX_RUN_MS 总超时兜底。
         if (name === 'chat:done') {
           finished = true
-          clearWatchdog()
+          clearWatchdogs()
           es?.close()
         }
       }
@@ -336,13 +353,13 @@ export function streamChat(
       }
       es.onerror = () => {
         if (finished || cancelled) {
-          clearWatchdog()
+          clearWatchdogs()
           es?.close()
           return
         }
         scheduleReconnect()
       }
-      resetWatchdog()
+      resetWatchdogs('sse-ready')
     }
 
     openStream()
@@ -357,7 +374,7 @@ export function streamChat(
       }
       await new Promise((r) => setTimeout(r, 100))
     }
-    clearWatchdog()
+    clearWatchdogs()
     if (reconnectTimer !== null) clearTimeout(reconnectTimer)
     // es 经 openStream() 闭包赋值；TS 跨函数不追踪外部 let，静态推断仍为 null → 显式断言恢复类型
     if (es !== null) (es as EventSource).close()
@@ -369,7 +386,7 @@ export function streamChat(
   const cancel = (): void => {
     cancelled = true
     finished = true
-    if (watchdog !== null) clearTimeout(watchdog)
+    clearWatchdogs()
     if (reconnectTimer !== null) clearTimeout(reconnectTimer)
     es?.close()
   }

@@ -1,21 +1,12 @@
 package harness
 
 import (
-	"strings"
-
 	"WorkBaby/internal/llm"
 )
 
-// Middleware 横切层接口；提供 TokenUsageAccumulator（统计）与 HistoryTruncator（对折截断）。
-type Middleware interface {
-	Name() string
-	// BeforeTurn 在每轮 LLM 调用前调整 messages。
-	BeforeTurn(ms []*llm.Message) []*llm.Message
-	// AfterTurn 在每轮响应后做统计。
-	AfterTurn(usage llm.TokenUsage)
-}
-
 // TokenUsageAccumulator 累加 token（含缓存读写，供仪表盘三线拆分）。
+// Runner 持有唯一实例并在每轮回调 AfterTurn；中间件链接口本身不再导出（AfterTurn
+// 从未被外部调用过——runner.go 同步直调该实例方法，defaultMiddlewares 也已下线）。
 type TokenUsageAccumulator struct {
 	Input      int
 	Output     int
@@ -24,8 +15,7 @@ type TokenUsageAccumulator struct {
 	Total      int
 }
 
-func (a *TokenUsageAccumulator) Name() string                               { return "token-accumulator" }
-func (a *TokenUsageAccumulator) BeforeTurn(m []*llm.Message) []*llm.Message { return m }
+// AfterTurn 累加本轮 token 用量（含缓存读写分项）。
 func (a *TokenUsageAccumulator) AfterTurn(u llm.TokenUsage) {
 	a.Input += u.InputTokens
 	a.Output += u.OutputTokens
@@ -48,62 +38,3 @@ func (a *TokenUsageAccumulator) Snapshot() llm.TokenUsage {
 		TotalTokens:      total,
 	}
 }
-
-// HistoryTruncator 上下文截断：
-//
-// 估算 token = utf8 字符数/4（粗略；无 tokenizer 的轻量近似）。
-// 当估算总量超过 threshold 时，对半截断最旧的 user/assistant 消息（保留 system 与最新一条）。
-type HistoryTruncator struct {
-	Threshold int     // 触发截断的估算 token 数；<=0 表示不启用
-	Ratio     float64 // 截断比例（保留比例），默认 0.9
-}
-
-// NewHistoryTruncator 构造截断器。
-func NewHistoryTruncator(threshold int, ratio float64) *HistoryTruncator {
-	if ratio <= 0 {
-		ratio = 0.9
-	}
-	return &HistoryTruncator{Threshold: threshold, Ratio: ratio}
-}
-
-func (t *HistoryTruncator) Name() string               { return "history-truncator" }
-func (t *HistoryTruncator) AfterTurn(_ llm.TokenUsage) {}
-
-// BeforeTurn 估算历史 token，超阈值时按安全切点截断最旧消息。
-func (t *HistoryTruncator) BeforeTurn(ms []*llm.Message) []*llm.Message {
-	if t.Threshold <= 0 || len(ms) <= 2 {
-		return ms
-	}
-	if estimateTokens(ms) <= t.Threshold {
-		return ms
-	}
-	keep := int(float64(len(ms)) * t.Ratio)
-	if keep < 2 {
-		keep = 2
-	}
-	if keep >= len(ms) {
-		return ms
-	}
-	// 保留首条（通常是 system）与末尾 keep-1 条；切点不落在 tool 消息上——
-	// 否则尾部以孤儿 tool 结果开头，上游以「tool id not found」400 拒绝整轮
-	cut := safeTailStart(ms, len(ms)-keep+1)
-	if cut <= 1 {
-		return ms
-	}
-	out := make([]*llm.Message, 0, len(ms)-cut+1)
-	out = append(out, ms[0])
-	out = append(out, ms[cut:]...)
-	return out
-}
-
-// estimateTokens 消息 token 估算；委托给 EstimateTokens 保证全 harness 同一口径
-//（压缩阈值据此判定，口径不一会导致阈值失准）。
-func estimateTokens(ms []*llm.Message) int { return EstimateTokens(ms) }
-
-// defaultMiddlewares 默认中间件链。
-func defaultMiddlewares() []Middleware {
-	return []Middleware{&TokenUsageAccumulator{}}
-}
-
-// truncateString 兼容旧引用（runner 已内联 truncate）。
-var _ = strings.Builder{}
