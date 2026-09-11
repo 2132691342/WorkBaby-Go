@@ -5,12 +5,17 @@ Copy the bundled runtimes into the build output directories.
 .DESCRIPTION
 Invoked by the windows/amd64 postBuildHook in wails.json:
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/copy-runtimes.ps1 ${bin}
+    powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/copy-runtimes.ps1 ${bin}
 
-Note: path is relative to the project root (wails executes postBuildHooks with cwd = project dir).
-Never hardcode an absolute path here — CI runs the same build from a different directory.
+Path constraints imposed by Wails CLI (see wails v2 pkg/commands/build/build.go):
+  1. cwd when running the hook is options.BinDirectory (build/bin) -- NOT the project root.
+     Hence "../../scripts/..." (two levels up), never a bare "scripts/...".
+  2. The hook string is parsed with shlex.Split, so backslashes are treated as escapes
+     and get swallowed. Always use forward slashes: "../../" not "..\..\".
+  3. "${bin}" is replaced only when it is a standalone argument (wails matches whole args).
+     Never glue it into a path like "${bin}\..\...", or the placeholder stays literal.
 
-${bin} is the absolute path of the compiled executable (build\bin\WorkBaby.exe).
+${bin} is the absolute path of the compiled executable (build/bin/WorkBaby.exe).
 
 The project level runtimes/ directory (manifest.json + one archive per asset) is
 copied to two generated locations, both ignored by git:
