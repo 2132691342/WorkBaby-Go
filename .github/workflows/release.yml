@@ -98,7 +98,9 @@ jobs:
           # 阶段的 npm run build 兜底（Vite/esbuild 编译会报 import / type 错误）。
 
       - name: Wails 构建（前端 npm ci → 嵌入 → NSIS 打包）
-        run: wails build -clean -platform windows/amd64 -skipbindings -trimpath
+        # 必须让 wails 自动生成 bindings（前端 import '@/wailsjs/...' 依赖），
+        # 用 -skipbindings 会导致 frontend build 报 Cannot find module。
+        run: wails build -clean -platform windows/amd64 -trimpath
 
       - name: 验证产物
         shell: pwsh
