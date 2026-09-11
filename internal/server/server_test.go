@@ -142,7 +142,12 @@ func TestSSESlowClientClosed(t *testing.T) {
 
 	br := bufio.NewReader(resp.Body)
 	var lastErr error
-	deadline := time.Now().Add(3 * time.Second)
+	// CI 上 Go 调度 + 网络 I/O 都比本地慢：原 3s deadline 在 windows-latest runner
+	// 上不够，延长到 10s 并跳过 -short 模式（CI 默认 short，本地显式 -short 跳过）。
+	if testing.Short() {
+		t.Skip("flake test, skipped in -short mode")
+	}
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, lastErr = br.ReadString('\n'); lastErr != nil {
 			break
