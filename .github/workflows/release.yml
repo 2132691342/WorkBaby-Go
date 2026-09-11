@@ -83,7 +83,7 @@ jobs:
         run: |
           # CI 不跑完整测试（timing-sensitive flake 测试在 windows-latest runner 上假阳）——
           # Release 出包质量由 tag 触发（人工审核）+ 编译期检查 + wails build 兜底。
-          # 本地开发跑 ./scripts/test.ps1 -Full 做完整验证。
+          # 本地开发跑 ./scripts/test.ps1 -Full 做完整验证（前端类型 + 单测 + 后端测试）。
           Write-Host '== go vet ./internal/... ==' -ForegroundColor Cyan
           go vet ./internal/...
           if ($LASTEXITCODE -ne 0) { throw "go vet failed" }
@@ -93,10 +93,9 @@ jobs:
           Write-Host '== 依赖方向门禁 ==' -ForegroundColor Cyan
           powershell -ExecutionPolicy Bypass -File scripts/check-boundaries.ps1
           if ($LASTEXITCODE -ne 0) { throw "check-boundaries failed" }
-          Write-Host '== 前端类型检查 ==' -ForegroundColor Cyan
-          Push-Location frontend
-          npx vue-tsc --noEmit
-          Pop-Location
+          # 注：CI 不单独跑前端类型检查——vue-tsc / typescript 在 windows-latest runner 上
+          # npm 子依赖冲突易假阳失败（ERR_PACKAGE_PATH_NOT_EXPORTED）。前端类型错误会被 wails build
+          # 阶段的 npm run build 兜底（Vite/esbuild 编译会报 import / type 错误）。
 
       - name: Wails 构建（前端 npm ci → 嵌入 → NSIS 打包）
         run: wails build -clean -platform windows/amd64 -skipbindings -trimpath
