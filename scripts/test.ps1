@@ -25,24 +25,24 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$shortFlag = if ($Short) { '-short' } else { '' }
+# 注：CI 不能用 `go test ./...` —— main 包通过 go:embed 依赖 frontend/dist，
+# CI 流水线在跑 wails build 之前没构建前端；编译 main 包会触发 setup failed。
+# 测试用例都在 internal/ 包里，main 包是 Wails 入口不含测试；排除 main 即可。
+# -Short 把 -short 传给 go test：跳过 testing.Short() 检查的 flake 测试（CI 调度延迟会导致假阳失败）。
+$goArgs = @()
+if ($Short) { $goArgs += '-short' }
 
 # 指定包：最小闭环，只跑这一个域
 if ($Pkg) {
   $targets = @($Pkg.Split(',') | ForEach-Object { "./internal/$($_.Trim())/..." })
-  Write-Host "== go test $($targets -join ' ') $shortFlag==" -ForegroundColor Cyan
-  go test $targets @shortFlag.Split(' ')
+  Write-Host "== go test $($targets -join ' ') $($goArgs -join '') ==" -ForegroundColor Cyan
+  go test @targets @goArgs
   exit $LASTEXITCODE
 }
 
 if ($Full) {
-  # 注：CI 不能用 `go test ./...` —— main 包通过 go:embed 依赖 frontend/dist，
-  # CI 流水线在跑 wails build 之前没构建前端；编译 main 包会触发 setup failed。
-  # 测试用例都在 internal/ 包里，main 包是 Wails 入口不含测试；排除 main 即可。
   Write-Host '== go test ./internal/...（排除 main 包）==' -ForegroundColor Cyan
-  $testArgs = @('./internal/...')
-  if ($Short) { $testArgs += '-short' }
-  go test @testArgs
+  go test ./internal/... @goArgs
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   Write-Host '== 依赖方向门禁 ==' -ForegroundColor Cyan
@@ -50,9 +50,7 @@ if ($Full) {
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } else {
   Write-Host '== go test 核心包 ==' -ForegroundColor Cyan
-  $testArgs = @('./internal/service/...', './internal/harness/...', './internal/llm/...', './internal/tool/...')
-  if ($Short) { $testArgs += '-short' }
-  go test @testArgs
+  go test ./internal/service/... ./internal/harness/... ./internal/llm/... ./internal/tool/... @goArgs
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
