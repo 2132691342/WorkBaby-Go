@@ -34,7 +34,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
-          fetch-depth: 0  # 让 NSIS / wails 能拿到完整版本元信息
+          fetch-depth: 1
+          # tag 触发时显式 checkout 到 tag 指向的 commit，避免『This commit does not belong
+          # to any branch』警告。tag 必须先在 main 上存在（推荐流程：
+          #   git push origin main
+          #   git tag v0.1.0
+          #   git push origin v0.1.0
+          # —— 否则 tag 指向的 commit 在远端孤立，checkout 会失败）。
+          ref: ${{ github.ref }}
 
       - name: Setup Go 1.25
         uses: actions/setup-go@v5
@@ -52,8 +59,21 @@ jobs:
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
-      - name: Install NSIS（NSIS 3.10 用于 build/windows/installer/project.nsi）
-        uses: nschloe/setup-nsis@v1
+      # NSIS 安装器：windows-2025 runner 默认没装 NSIS，用 choco 装（runner 已自带 choco）。
+      # 历史曾用过 nschloe/setup-nsis 等第三方 action，但容易因 owner 删库导致流水线莫名失败。
+      # choco 源稳定、版本可锁、对 windows-latest runner 即开即用。
+      - name: Install NSIS（choco）
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          # NSIS 默认装到 C:\Program Files (x86)\NSIS；makensis 必须加入 PATH 供 wails build 调用
+          $nsisPath = "${env:ProgramFiles(x86)}\NSIS"
+          if (Test-Path $nsisPath) {
+              Write-Host "NSIS already installed"
+          } else {
+              throw "NSIS installation failed (path not found: $nsisPath)"
+          }
+          echo "$nsisPath" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Wails doctor（环境自检）
         run: wails doctor
