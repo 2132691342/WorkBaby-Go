@@ -145,8 +145,9 @@ export interface MessageAttachment {
   url: string
 }
 
-/** 消息块类型（与后端 domain.MessageBlockKind 对齐）。 */
-export type MessageBlockKind = 'thinking' | 'tool_call' | 'tool_result' | 'artifact' | 'genui' | 'skill'
+/** 消息块类型（与后端 domain.MessageBlockKind 对齐）。
+ *  流式期间额外含 'text'（正文累计），落库时收敛到 message.content。 */
+export type MessageBlockKind = 'thinking' | 'text' | 'tool_call' | 'tool_result' | 'artifact' | 'genui' | 'skill'
 
 /** 消息块（MessageBlockRESP）：块即行，payload 为 JSON 字符串。 */
 export interface MessageBlock {

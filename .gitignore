@@ -3,9 +3,10 @@
 /WorkBaby.exe
 /workbaby.exe
 *.exe
-!/build/bin/*-installer.exe
-/build/bin/*
-!/build/bin/*-installer.exe
+# 构建产物：本地 wails build 输出，**不入库**（含可执行文件与 NSIS 安装器）；
+# 安装器走 GitHub Actions tag 触发构建并上传到 GitHub Release，
+# 避免每次本地构建触发 LFS pointer 变化、git status 永远 modified。
+/build/bin/
 
 # Wails
 /build/darwin/

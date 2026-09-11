@@ -9,6 +9,7 @@ import type {
   TodoStateRESP
 } from '@/types/api'
 import type { UiNode } from '@/components/genui/GenUiRenderer.vue'
+import { applyBlockUpdate } from '@/chat/models/streamingBlocks'
 
 /**
  * 流式聊天事件解码器（纯函数）：输入 WS 帧事件 → 输出 {@link StreamEventUpdate} 描述对象，store 负责 apply。
@@ -51,6 +52,13 @@ export interface StreamEventUpdate {
   appendThinking?: string
   addTool?: ToolCallInfo
   updateTool?: { id: string; name?: string; argsDelta?: string; result?: string; success: boolean; agent?: string; duration_ms?: number }
+  /** 流式块增量（按事件到达顺序）；与 appendContent/addTool/updateTool 并发维护 streamingBlocks。 */
+  blockAppend?: { kind: 'thinking' | 'text'; text: string }
+  blockToolCall?: { id: string; name: string; arguments?: string; agent?: string; activity?: string }
+  blockToolResult?: { id: string; name: string; content?: string; error?: string; duration_ms?: number; refused?: boolean }
+  blockSkill?: { name: string; source?: string; description?: string; tools?: string[]; injected_chars?: number }
+  blockArtifact?: { name: string; data: Record<string, unknown> }
+  blockGenUi?: UiNode
   setStats?: ChatStats
   /** 当前轮次（chat:turn-start，1 起）：长任务中让用户看到「第 N 轮」在推进。 */
   setTurn?: number
@@ -100,9 +108,9 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
   const data = event.data
   switch (event.type) {
     case 'content':
-      return typeof data === 'string' ? { appendContent: data } : null
+      return typeof data === 'string' ? { appendContent: data, blockAppend: { kind: 'text', text: data } } : null
     case 'thinking':
-      return typeof data === 'string' ? { appendThinking: data } : null
+      return typeof data === 'string' ? { appendThinking: data, blockAppend: { kind: 'thinking', text: data } } : null
     case 'stats':
       return data && typeof data === 'object' ? { setStats: data as ChatStats } : null
     case 'turn_start': {
@@ -119,7 +127,7 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
     }
     case 'tool_call': {
       if (!data || typeof data !== 'object') return null
-      const d = data as { id: string; name: string; agent?: string; activity?: string }
+      const d = data as { id: string; name: string; arguments?: string; agent?: string; activity?: string }
       return {
         addTool: {
           id: d.id,
@@ -128,12 +136,13 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
           started_at: now,
           agent: d.agent || undefined,
           activity: d.activity || undefined
-        }
+        },
+        blockToolCall: { id: d.id, name: d.name, arguments: d.arguments, agent: d.agent, activity: d.activity }
       }
     }
     case 'tool_result': {
       if (!data || typeof data !== 'object') return null
-      const d = data as { id: string; name: string; output: string; state: string; agent?: string; duration_ms?: number }
+      const d = data as { id: string; name: string; output: string; state: string; agent?: string; duration_ms?: number; refused?: boolean }
       const update: StreamEventUpdate = {
         updateTool: {
           id: d.id,
@@ -142,6 +151,14 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
           success: d.state === 'success',
           agent: d.agent || undefined,
           duration_ms: d.duration_ms
+        },
+        blockToolResult: {
+          id: d.id,
+          name: d.name,
+          content: d.output,
+          error: d.state !== 'success' && !d.refused ? d.output : undefined,
+          duration_ms: d.duration_ms,
+          refused: d.refused === true
         }
       }
       // 修复：gen_ui 工具结果同步解析 UiTree（避免 store 二次解析）
@@ -149,8 +166,20 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
         try {
           const tree = JSON.parse(d.output) as { root: UiNode }
           update.setGenUi = tree.root
+          update.blockGenUi = tree.root
         } catch {
           // 解析失败时忽略 setGenUi，保留 updateTool 让用户在 tool_result 中查看原文
+        }
+      }
+      // 通用 artifact 块：FileInfo 类工具结果附带给前端 artifact 渲染
+      if (d.name && d.output) {
+        try {
+          const parsed = JSON.parse(d.output) as { artifact?: boolean; data?: Record<string, unknown>; name?: string }
+          if (parsed?.artifact) {
+            update.blockArtifact = { name: parsed.name ?? d.name, data: parsed.data ?? {} }
+          }
+        } catch {
+          /* 非 JSON 输出忽略 */
         }
       }
       return update
@@ -158,7 +187,17 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
     case 'skill': {
       if (!data || typeof data !== 'object') return null
       const d = data as Partial<SkillHit>
-      return d.name ? { setSkillHit: { ...(d as SkillHit), tools: d.tools ?? [] } } : null
+      if (!d.name) return null
+      return {
+        setSkillHit: { ...(d as SkillHit), tools: d.tools ?? [] },
+        blockSkill: {
+          name: d.name,
+          source: d.source,
+          description: d.description,
+          tools: d.tools ?? [],
+          injected_chars: d.injected_chars
+        }
+      }
     }
     case 'todo': {
           if (!data || typeof data !== 'object') return null
@@ -294,6 +333,8 @@ export function applyStreamUpdate(
     streamingContent: { value: string }
     streamingThinking: { value: string }
     streamingTools: { value: ToolCallInfo[] }
+    /** 流式累积块序列（按事件到达顺序）；调用方按需传入。 */
+    streamingBlocks?: { value: import('@/chat/models/streamingBlocks').StreamingBlock[] }
     streamingStats: { value: ChatStats | null }
     /** 当前轮次（1 起）；调用方按需传入。 */
     streamingTurn?: { value: number }
@@ -324,6 +365,59 @@ export function applyStreamUpdate(
   }
   if (update.appendThinking !== undefined) {
     state.streamingThinking.value += update.appendThinking
+  }
+  // ===== streamingBlocks 增量应用（单一真相源；MessageBlocksRenderer 直接消费） =====
+  if (state.streamingBlocks) {
+    let blocks = state.streamingBlocks.value
+    if (update.blockAppend) {
+      blocks = applyBlockUpdate(blocks, { kind: update.blockAppend.kind, text: update.blockAppend.text })
+    }
+    if (update.blockToolCall) {
+      const tc = update.blockToolCall
+      blocks = applyBlockUpdate(blocks, {
+        kind: 'tool_call',
+        id: tc.id,
+        name: tc.name,
+        arguments: tc.arguments,
+        agent: tc.agent,
+        activity: tc.activity,
+        now
+      })
+    }
+    if (update.blockToolResult) {
+      const tr = update.blockToolResult
+      blocks = applyBlockUpdate(blocks, {
+        kind: 'tool_result',
+        toolCallId: tr.id,
+        name: tr.name,
+        content: tr.content,
+        error: tr.error,
+        durationMs: tr.duration_ms,
+        refused: tr.refused
+      })
+    }
+    if (update.blockSkill) {
+      blocks = applyBlockUpdate(blocks, {
+        kind: 'skill',
+        id: `skill-${state.streamingBlocks.value.length}`,
+        payload: update.blockSkill as Record<string, unknown>
+      })
+    }
+    if (update.blockArtifact) {
+      blocks = applyBlockUpdate(blocks, {
+        kind: 'artifact',
+        id: `artifact-${state.streamingBlocks.value.length}`,
+        payload: update.blockArtifact as Record<string, unknown>
+      })
+    }
+    if (update.blockGenUi) {
+      blocks = applyBlockUpdate(blocks, {
+        kind: 'genui',
+        id: `genui-${state.streamingBlocks.value.length}`,
+        payload: { root: update.blockGenUi }
+      })
+    }
+    if (blocks !== state.streamingBlocks.value) state.streamingBlocks.value = blocks
   }
   if (update.setStats) {
     state.streamingStats.value = update.setStats

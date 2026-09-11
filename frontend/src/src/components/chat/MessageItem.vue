@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useClipboard } from '@vueuse/core'
-import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, Brain, ChevronDown, Paperclip } from '@/components/common/icons'
+import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, ChevronDown, Paperclip } from '@/components/common/icons'
 import type { Message, MessageAttachment } from '@/types/api'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
@@ -9,13 +9,11 @@ import { formatRelativeTime } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
 import { useFocusMode } from '@/composables/useFocusMode'
-import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
-import TaskTimeline from '@/components/chat/TaskTimeline.vue'
+import MessageBlocksRenderer from '@/components/chat/MessageBlocksRenderer.vue'
 import InlineDiffCard from '@/components/chat/InlineDiffCard.vue'
 import UsageBadge from '@/components/chat/UsageBadge.vue'
-import { resolveMessageBlocks, blocksToToolCalls, stripThinkBlocks, messageSkillHit } from '@/chat/models/blocks'
+import { resolveMessageBlocks, stripThinkBlocks } from '@/chat/models/blocks'
 import { splitMentions } from '@/chat/models/tokens'
-import type { ToolCallInfo } from '@/stores/chat/ChatStreamDecoder'
 
 /**
  * 单条历史消息：
@@ -57,12 +55,8 @@ const userAttachments = computed<MessageAttachment[]>(() =>
 )
 
 /** 历史消息的过程块 → ToolCallInfo（纯函数已在 blocks.ts 单测覆盖）。 */
-const historyTools = computed<ToolCallInfo[]>(() =>
-  blocksToToolCalls(resolveMessageBlocks(props.message))
-)
-
-/** 本条消息命中的 Skill（skill 块回放；刷新后执行过程首行仍在）。 */
-const historySkillHit = computed(() => messageSkillHit(props.message))
+/** 历史消息的过程块（按 seq 排序）—— MessageBlocksRenderer 直接消费。 */
+const historyBlocks = computed(() => resolveMessageBlocks(props.message))
 
 /** 本条消息关联的文件变更（chat:file-change 已流式累积；历史消息按 run_id 精确对应）。 */
 const fileChanges = computed(() => {
@@ -223,14 +217,16 @@ async function forkFrom(): Promise<void> {
       >{{ message.thinking }}</pre>
     </div>
 
-    <!-- 历史过程块复现：工具调用/结果落库，刷新/切会话后完整回放（原型 .tl 自带边框，不再双重包装）；
-         M2：末条 assistant 的失败工具可一键重试（转 resendFrom） -->
-    <div v-if="!isUser && (historyTools.length > 0 || historySkillHit) && !editing" class="mt-2 w-full">
-      <TaskTimeline
-        :tools="historyTools"
-        :skill-hit="historySkillHit"
+    <!-- 历史过程块按序渲染：thinking / tool_call / tool_result / artifact / skill / genui 穿插——
+         与 ClaudeCode 等同类 agent 一致：不再把工具堆在一组、正文在另一组。
+         message.content 作为最后一条 text 块传入（持久化模型里正文不入块）。
+         焦点模式仅保留正文（渲染层根据 streaming_mode 标记折叠非正文块）。 -->
+    <div v-if="!isUser && !editing" class="w-full">
+      <MessageBlocksRenderer
+        :blocks="historyBlocks"
+        :content="message.content ?? ''"
+        :streaming_mode="false"
         :retryable="!streaming && isLast"
-        collapsible
         @retry="onToolRetry"
       />
     </div>
@@ -257,11 +253,6 @@ async function forkFrom(): Promise<void> {
           </span>
         </a>
       </div>
-      <MarkdownRenderer v-else-if="message.content?.trim()" :content="message.content" :streaming="false" />
-      <!-- assistant 整轮只跑了工具、没写收尾文本：给个简洁占位，避免「消息空白但工具齐全」的违和 -->
-      <span v-else-if="historyTools.length > 0 || historySkillHit" class="text-[12px] text-wb-muted">
-        {{ t('chat.toolsOnlyMessage', historyTools.length) }}
-      </span>
     </div>
 
     <!-- 编辑模式 -->

@@ -4,6 +4,7 @@ import { apiGet, apiPost } from '@/api/client'
 import { streamChat, type StreamHandle } from '@/api/stream'
 import { toolsToBlocks } from '@/chat/models/blocks'
 import { mergeLoadedMessages, resolveRunAssistant, toUiMessages } from '@/chat/models/merge'
+import { streamingBlocksToMessageBlocks, type StreamingBlock } from '@/chat/models/streamingBlocks'
 import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
 import type {
@@ -85,6 +86,14 @@ export const useChatStore = defineStore('chat', () => {
   const streamingContent = ref('')
   const streamingThinking = ref('')
   const streamingTools = ref<ToolCallInfo[]>([])
+  /**
+   * 流式累积的块序列（按事件到达顺序），单一真相源。
+   *
+   * <p>与 streamingContent / streamingTools 并存：旧字段保留向后兼容（如运行计时），
+   * 新组件 MessageBlocksRenderer 直接消费 streamingBlocks；StreamingBubble 重构完成后
+   * 旧字段可下线。
+   */
+  const streamingBlocks = ref<StreamingBlock[]>([])
   const streamingStats = ref<ChatStats | null>(null)
   /** 当前轮次（chat:turn-start，1 起）：长任务里「第 N 轮」是还在推进的关键信号。 */
   const streamingTurn = ref(0)
@@ -656,6 +665,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingContent.value = ''
     streamingThinking.value = ''
     streamingTools.value = []
+    streamingBlocks.value = []
     streamingStats.value = null
     streamingSkill.value = null
     streamingArtifacts.value = null
@@ -705,6 +715,7 @@ export const useChatStore = defineStore('chat', () => {
       streamingContent.value = ''
       streamingThinking.value = ''
       streamingTools.value = []
+      streamingBlocks.value = []
       streamingStats.value = null
       streamingSkill.value = null
       streamingArtifacts.value = null
@@ -724,6 +735,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingContent.value = ''
     streamingThinking.value = ''
     streamingTools.value = []
+    streamingBlocks.value = []
     streamingStats.value = null
     streamingSkill.value = null
     streamingArtifacts.value = null
@@ -759,6 +771,7 @@ export const useChatStore = defineStore('chat', () => {
       streamingContent.value = ''
       streamingThinking.value = ''
       streamingTools.value = []
+      streamingBlocks.value = []
       streamingStats.value = null
       streamingSkill.value = null
       streamingArtifacts.value = null
@@ -934,6 +947,7 @@ export const useChatStore = defineStore('chat', () => {
         streamingContent,
         streamingThinking,
         streamingTools,
+        streamingBlocks,
         streamingStats,
         streamingTurn,
         lastCheckpointTurn,
@@ -981,6 +995,7 @@ export const useChatStore = defineStore('chat', () => {
     const hasPayload =
       content.length > 0 ||
       streamingTools.value.length > 0 ||
+      streamingBlocks.value.length > 0 ||
       streamingArtifacts.value !== null ||
       streamingGenUi.value !== null
     if (!hasPayload && !error.value) return
@@ -994,8 +1009,11 @@ export const useChatStore = defineStore('chat', () => {
       m.content = content || errText || t('chat.streamFailedPlaceholder')
       m.status = 'completed'
       m.updated_at = Date.now()
-      // 兜底：权威快照若尚未带上过程块，用本地流式累积还原（chat:done 先于落库完成的窗口期）
-      if ((!m.blocks || m.blocks.length === 0) && streamingTools.value.length > 0) {
+      // 兜底：权威快照若尚未带上过程块，用本地流式累积还原（chat:done 先于落库完成的窗口期）。
+      // 优先用 streamingBlocks（保留完整时序：思考/工具/正文穿插），fallback 到 toolsToBlocks。
+      if ((!m.blocks || m.blocks.length === 0) && streamingBlocks.value.length > 0) {
+        m.blocks = streamingBlocksToMessageBlocks(streamingBlocks.value, m.id)
+      } else if ((!m.blocks || m.blocks.length === 0) && streamingTools.value.length > 0) {
         m.blocks = toolsToBlocks(streamingTools.value, m.id)
       }
       return
@@ -1064,6 +1082,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingContent,
     streamingThinking,
     streamingTools,
+    streamingBlocks,
     streamingStats,
     streamingTurn,
     lastCheckpointTurn,

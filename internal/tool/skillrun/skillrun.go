@@ -189,13 +189,40 @@ func (t *SkillRunTool) Execute(ctx context.Context, raw json.RawMessage) tool.To
 
 	runCtx, cancel := context.WithTimeout(ctx, runTimeout)
 	defer cancel()
+
+	// 内置运行时优先解析解释器：LookPath 走父进程 PATH，必须临时把内置 bin 目录
+	// 前置，否则用户系统未装 node/python 时回落到 cmd /c、内置环境彻底失联。
+	var dirs []string
+	if t.pathDirs != nil {
+		dirs = t.pathDirs()
+	}
+	if len(dirs) > 0 {
+		origPath := os.Getenv("PATH")
+		os.Setenv("PATH", strings.Join(dirs, string(os.PathListSeparator))+string(os.PathListSeparator)+origPath)
+		defer os.Setenv("PATH", origPath)
+	}
+
 	cmd := exec.CommandContext(runCtx, inter, append([]string{path}, req.Args...)...)
 	cmd.Dir = t.rootOf(ctx)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if t.pathDirs != nil {
-		if dirs := t.pathDirs(); len(dirs) > 0 {
-			cmd.Env = append(os.Environ(), "PATH="+strings.Join(dirs, ";")+";"+os.Getenv("PATH"))
+	if len(dirs) > 0 {
+		// 子进程 PATH 也前置内置运行时，确保脚本内部调起 python/node 同样命中内置版本
+		sep := string(os.PathListSeparator)
+		extra := strings.Join(dirs, sep)
+		pathVal := os.Getenv("PATH")
+		if pathVal != "" {
+			pathVal = extra + sep + pathVal
+		} else {
+			pathVal = extra
 		}
+		env := make([]string, 0, len(os.Environ())+1)
+		for _, kv := range os.Environ() {
+			if i := strings.Index(kv, "="); i > 0 && strings.EqualFold(kv[:i], "PATH") {
+				continue
+			}
+			env = append(env, kv)
+		}
+		cmd.Env = append(env, "PATH="+pathVal)
 	}
 
 	out, runErr := cmd.CombinedOutput()

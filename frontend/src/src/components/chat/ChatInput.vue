@@ -30,7 +30,7 @@ import { useDialog } from '@/composables/useDialog'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
 import { ElMessageBox } from 'element-plus'
-import type { AvailableModel, CircuitState, EffectiveParams, FileInfo, Message, QueuedMessage, Skill } from '@/types/api'
+import type { AvailableModel, CircuitState, EffectiveParams, FileInfo, Message, QueuedMessage, Skill, WorkspaceFile } from '@/types/api'
 import ModelSelector from '@/components/chat/ModelSelector.vue'
 import AttachmentStrip from '@/components/chat/composer/AttachmentStrip.vue'
 import SlashCommandPalette, { type SlashCommand } from '@/components/chat/composer/SlashCommandPalette.vue'
@@ -132,6 +132,19 @@ const { contextUsage } = storeToRefs(chat)
 const contextSegments = computed(() => contextUsage.value?.segments ?? [])
 const contextEstimated = computed(() => contextUsage.value?.estimated ?? false)
 
+/** 艾特候选：按当前工作区真实文件树加载文件夹/文件（满足"按工作区显示"诉求）。 */
+const workspaceFiles = ref<WorkspaceFile[]>([])
+const workspaceFilesLoadedFor = ref<string | null>(null)
+async function loadWorkspaceFiles(sessionID: string): Promise<void> {
+  if (workspaceFilesLoadedFor.value === sessionID && workspaceFiles.value.length > 0) return
+  workspaceFilesLoadedFor.value = sessionID
+  try {
+    workspaceFiles.value = await apiGet<WorkspaceFile[]>(`/api/v1/chat/workspace/${sessionID}/files`)
+  } catch {
+    workspaceFiles.value = []
+  }
+}
+
 const mentionItems = computed<MentionItem[]>(() => {
   const q = mentionQuery.value.trim().toLowerCase()
   const items: MentionItem[] = []
@@ -146,26 +159,48 @@ const mentionItems = computed<MentionItem[]>(() => {
       description: s.description ?? undefined
     })
   }
-  const flat = (nodes: { id: string; name: string; path?: string; children?: unknown[] }[]): void => {
-    for (const n of nodes) {
-      if (q && !n.name.toLowerCase().includes(q)) continue
-      items.push({ type: 'folder', id: n.id, name: n.name, insertText: `@${n.name}`, path: n.path })
-      if (Array.isArray(n.children) && n.children.length > 0) {
-        flat(n.children as { id: string; name: string; path?: string; children?: unknown[] }[])
+  // 文件夹与文件优先以工作区为根（用户期望「艾特文件列表按工作区显示」）；
+  // 工作区未加载或为空时回落到 foldersStore.tree + filesStore.files（旧逻辑兜底）。
+  if (workspaceFiles.value.length > 0) {
+    for (const f of workspaceFiles.value) {
+      const name = f.name
+      if (q && !name.toLowerCase().includes(q)) continue
+      // WorkspaceFile 没显式 kind='dir'，按 ext + size 推断：目录通常无扩展名且 0 字节
+      const isDir = !f.ext && f.size === 0
+      if (isDir) {
+        items.push({ type: 'folder', id: f.path, name, insertText: `@${name}`, path: f.path })
+      } else {
+        items.push({
+          type: 'file',
+          id: f.path,
+          name,
+          insertText: `@${name}`,
+          description: `${(f.size / 1024).toFixed(1)} KB`
+        })
       }
     }
-  }
-  flat(foldersStore.tree as unknown as { id: string; name: string; path?: string; children?: unknown[] }[])
-  for (const f of filesStore.files) {
-    const name = f.original_name || f.name
-    if (q && !name.toLowerCase().includes(q)) continue
-    items.push({
-      type: 'file',
-      id: f.id,
-      name,
-      insertText: `@${name}`,
-      description: `${(f.size / 1024).toFixed(1)} KB`
-    })
+  } else {
+    const flat = (nodes: { id: string; name: string; path?: string; children?: unknown[] }[]): void => {
+      for (const n of nodes) {
+        if (q && !n.name.toLowerCase().includes(q)) continue
+        items.push({ type: 'folder', id: n.id, name: n.name, insertText: `@${n.name}`, path: n.path })
+        if (Array.isArray(n.children) && n.children.length > 0) {
+          flat(n.children as { id: string; name: string; path?: string; children?: unknown[] }[])
+        }
+      }
+    }
+    flat(foldersStore.tree as unknown as { id: string; name: string; path?: string; children?: unknown[] }[])
+    for (const f of filesStore.files) {
+      const name = f.original_name || f.name
+      if (q && !name.toLowerCase().includes(q)) continue
+      items.push({
+        type: 'file',
+        id: f.id,
+        name,
+        insertText: `@${name}`,
+        description: `${(f.size / 1024).toFixed(1)} KB`
+      })
+    }
   }
   return items.slice(0, 24)
 })
@@ -173,7 +208,12 @@ const mentionItems = computed<MentionItem[]>(() => {
 watch(mentionOpen, (open) => {
   if (!open) return
   if (skillsStore.skills.length === 0) void skillsStore.load().catch(() => undefined)
-  if (filesStore.files.length === 0) void filesStore.load().catch(() => undefined)
+  const sid = chat.currentID
+  if (sid) void loadWorkspaceFiles(sid).catch(() => undefined)
+  // 未绑定工作区时回落到受管文件（保证基础可用）
+  if (workspaceFiles.value.length === 0 && filesStore.files.length === 0) {
+    void filesStore.load().catch(() => undefined)
+  }
 })
 
 const queue = ref<QueuedMessage[]>([])
@@ -462,22 +502,31 @@ function pickMention(item: MentionItem): void {
   const caret = textareaRef.value?.selectionStart ?? text.length
   const baseAfter = caret > idx ? text.slice(caret) : ''
   if (item.type === 'file') {
-    if (!attachments.value.some((a) => a.id === item.id)) {
-      attachments.value.push({
-        id: item.id,
-        name: item.name,
-        original_name: item.name,
-        file_type: '',
-        mime_type: '',
-        size: 0,
-        status: '',
-        session_id: null,
-        folder_id: null,
-        created_at: 0
-      } as FileInfo)
+    // 来源区分：受管文件（filesStore.files）继续走"加附件 + 插入 mention"双路径；
+    // 工作区文件（workspaceFiles）只插入 @文件名，让后端模型以引用理解，不再塞进附件
+    // 避免"未受管路径被当成受管附件"导致 file_read 取不到内容。
+    const fromWorkspace = workspaceFiles.value.some((f) => f.path === item.id)
+    if (!fromWorkspace) {
+      if (!attachments.value.some((a) => a.id === item.id)) {
+        attachments.value.push({
+          id: item.id,
+          name: item.name,
+          original_name: item.name,
+          file_type: '',
+          mime_type: '',
+          size: 0,
+          status: '',
+          session_id: null,
+          folder_id: null,
+          created_at: 0
+        } as FileInfo)
+      }
+      draft.value = before + baseAfter + item.insertText + ' '
+      toast.success(t('mention.fileAttached', item.name))
+    } else {
+      draft.value = before + baseAfter + item.insertText + ' '
+      toast.info(t('mention.fileReferenced', item.name))
     }
-    draft.value = before + baseAfter + item.insertText + ' '
-    toast.success(t('mention.fileAttached', item.name))
   } else {
     // 技能/文件夹/知识库：直接落 `@名称` 令牌——输入框干净，后端 Skill 匹配与模型理解都看得到名称
     draft.value = before + baseAfter + item.insertText + ' '
@@ -553,47 +602,59 @@ function executed(cmd: SlashCommand): void {
 
 function pickSlash(cmd: SlashCommand): void {
   slashOpen.value = false
+  // 全部命令统一双保险反馈：toast（右下角气泡）+ 输入框内联反馈条。
+  // 异步执行的命令（/clear / /compact / /export / /agent / /help）在子函数内 toast 成功，
+  // 这里再补内联反馈；同步命令直接走 executed() 同时给两个反馈。
+  const okSync = (): void => {
+    executed(cmd)
+  }
+  const okAsync = (): void => {
+    showCmdFeedback(`/${cmd.id} · ${cmd.descKey ? t(cmd.descKey) : (cmd.desc ?? '')}`)
+  }
   switch (cmd.id) {
     case 'clear':
       void clearSession()
+      okAsync()
       break
     case 'new':
       emit('send', '__wb_new_session__', [], currentParams())
-      executed(cmd)
+      okSync()
       break
     case 'focus':
       textareaRef.value?.focus()
-      executed(cmd)
+      okSync()
       break
     case 'workspace':
       emit('pick-workspace')
-      executed(cmd)
+      okSync()
       break
     case 'model':
       modelSelectorRef.value?.open()
-      executed(cmd)
+      okSync()
       break
     case 'theme':
       void router.push('/settings')
-      executed(cmd)
+      okSync()
       break
     case 'attach':
       pickFile()
-      executed(cmd)
+      okSync()
       break
     case 'regenerate':
       emit('regenerate')
-      executed(cmd)
+      okSync()
       break
     case 'compact':
       void runCompact()
+      okAsync()
       break
     case 'tasks':
       window.dispatchEvent(new Event('workbaby:open-tasks'))
-      executed(cmd)
+      okSync()
       break
     case 'agent':
       void submitAgentTask()
+      okAsync()
       break
     case 'trust': {
       // 循环切换权限档位（confirm → auto → full），替代无动作提示
@@ -603,22 +664,25 @@ function pickSlash(cmd: SlashCommand): void {
       const labelKey = PERMISSION_ITEMS.find((p) => p.value === next)?.labelKey ?? 'chat.perm.auto'
       emit('change-permission', next)
       toast.success(t('slash.trustHint', t(labelKey)))
+      showCmdFeedback(`/trust · ${t(labelKey)}`)
       break
     }
     case 'context':
       window.dispatchEvent(new Event('workbaby:open-context'))
-      executed(cmd)
+      okSync()
       break
     case 'export':
       void exportSessionMd()
+      okAsync()
       break
     case 'help':
       void showHelp()
-      executed(cmd)
+      okAsync()
       break
     default:
       // 后端命令：默认清空 + 提示。后端暂无专用接口的命令不会出现在面板
       toast.info(t('slash.picked', `/${cmd.id}`))
+      showCmdFeedback(`/${cmd.id}`)
   }
 }
 

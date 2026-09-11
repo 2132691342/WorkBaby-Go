@@ -696,6 +696,7 @@ export const enUS: Dict = {
   'mention.type.file': 'File',
   'mention.type.command': 'Command',
   'mention.fileAttached': 'File attached: {0}',
+  'mention.fileReferenced': 'Workspace file referenced: {0} (model reads by path, no attachment)',
   'mention.searchSkill': 'Search skills…',
   'mention.skillHint': '↑↓ select · Enter insert · Esc close',
   'queue.enqueue': 'Enqueue',

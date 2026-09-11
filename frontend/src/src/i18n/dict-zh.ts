@@ -673,6 +673,7 @@ export const zhCN: Dict = {
   'mention.type.file': '文件',
   'mention.type.command': '命令',
   'mention.fileAttached': '已引用文件：{0}',
+  'mention.fileReferenced': '已引用工作区文件：{0}（不进入附件，模型按路径理解）',
   'mention.searchSkill': '搜索技能…',
   'mention.skillHint': '↑↓ 选择 · Enter 插入 · Esc 关闭',
   'queue.enqueue': '入队',
