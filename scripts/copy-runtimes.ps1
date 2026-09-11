@@ -5,7 +5,10 @@ Copy the bundled runtimes into the build output directories.
 .DESCRIPTION
 Invoked by the windows/amd64 postBuildHook in wails.json:
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File D:/goFiles/WorkBaby/scripts/copy-runtimes.ps1 ${bin}
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/copy-runtimes.ps1 ${bin}
+
+Note: path is relative to the project root (wails executes postBuildHooks with cwd = project dir).
+Never hardcode an absolute path here — CI runs the same build from a different directory.
 
 ${bin} is the absolute path of the compiled executable (build\bin\WorkBaby.exe).
 

@@ -36,6 +36,6 @@
     "comments": "Local-first personal AI desktop assistant (Go + Wails + Vue 3)"
   },
   "postBuildHooks": {
-    "windows/amd64": "powershell -NoProfile -ExecutionPolicy Bypass -File D:/goFiles/WorkBaby/scripts/copy-runtimes.ps1 ${bin}"
+    "windows/amd64": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/copy-runtimes.ps1 ${bin}"
   }
 }
