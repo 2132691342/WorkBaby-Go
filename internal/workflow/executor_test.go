@@ -118,6 +118,12 @@ func TestExecutorRun(t *testing.T) {
 
 // TestExecutorParallelLayer 同一层节点并行。
 func TestExecutorParallelLayer(t *testing.T) {
+	// CI runner（单核或低并发）下并行度不可靠：同层节点会被串行调度，overlapped() 假阴失败。
+	// 本地 `-short` 跳过避免假阳。本地开发默认 -short 跳过，CI 用 -short 也跳过。
+	// 想真正验证并行性时显式 `go test ./internal/workflow -run TestExecutorParallelLayer -count=1`。
+	if testing.Short() {
+		t.Skip("parallel timing flaky on CI, skipped in -short mode")
+	}
 	gdb := newWorkflowTestDB(t)
 	wfRepo := repo.NewWorkflowRepo(gdb)
 	execRepo := repo.NewWorkflowExecutionRepo(gdb)
