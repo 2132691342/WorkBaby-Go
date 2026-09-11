@@ -15,14 +15,17 @@ export const DEFAULT_STREAMING_INTERVAL_MS = 100
  *
  * @param source        原始内容 ref（流式时高频变化）
  * @param streaming     当前是否处于流式状态（ref 或 computed）
- * @param intervalMs    节流间隔，默认 100ms
+ * @param intervalMs    节流间隔，默认 100ms；传 ref 可随内容长度自适应
+ *                      （正文越长，全量重解析越贵，放慢刷新反而更跟手）
  * @returns             节流后的内容 ref
  */
 export function useThrottledContent(
   source: Ref<string>,
   streaming: Ref<boolean>,
-  intervalMs: number = DEFAULT_STREAMING_INTERVAL_MS
+  intervalMs: number | Ref<number> = DEFAULT_STREAMING_INTERVAL_MS
 ): Ref<string> {
+  const intervalOf = (): number =>
+    typeof intervalMs === 'number' ? intervalMs : intervalMs.value
   const throttled = ref(source.value)
   const latestRef = ref(source.value)
   const lastFlushRef = ref(0)
@@ -64,7 +67,8 @@ export function useThrottledContent(
     if (!streaming.value) return
     const now = Date.now()
     const elapsed = now - lastFlushRef.value
-    if (elapsed >= intervalMs) {
+    const iv = intervalOf()
+    if (elapsed >= iv) {
       lastFlushRef.value = now
       throttled.value = latestRef.value
     } else if (timerRef.value == null) {
@@ -72,7 +76,7 @@ export function useThrottledContent(
         timerRef.value = null
         lastFlushRef.value = Date.now()
         throttled.value = latestRef.value
-      }, intervalMs - elapsed)
+      }, iv - elapsed)
     }
   })
 

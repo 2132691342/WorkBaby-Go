@@ -60,22 +60,22 @@ func (s *ProviderService) DecryptAPIKey(ct string) (string, error) { return s.de
 
 func (s *ProviderService) toRESP(p *domain.AiProviderDO) domain.AiProviderRESP {
 	return domain.AiProviderRESP{
-		ID:               p.ID,
-		Name:             p.Name,
-		Kind:             p.Kind,
-		APIKeyMasked:     maskAPIKey(decryptForMask(p.APIKey, s.cipher)),
-		BaseURL:          p.BaseURL,
-		Model:            p.Model,
-		Alias:            p.Alias,
-		Tier:             p.Tier,
-		Enabled:          p.Enabled,
-		ContextWindow:    p.ContextWindow,
-		MaxOutputTokens:  p.MaxOutputTokens,
-		CompressRatio:    p.CompressRatio,
-		Temperature:      p.Temperature,
-		TopP:             p.TopP,
-		ThinkingEffort:   p.ThinkingEffort,
-		ThinkingStyle:    p.ThinkingStyle,
+		ID:              p.ID,
+		Name:            p.Name,
+		Kind:            p.Kind,
+		APIKeyMasked:    maskAPIKey(decryptForMask(p.APIKey, s.cipher)),
+		BaseURL:         p.BaseURL,
+		Model:           p.Model,
+		Alias:           p.Alias,
+		Tier:            domain.NormalizeTier(p.Tier),
+		Enabled:         p.Enabled,
+		ContextWindow:   p.ContextWindow,
+		MaxOutputTokens: p.MaxOutputTokens,
+		CompressRatio:   p.CompressRatio,
+		Temperature:     p.Temperature,
+		TopP:            p.TopP,
+		ThinkingEffort:  p.ThinkingEffort,
+		ThinkingStyle:   p.ThinkingStyle,
 		// 解析后的方言：自动探测的结果要让用户看得见，否则「为什么没开思考」无从排查。
 		ThinkingStyleResolved: string(llm.ResolveThinkingStyle(p.ThinkingStyle, p.BaseURL, p.Model)),
 		SupportsToolCall:      p.SupportsToolCall,
@@ -138,7 +138,7 @@ func (s *ProviderService) Create(ctx context.Context, req *domain.AiProviderREQ)
 		BaseURL:           req.BaseURL,
 		Model:             req.Model,
 		Alias:             req.Alias,
-		Tier:              req.Tier,
+		Tier:              domain.NormalizeTier(req.Tier),
 		Enabled:           req.Enabled == nil || *req.Enabled,
 		ContextWindow:     req.ContextWindow,
 		MaxOutputTokens:   req.MaxOutputTokens,
@@ -185,7 +185,7 @@ func (s *ProviderService) Update(ctx context.Context, id string, req *domain.AiP
 	}
 	p.Alias = req.Alias
 	if req.Tier != "" {
-		p.Tier = req.Tier
+		p.Tier = domain.NormalizeTier(req.Tier)
 	}
 	if req.Enabled != nil {
 		p.Enabled = *req.Enabled

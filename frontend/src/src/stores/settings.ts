@@ -27,6 +27,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const providers = ref<AiProvider[]>([])
   /** 后端实现的 ProviderKind 列表 + 展示元数据（前端从 /api/v1/ai-provider/kinds 拉，避免错配）。 */
   const providerKinds = ref<AiProviderKind[]>([])
+  /** 合法档位取值（primary / backup），从 /api/v1/ai-provider/tiers 拉。 */
+  const providerTiers = ref<string[]>(['primary', 'backup'])
   /** 所有 provider 的熔断状态 Map（id → CircuitState）。 */
   const circuitStates = ref<Map<string, CircuitState>>(new Map())
   const general = ref<Record<string, unknown>>({})
@@ -184,7 +186,7 @@ export const useSettingsStore = defineStore('settings', () => {
     loading.value = true
     error.value = null
     try {
-      const [p, g, s, w, c, k] = await Promise.all([
+      const [p, g, s, w, c, k, trs] = await Promise.all([
         apiGet<AiProvider[]>('/api/v1/ai-provider'),
         // 注意：必须取 /settings/general（返回 theme/appearance/fontScale 的 JSON map）；
         // /settings 返回的是全部 KV 数组，不是前端要读的外观对象 —— 取错会导致缩放/主题永远无法恢复。
@@ -192,16 +194,18 @@ export const useSettingsStore = defineStore('settings', () => {
         apiGet<SmtpConfig>('/api/v1/settings/smtp'),
         apiGet<WebSearchConfig>('/api/v1/settings/websearch'),
         apiGet<CircuitState[]>('/api/v1/ai-provider/circuit-status').catch(() => [] as CircuitState[]),
-        apiGet<AiProviderKind[]>('/api/v1/ai-provider/kinds').catch(() => [] as AiProviderKind[])
+        apiGet<AiProviderKind[]>('/api/v1/ai-provider/kinds').catch(() => [] as AiProviderKind[]),
+        apiGet<string[]>('/api/v1/ai-provider/tiers').catch(() => [] as string[])
       ])
       providers.value = p
       general.value = g
       smtpConfig.value = s
       webSearchConfig.value = w
       providerKinds.value = Array.isArray(k) ? k : []
+      providerTiers.value = Array.isArray(trs) && trs.length > 0 ? trs : ['primary', 'backup']
       applyTheme(String(g.theme ?? theme.value))
-      // 设置页自身也要回填外观（缩放/代码字体），否则 Settings 里看到的值永远是默认 100%，
-      // 与后端已保存的实际值不一致（问题5：「全局界面大小没法配置」）。
+      // 设置页自身也要回填外观（缩放/代码字体），否则这里显示默认 100%，
+      // 与后端已保存的实际值不一致。
       syncAppearanceFromGeneral(g)
       const map = new Map<string, CircuitState>()
       for (const s2 of c) map.set(s2.id, s2)
@@ -485,6 +489,7 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     providers,
     providerKinds,
+    providerTiers,
     general,
     smtpConfig,
     webSearchConfig,

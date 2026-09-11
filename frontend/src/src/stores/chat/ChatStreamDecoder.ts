@@ -52,6 +52,10 @@ export interface StreamEventUpdate {
   addTool?: ToolCallInfo
   updateTool?: { id: string; name?: string; argsDelta?: string; result?: string; success: boolean; agent?: string; duration_ms?: number }
   setStats?: ChatStats
+  /** 当前轮次（chat:turn-start，1 起）：长任务中让用户看到「第 N 轮」在推进。 */
+  setTurn?: number
+  /** 最近一次检查点位点轮次（chat:checkpoint）：续跑提示据此说明从哪一轮接着做。 */
+  setCheckpoint?: number
   /** 本轮命中的 Skill（chat:skill）；一轮至多一次，覆盖式写入。 */
   setSkillHit?: SkillHit
   setArtifacts?: ArtifactPayload
@@ -101,6 +105,18 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
       return typeof data === 'string' ? { appendThinking: data } : null
     case 'stats':
       return data && typeof data === 'object' ? { setStats: data as ChatStats } : null
+    case 'turn_start': {
+      if (!data || typeof data !== 'object') return null
+      const d = data as { turn?: number }
+      const turn = Number(d.turn ?? 0)
+      return turn > 0 ? { setTurn: turn } : null
+    }
+    case 'checkpoint': {
+      if (!data || typeof data !== 'object') return null
+      const d = data as { turn?: number }
+      const turn = Number(d.turn ?? 0)
+      return turn > 0 ? { setCheckpoint: turn } : null
+    }
     case 'tool_call': {
       if (!data || typeof data !== 'object') return null
       const d = data as { id: string; name: string; agent?: string; activity?: string }
@@ -114,11 +130,6 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
           activity: d.activity || undefined
         }
       }
-    }
-    case 'tool_call_delta': {
-      if (!data || typeof data !== 'object') return null
-      const d = data as { id: string; arguments_delta?: string }
-      return d.arguments_delta ? { updateTool: { id: d.id, argsDelta: d.arguments_delta, success: false } } : null
     }
     case 'tool_result': {
       if (!data || typeof data !== 'object') return null
@@ -149,9 +160,7 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
       const d = data as Partial<SkillHit>
       return d.name ? { setSkillHit: { ...(d as SkillHit), tools: d.tools ?? [] } } : null
     }
-    case 'artifact':
-            return data && typeof data === 'object' ? { setArtifacts: data as ArtifactPayload } : null
-        case 'todo': {
+    case 'todo': {
           if (!data || typeof data !== 'object') return null
           const d = data as { state?: TodoStateRESP }
           return d.state ? { setTodo: d.state } : null
@@ -286,6 +295,10 @@ export function applyStreamUpdate(
     streamingThinking: { value: string }
     streamingTools: { value: ToolCallInfo[] }
     streamingStats: { value: ChatStats | null }
+    /** 当前轮次（1 起）；调用方按需传入。 */
+    streamingTurn?: { value: number }
+    /** 最近检查点位点（轮次）；调用方按需传入。 */
+    lastCheckpointTurn?: { value: number | null }
     /** 本轮命中的 Skill（可选，调用方按需传入）。 */
     streamingSkill?: { value: SkillHit | null }
     streamingArtifacts: { value: ArtifactPayload | null }
@@ -314,6 +327,12 @@ export function applyStreamUpdate(
   }
   if (update.setStats) {
     state.streamingStats.value = update.setStats
+  }
+  if (update.setTurn !== undefined && state.streamingTurn) {
+    state.streamingTurn.value = update.setTurn
+  }
+  if (update.setCheckpoint !== undefined && state.lastCheckpointTurn) {
+    state.lastCheckpointTurn.value = update.setCheckpoint
   }
   if (update.setSkillHit && state.streamingSkill) {
     state.streamingSkill.value = update.setSkillHit

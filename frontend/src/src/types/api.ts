@@ -130,6 +130,19 @@ export interface Message {
   updated_at: number
   /** 持久化过程块：assistant 消息的工具调用/结果/产物，刷新后复现。 */
   blocks?: MessageBlock[] | null
+  /** user 消息附件（粘贴/拖拽/选择的图片与文件）。 */
+  attachments?: MessageAttachment[] | null
+}
+
+/** 消息附件（MessageAttachment）：图片可随消息发给多模态模型。 */
+export interface MessageAttachment {
+  id: string
+  name: string
+  mime: string
+  size: number
+  kind: 'image' | 'file'
+  /** 前端直读地址（/files/files/{id}）。 */
+  url: string
 }
 
 /** 消息块类型（与后端 domain.MessageBlockKind 对齐）。 */
@@ -753,6 +766,8 @@ export interface WorkflowRunReq {
 /** 工作流图（DAG，编辑器格式；与后端 WorkflowDAGRESP 契约一致）。 */
 export interface WorkflowGraph {
   name: string
+  /** 图级入参：key → "nodeId.field" 引用（后端持久化，编辑器加载/保存必须原样带上）。 */
+  inputs?: Record<string, string>
   nodes: WorkflowGraphNode[]
   edges: WorkflowGraphEdge[]
   outputs?: Record<string, string> // 图级输出：key → "nodeId.field"
@@ -783,6 +798,8 @@ export interface WorkflowGraphNode {
   params?: Record<string, unknown>
   branch?: string
   pos?: { x: number; y: number }
+  /** 节点入参变量引用：key → "nodeId.field"（保存时不可丢，否则上游引用被清空）。 */
+  inputs?: Record<string, string>
 }
 
 /** 可视化边：source_handle 仅在源是 condition 节点时携带（true/false/自定义分支）。 */

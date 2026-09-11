@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,14 +26,43 @@ func NewFileService(r *repo.FileRepo, fileDir string) *FileService {
 
 // Upload 将本地文件复制进托管目录并落库（srcPath 由前端文件对话框给出）。
 func (s *FileService) Upload(ctx context.Context, name, srcPath, sessionID, folderID string) (domain.FileRESP, error) {
-	if name == "" {
-		name = filepath.Base(srcPath)
-	}
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return domain.FileRESP{}, pkg.Wrap(1202, "open source file failed", err)
 	}
 	defer src.Close()
+	if name == "" {
+		name = filepath.Base(srcPath)
+	}
+	return s.save(ctx, name, src, sessionID, folderID)
+}
+
+// UploadData 从内存字节落库（粘贴 / 拖拽的图片拿不到本地路径，只能传内容）。
+func (s *FileService) UploadData(ctx context.Context, name string, data []byte, sessionID, folderID string) (domain.FileRESP, error) {
+	if len(data) == 0 {
+		return domain.FileRESP{}, pkg.New(1203, "empty file data", "")
+	}
+	return s.save(ctx, name, bytes.NewReader(data), sessionID, folderID)
+}
+
+// ReadDataURL 读取图片内容为 data URI（多模态模型输入用）；非图片返回空串。
+func (s *FileService) ReadDataURL(ctx context.Context, id string) (string, error) {
+	f, err := s.repo.GetByID(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(f.MimeType, "image/") {
+		return "", nil
+	}
+	raw, err := os.ReadFile(f.StoragePath)
+	if err != nil {
+		return "", pkg.Wrap(1202, "read file failed", err)
+	}
+	return "data:" + f.MimeType + ";base64," + base64.StdEncoding.EncodeToString(raw), nil
+}
+
+// save 落盘 + 落库（Upload / UploadData 共用）。
+func (s *FileService) save(ctx context.Context, name string, src io.Reader, sessionID, folderID string) (domain.FileRESP, error) {
 	if err := pkg.EnsureDir(s.fileDir); err != nil {
 		return domain.FileRESP{}, err
 	}

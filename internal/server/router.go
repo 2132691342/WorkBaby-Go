@@ -423,6 +423,10 @@ func (s *Server) registerRoutes() {
 		v, err := h.ListProviderKinds()
 		unwrap(c, v, err)
 	})
+	v1.GET("/ai-provider/tiers", func(c *gin.Context) {
+		v, err := h.ListProviderTiers()
+		unwrap(c, v, err)
+	})
 	v1.GET("/ai-provider/:id", func(c *gin.Context) {
 		v, err := h.GetProvider(c.Param("id"))
 		unwrap(c, v, err)
@@ -1022,6 +1026,15 @@ func (s *Server) registerRoutes() {
 			return
 		}
 		v, err := h.UploadFile(req.Name, req.SourcePath, req.SessionID, req.FolderID)
+		unwrap(c, v, err)
+	})
+	v1.POST("/files/upload-data", func(c *gin.Context) {
+		var req domain.UploadDataREQ
+		if err := BindJSON(c, &req); err != nil {
+			Fail(c, err)
+			return
+		}
+		v, err := h.UploadFileData(req)
 		unwrap(c, v, err)
 	})
 	v1.POST("/files/:id/delete", func(c *gin.Context) {

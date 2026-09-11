@@ -1,6 +1,10 @@
 package domain
 
-import "WorkBaby/internal/pkg"
+import (
+	"encoding/json"
+
+	"WorkBaby/internal/pkg"
+)
 
 // MessageRole 角色枚举。
 type MessageRole string
@@ -77,6 +81,24 @@ func MapHarnessReason(reason string) MessageStopReason {
 	}
 }
 
+// AttachmentKind 附件类别；只有 image 会随消息发给多模态模型。
+type AttachmentKind string
+
+const (
+	AttachmentImage AttachmentKind = "image"
+	AttachmentFile  AttachmentKind = "file"
+)
+
+// MessageAttachment 消息附件（落库为 JSON；图片可转成 LLM 多模态 part）。
+type MessageAttachment struct {
+	ID   string         `json:"id"` // 受管文件 ID
+	Name string         `json:"name"`
+	MIME string         `json:"mime"`
+	Size int64          `json:"size"`
+	Kind AttachmentKind `json:"kind"`
+	URL  string         `json:"url"` // 前端直读地址（/files/files/{id}）
+}
+
 // MessageDO 单条消息持久化实体。
 type MessageDO struct {
 	ID           string            `gorm:"primaryKey;size:64"  json:"id"`
@@ -97,12 +119,40 @@ type MessageDO struct {
 	TotalTokens  int               `gorm:"default:0"            json:"total_tokens"`
 	LatencyMs    int               `gorm:"default:0"            json:"latency_ms"`
 	Cost         string            `gorm:"size:32"              json:"cost"`
-	CreatedAt    int64             `gorm:"autoCreateTime:milli" json:"created_at"`
-	UpdatedAt    int64             `gorm:"autoUpdateTime:milli" json:"updated_at"`
+	// AttachmentsJSON 附件清单（MessageAttachment 数组序列化；正文与附件分离，正文保持纯文本）。
+	AttachmentsJSON string `gorm:"type:text"            json:"-"`
+	CreatedAt       int64  `gorm:"autoCreateTime:milli" json:"created_at"`
+	UpdatedAt       int64  `gorm:"autoUpdateTime:milli" json:"updated_at"`
 }
 
 // TableName 固定表名。
 func (MessageDO) TableName() string { return "chat_messages" }
+
+// Attachments 解析附件 JSON；非法值按空处理（不阻断消息渲染）。
+func (m MessageDO) Attachments() []MessageAttachment {
+	if m.AttachmentsJSON == "" {
+		return nil
+	}
+	var out []MessageAttachment
+	if err := json.Unmarshal([]byte(m.AttachmentsJSON), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// SetAttachments 写入附件 JSON。
+func (m *MessageDO) SetAttachments(as []MessageAttachment) {
+	if len(as) == 0 {
+		m.AttachmentsJSON = ""
+		return
+	}
+	b, err := json.Marshal(as)
+	if err != nil {
+		m.AttachmentsJSON = ""
+		return
+	}
+	m.AttachmentsJSON = string(b)
+}
 
 // MessageREQ 创建消息（前端发消息用）。
 type MessageREQ struct {
@@ -115,26 +165,27 @@ type MessageREQ struct {
 
 // MessageRESP 出参。
 type MessageRESP struct {
-	ID           string             `json:"id"`
-	SessionID    string             `json:"session_id"`
-	RunID        string             `json:"run_id"`
-	Role         MessageRole        `json:"role"`
-	Content      string             `json:"content"`
-	Thinking     string             `json:"thinking"`
-	ToolCallID   string             `json:"tool_call_id"`
-	ToolCalls    string             `json:"tool_calls_json"`
-	Status       MessageStatus      `json:"status"`
-	StopReason   MessageStopReason  `json:"stop_reason"`
-	Model        string             `json:"model"`
-	InputTokens  int                `json:"input_tokens"`
-	OutputTokens int                `json:"output_tokens"`
-	CacheRead    int                `json:"cache_read_tokens"`
-	TotalTokens  int                `json:"total_tokens"`
-	LatencyMs    int                `json:"latency_ms"`
-	Cost         string             `json:"cost"`
-	CreatedAt    int64              `json:"created_at"`
-	UpdatedAt    int64              `json:"updated_at"`
-	Blocks       []MessageBlockRESP `json:"blocks,omitempty"` // assistant 消息的持久化过程块（工具调用/结果/产物）
+	ID           string              `json:"id"`
+	SessionID    string              `json:"session_id"`
+	RunID        string              `json:"run_id"`
+	Role         MessageRole         `json:"role"`
+	Content      string              `json:"content"`
+	Thinking     string              `json:"thinking"`
+	ToolCallID   string              `json:"tool_call_id"`
+	ToolCalls    string              `json:"tool_calls_json"`
+	Status       MessageStatus       `json:"status"`
+	StopReason   MessageStopReason   `json:"stop_reason"`
+	Model        string              `json:"model"`
+	InputTokens  int                 `json:"input_tokens"`
+	OutputTokens int                 `json:"output_tokens"`
+	CacheRead    int                 `json:"cache_read_tokens"`
+	TotalTokens  int                 `json:"total_tokens"`
+	LatencyMs    int                 `json:"latency_ms"`
+	Cost         string              `json:"cost"`
+	CreatedAt    int64               `json:"created_at"`
+	UpdatedAt    int64               `json:"updated_at"`
+	Blocks       []MessageBlockRESP  `json:"blocks,omitempty"`      // assistant 消息的持久化过程块（工具调用/结果/产物）
+	Attachments  []MessageAttachment `json:"attachments,omitempty"` // user 消息的附件（图片/文件）
 }
 
 // MessageListRESP 分页。

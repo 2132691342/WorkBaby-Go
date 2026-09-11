@@ -114,6 +114,14 @@ var (
 	ErrFileTypeForbid = pkg.New(1203, "file type not allowed", "")
 )
 
+// UploadDataREQ 内存字节上传（粘贴 / 拖拽图片）；name 为空时后端生成默认名。
+type UploadDataREQ struct {
+	Name       string `json:"name"`
+	DataBase64 string `json:"data_base64"`
+	SessionID  string `json:"session_id,omitempty"`
+	FolderID   string `json:"folder_id,omitempty"`
+}
+
 // WorkspaceFileItem 工作区文件条目。
 type WorkspaceFileItem struct {
 	Path       string `json:"path"` // 相对工作区根

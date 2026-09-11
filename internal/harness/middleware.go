@@ -4,9 +4,8 @@ import (
 	"WorkBaby/internal/llm"
 )
 
-// TokenUsageAccumulator 累加 token（含缓存读写，供仪表盘三线拆分）。
-// Runner 持有唯一实例并在每轮回调 AfterTurn；中间件链接口本身不再导出（AfterTurn
-// 从未被外部调用过——runner.go 同步直调该实例方法，defaultMiddlewares 也已下线）。
+// TokenUsageAccumulator 累计 token 用量（含缓存读写分项，供仪表盘三线拆分）。
+// Runner 持有唯一实例，每轮同步累加。
 type TokenUsageAccumulator struct {
 	Input      int
 	Output     int

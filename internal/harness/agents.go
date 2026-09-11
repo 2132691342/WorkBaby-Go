@@ -1,9 +1,9 @@
 package harness
 
-// 内置 Agent 定义表（v1 硬编码，UI 可视化配置留 P2，YAGNI）。
+// 内置 Agent 定义表。
 //
 // chat / workflow / cron 以 name 引用同一个 Definition：一次定义、随处运行，
-// 替换各调用点硬编码的模型/工具/记忆/预算参数。未来扩展 = 往表里加一条。
+// 扩展 = 往表里加一条。
 
 // DefaultAgents 返回全部内置 Agent。
 func DefaultAgents() []Definition {
@@ -13,9 +13,8 @@ func DefaultAgents() []Definition {
 			Description: "通用全能助手（默认）：记忆开启、可执行工具",
 			Persona:     personaDefault,
 			Tools: ToolPolicy{
-				// 工具白名单显式收敛到核心集：functools 纯函数（30+ 个）默认不在此，
-				// 用户可在设置页手动开启；命令级裁决类（exec / skill / delegate / workflow）
-				// 由 runner.gateTool 统一拦截危险命令，白名单仅控制「带不带」。
+				// 白名单收敛到核心集：functools 纯函数（30+ 个）默认不在此，用户可在设置页开启；
+				// 危险命令由 runner 的策略门统一拦截，白名单只控制「带不带」。
 				Allow: []string{
 					"file_*", "doc_reader", "archive_manager",
 					"exec", "run_skill_script", "delegate_task", "run_workflow",

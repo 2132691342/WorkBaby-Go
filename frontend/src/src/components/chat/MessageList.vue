@@ -148,6 +148,23 @@ watch(
  * 判断第 i 条消息是否在「当前可视线附近」。
  * 流式中只保留最后 1 条 + 上下 5 条；其余用 content-visibility: auto 跳过渲染。
  */
+/**
+ * 轮次分组：一条 user 消息开启一轮，其后的 assistant / tool 都归属同一轮。
+ * 组内紧凑、组间宽松 —— 「我问了什么 → 它做了什么」在视觉上是一体的，
+ * 而不是若干条等距、彼此无关的卡片（长会话里最难读的就是等距流）。
+ */
+const groups = computed<{ key: string; items: { m: Message; index: number }[] }[]>(() => {
+  const out: { key: string; items: { m: Message; index: number }[] }[] = []
+  props.messages.forEach((m, index) => {
+    if (m.role === 'user' || out.length === 0) {
+      out.push({ key: m.id, items: [{ m, index }] })
+      return
+    }
+    out[out.length - 1]!.items.push({ m, index })
+  })
+  return out
+})
+
 const NEAR_WINDOW = 5
 function isNearCurrent(i: number): boolean {
   if (!props.streaming) return true
@@ -200,26 +217,33 @@ function isNearCurrent(i: number): boolean {
       </div>
     </div>
 
-    <div class="mx-auto max-w-[800px] space-y-6">
-      <div
-        v-for="(m, i) in messages"
-        :key="m.id"
-        class="wb-msg-item group flex wb-msg-enter"
-        :class="[m.role === 'user' ? 'justify-end' : 'justify-start', { 'wb-msg-item-near': isNearCurrent(i) }]"
-        :style="{ animationDelay: (i % 5) * 60 + 'ms' }"
-        @mouseenter="hoveredID = m.id"
-        @mouseleave="hoveredID = null"
-      >
-        <!-- assistant 头像（桌宠形象，与桌宠窗口同源） -->
-        <AssistantAvatar v-if="m.role !== 'user'" class="mr-3" />
+    <div class="mx-auto max-w-[800px] space-y-7">
+      <!-- 一轮 = 一条 user + 其后的 assistant / tool：组内紧凑、组间宽松 -->
+      <div v-for="g in groups" :key="g.key" class="space-y-3">
+        <div
+          v-for="it in g.items"
+          :key="it.m.id"
+          class="wb-msg-item group flex wb-msg-enter"
+          :class="[
+            it.m.role === 'user' ? 'justify-end' : 'justify-start',
+            { 'wb-msg-item-near': isNearCurrent(it.index) },
+            { 'wb-msg-item-lead': it.m.role === 'user' }
+          ]"
+          :style="{ animationDelay: (it.index % 5) * 60 + 'ms' }"
+          @mouseenter="hoveredID = it.m.id"
+          @mouseleave="hoveredID = null"
+        >
+          <!-- assistant 头像（桌宠形象，与桌宠窗口同源） -->
+          <AssistantAvatar v-if="it.m.role !== 'user'" class="mr-3" />
 
-        <MessageItem
-          :message="m"
-          :index="i"
-          :is-last="i === messages.length - 1"
-          :streaming="streaming"
-          :hovered="hoveredID === m.id"
-        />
+          <MessageItem
+            :message="it.m"
+            :index="it.index"
+            :is-last="it.index === messages.length - 1"
+            :streaming="streaming"
+            :hovered="hoveredID === it.m.id"
+          />
+        </div>
       </div>
 
       <!-- 流式中的 assistant 气泡 -->
@@ -243,8 +267,8 @@ function isNearCurrent(i: number): boolean {
 
       <!-- 终止原因横幅：中性终态（非 completed 才展示）——
            用户主动停止 / 工具失败限额是正常收场，区别于 error（error 有独立红色 alert）。
-           P2-3：可恢复终态（cancelled / tool_error_limit / max_turns / token_budget）
-           额外给一个「继续」按钮，一键接着上轮未完成的部分做，而不是让用户重新描述一遍任务。 -->
+           可恢复终态（cancelled / tool_error_limit / max_turns / token_budget）附「继续」按钮，
+           一键接着上轮未完成的部分做，不必让用户重新描述任务。 -->
       <StopReasonBanner
         :stop-reason="stopReason"
         :streaming="streaming"
@@ -279,5 +303,9 @@ function isNearCurrent(i: number): boolean {
 }
 .wb-msg-item-near {
   content-visibility: visible;
+}
+/* 轮首（user 消息）是一轮的锚点：跳转定位时留出顶部余量，标题不被滚动位置压住 */
+.wb-msg-item-lead {
+  scroll-margin-top: 1.5rem;
 }
 </style>

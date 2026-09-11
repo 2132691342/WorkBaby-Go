@@ -66,6 +66,11 @@ func (h *Handler) ListProviderKinds() (domain.ProviderKindsRESP, error) {
 	return domain.AllProviderKindMetas, nil
 }
 
+// ListProviderTiers 暴露合法档位取值；前端下拉由此驱动，避免自造取值。
+func (h *Handler) ListProviderTiers() ([]domain.ProviderTier, error) {
+	return domain.AllProviderTiers, nil
+}
+
 // TestProviderConnect 校验 Provider 字段完整性并测试连通。
 func (h *Handler) TestProviderConnect(id string) error {
 	return h.provSvc.TestConnect(h.ctx, id)

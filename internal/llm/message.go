@@ -6,6 +6,8 @@
 // Provider 实例由 Registry 按 domain.AiProviderDO 配置构建。
 package llm
 
+import "strings"
+
 // RoleType 消息角色。
 type RoleType string
 
@@ -16,20 +18,42 @@ const (
 	RoleTool      RoleType = "tool"
 )
 
+// ContentPart 多模态内容片段；Parts 非空时 Content 仅作降级文本（不支持多模态的上游）。
+type ContentPart struct {
+	Type     string    `json:"type"` // text / image_url
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL 图片内容（data URI 或 http 地址）。
+type ImageURL struct {
+	URL string `json:"url"`
+}
+
 // Message 跨边界统一消息：
 //   - Content：模型可见正文（用户输入/助手输出）
+//   - Parts：多模态片段（图片）；非空时各上游按自身协议展开
 //   - Thinking：推理文本（Anthropic thinking / DeepSeek reasoning_content / GLM thinking），不混入 Content
 //   - ToolCalls：助手消息的工具调用
 //   - ToolCallID / ToolName：仅 role==tool 时使用，回填 LLM 的工具结果
 //   - Name：可选显示名
 type Message struct {
-	Role       RoleType   `json:"role"`
-	Content    string     `json:"content"`
-	Thinking   string     `json:"thinking,omitempty"`
-	ToolCalls  []ToolCall `json:"toolCalls,omitempty"`
-	ToolCallID string     `json:"toolCallID,omitempty"`
-	ToolName   string     `json:"toolName,omitempty"`
-	Name       string     `json:"name,omitempty"`
+	Role       RoleType      `json:"role"`
+	Content    string        `json:"content"`
+	Parts      []ContentPart `json:"parts,omitempty"`
+	Thinking   string        `json:"thinking,omitempty"`
+	ToolCalls  []ToolCall    `json:"toolCalls,omitempty"`
+	ToolCallID string        `json:"toolCallID,omitempty"`
+	ToolName   string        `json:"toolName,omitempty"`
+	Name       string        `json:"name,omitempty"`
+}
+
+// ImageDataURL 是否图片 data URI（data:image/...）。
+func (p ContentPart) ImageDataURL() string {
+	if p.Type != "image_url" || p.ImageURL == nil {
+		return ""
+	}
+	return p.ImageURL.URL
 }
 
 // ToolCall 模型返回的工具调用；只在 assistant 消息出现。
@@ -54,9 +78,29 @@ type TokenUsage struct {
 	TotalTokens      int `json:"totalTokens"`
 }
 
+// SplitDataURL 拆分 data URI（data:image/png;base64,xxx）为 mime 与 base64 载荷；非 data URI 返回空串。
+func SplitDataURL(u string) (string, string) {
+	const prefix = "data:"
+	const marker = ";base64,"
+	if len(u) <= len(prefix) || u[:len(prefix)] != prefix {
+		return "", ""
+	}
+	rest := u[len(prefix):]
+	i := strings.Index(rest, marker)
+	if i < 0 {
+		return "", ""
+	}
+	return rest[:i], rest[i+len(marker):]
+}
+
 // 构造器。
 func SystemMessage(content string) *Message { return &Message{Role: RoleSystem, Content: content} }
 func UserMessage(content string) *Message   { return &Message{Role: RoleUser, Content: content} }
+
+// UserMessageWithParts 带多模态片段的用户消息（Content 保留纯文本降级口径）。
+func UserMessageWithParts(content string, parts []ContentPart) *Message {
+	return &Message{Role: RoleUser, Content: content, Parts: parts}
+}
 func AssistantMessage(content string, calls []ToolCall) *Message {
 	return &Message{Role: RoleAssistant, Content: content, ToolCalls: calls}
 }

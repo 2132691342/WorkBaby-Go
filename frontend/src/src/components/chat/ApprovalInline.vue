@@ -337,7 +337,7 @@ async function sendAnswer(): Promise<void> {
         <span v-else>{{ t('chat.approvalSessionHint') }}</span>
       </p>
 
-      <!-- 已响应态：绿勾 + 禁用（nomifun 模式——决策后卡片不再可点，杜绝重复提交） -->
+      <!-- 已响应态：绿勾 + 禁用（决策后卡片不再可点，杜绝重复提交） -->
       <div v-if="settled" class="mt-3 flex items-center gap-2 rounded-md border border-wb-mint/40 bg-wb-mint/10 px-3 py-2 text-xs text-wb-ink">
         <el-icon class="text-wb-mint"><Check /></el-icon>
         {{ settled === 'approved' ? t('chat.approvalApproved') : t('chat.approvalDenied') }}

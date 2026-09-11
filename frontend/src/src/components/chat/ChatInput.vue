@@ -305,14 +305,47 @@ function onDocumentPointerDown(e: PointerEvent): void {
   mentionOpen.value = false
 }
 
-async function uploadFile(_file?: File): Promise<void> {
+/** 读 File 为裸 base64（去掉 data URI 前缀）。 */
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader()
+    fr.onload = () => {
+      const raw = String(fr.result ?? '')
+      const i = raw.indexOf(',')
+      resolve(i >= 0 ? raw.slice(i + 1) : raw)
+    }
+    fr.onerror = () => reject(fr.error ?? new Error('read file failed'))
+    fr.readAsDataURL(file)
+  })
+}
+
+/** 单附件大小上限（base64 会膨胀 1/3，留足余量避免大图拖垮 HTTP 请求）。 */
+const MAX_ATTACH_BYTES = 10 * 1024 * 1024
+
+/**
+ * 加附件：传入 File 走内容上传（粘贴 / 拖拽，剪贴板图片没有本地路径）；
+ * 不传则弹系统文件对话框选本地路径。
+ */
+async function uploadFile(file?: File): Promise<void> {
   uploading.value = true
   try {
+    if (file) {
+      if (file.size > MAX_ATTACH_BYTES) {
+        toast.error(t('chat.uploadFailed'), t('chat.attachTooLarge'))
+        return
+      }
+      const dataBase64 = await readAsBase64(file)
+      const info = await apiPost<FileInfo>('/api/v1/files/upload-data', {
+        name: file.name || `clipboard-${Date.now()}.png`,
+        data_base64: dataBase64
+      })
+      attachments.value.push(info)
+      return
+    }
     const selected = await OpenFileDialog(t('chat.attachment'), '*.*')
     if (!selected) return
     const info = await UploadFile('', selected, '', '')
     attachments.value.push(info)
-    toast.success(t('chat.uploadSuccess'), info.original_name || info.name)
   } catch (err) {
     toast.error(t('chat.uploadFailed'), err instanceof Error ? err.message : String(err))
   } finally {
@@ -841,7 +874,7 @@ watch(() => props.streaming, (isStreaming, prev) => {
 })
 
 function onDragEnter(e: DragEvent): void {
-  if (props.disabled || props.streaming) return
+  if (props.disabled) return
   e.preventDefault()
   dragCounter.value++
   if (e.dataTransfer?.types.includes('Files')) {
@@ -850,12 +883,12 @@ function onDragEnter(e: DragEvent): void {
 }
 
 function onDragOver(e: DragEvent): void {
-  if (props.disabled || props.streaming) return
+  if (props.disabled) return
   e.preventDefault()
 }
 
 function onDragLeave(e: DragEvent): void {
-  if (props.disabled || props.streaming) return
+  if (props.disabled) return
   e.preventDefault()
   dragCounter.value--
   if (dragCounter.value <= 0) {
@@ -865,7 +898,7 @@ function onDragLeave(e: DragEvent): void {
 }
 
 async function onDrop(e: DragEvent): Promise<void> {
-  if (props.disabled || props.streaming) return
+  if (props.disabled) return
   e.preventDefault()
   isDragging.value = false
   dragCounter.value = 0
@@ -876,8 +909,12 @@ async function onDrop(e: DragEvent): Promise<void> {
   }
 }
 
+/**
+ * 粘贴：只拦「文件型」剪贴板（截图 / 复制的图片），文本照常走浏览器默认粘贴。
+ * 流式中同样允许——粘图是给下一轮（或插话）准备的，不该被禁用。
+ */
 async function onPaste(e: ClipboardEvent): Promise<void> {
-  if (props.disabled || props.streaming) return
+  if (props.disabled) return
   const items = e.clipboardData?.items
   if (!items) return
   const files: File[] = []

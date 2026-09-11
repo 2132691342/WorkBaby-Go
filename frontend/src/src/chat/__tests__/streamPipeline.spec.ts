@@ -7,22 +7,22 @@ import { StreamEventBatcher } from '@/stores/chat/StreamEventBatcher'
 import { blocksToToolCalls, resolveMessageBlocks, stopReasonSeverity, stopReasonText } from '@/chat/models/blocks'
 
 /**
- * 流式管线端到端契约（SSE → 解码 → 批渲染 → 历史块还原 → 终因横幅）。
- * 分四段：事件映射、解码副作用、批渲染时序、历史消息还原与终态展示。
+ * 流式管线端到端契约：SSE 事件 → 解码为状态更新 → 批渲染落地 → 历史块还原与终态展示。
+ * 这里只守跨模块的契约与边界（映射口径、批渲染时序、配对还原、终态文案），
+ * 单个函数的内部细节不在本文件覆盖。
  */
 
-// ===== 1. SSE 事件映射 =====
+// ===== 1. SSE 事件 → 前端事件 =====
 describe('SSE → 前端事件', () => {
-  it('增量/思考/工具调用映射', () => {
+  it('增量 / 思考 / 工具调用 / 工具结果 映射', () => {
     expect(mapSSEEvent('chat:stream', { delta: 'hi' })).toEqual({ type: 'content', data: 'hi' })
     expect(mapSSEEvent('chat:thinking', { delta: 'reasoning' })).toEqual({ type: 'thinking', data: 'reasoning' })
     expect(mapSSEEvent('chat:tool', { id: 't1', name: 'exec', arguments: '{}' })).toEqual({
       type: 'tool_call',
       data: { id: 't1', name: 'exec', args: '{}', agent: '' }
     })
-  })
 
-  it('工具结果成功/失败区分 state', () => {
+    // 工具结果按 error 字段区分成功/失败态
     expect(mapSSEEvent('chat:tool-result', { id: 't1', name: 'file_read', content: 'ok', error: '' })).toEqual({
       type: 'tool_result',
       data: { id: 't1', name: 'file_read', output: 'ok', state: 'success', agent: '' }
@@ -31,21 +31,24 @@ describe('SSE → 前端事件', () => {
       type: 'tool_result',
       data: { id: 't1', name: 'exec', output: '', state: 'error', agent: '' }
     })
+
+    // 轮次与检查点事件（多轮任务进度可见）
+    expect(mapSSEEvent('chat:turn-start', { turn: 2 })).toEqual({ type: 'turn_start', data: { turn: 2 } })
+    expect(mapSSEEvent('chat:checkpoint', { turn: 2 })).toEqual({ type: 'checkpoint', data: { turn: 2 } })
   })
 
-  it('终因归一化：原始 finish_reason 归一为领域原因，未知原因不惊扰', () => {
-    // LLM 原始 finish_reason（stop / end_turn / length）不得直通前端，否则横幅文案不命中
+  it('终因归一化：LLM 原始 finish_reason 不直通前端，领域原因保留', () => {
+    // end_turn / length 若不归一，横幅文案不命中
     expect(mapSSEEvent('chat:done', { status: 'completed', reason: 'end_turn', stop_reason: 'end_turn' }))
       .toEqual({ type: 'stopped', data: { reason: 'completed' } })
-    expect(mapSSEEvent('chat:done', { stop_reason: 'length' })).toEqual({
-      type: 'stopped',
-      data: { reason: 'token_budget' }
-    })
-    // 领域原因（用户中断）必须保留
-    expect(mapSSEEvent('chat:done', { reason: 'cancelled' })).toEqual({
-      type: 'stopped',
-      data: { reason: 'cancelled' }
-    })
+    expect(mapSSEEvent('chat:done', { stop_reason: 'length' }))
+      .toEqual({ type: 'stopped', data: { reason: 'token_budget' } })
+    expect(mapSSEEvent('chat:done', { reason: 'cancelled' }))
+      .toEqual({ type: 'stopped', data: { reason: 'cancelled' } })
+
+    // 解码器层同样落到 setStopReason
+    expect(decodeStreamEvent({ type: 'stopped', data: { reason: 'cancelled' } })).toEqual({ setStopReason: 'cancelled' })
+
     expect(mapSSEEvent('chat:gap', { run_id: 'r1', last_seq: 3 }))
       .toEqual({ type: 'gap', data: { run_id: 'r1', last_seq: 3 } })
     expect(mapSSEEvent('chat:unknown', {})).toBeNull()
@@ -55,7 +58,7 @@ describe('SSE → 前端事件', () => {
 
 // ===== 2. 解码器：事件 → 状态更新 =====
 describe('解码器', () => {
-  it('审批请求/决策映射', () => {
+  it('审批请求 / 决策映射（can_remember 决定是否显示「本会话允许」）', () => {
     expect(
       decodeStreamEvent({
         type: 'tool_approval_request',
@@ -64,7 +67,6 @@ describe('解码器', () => {
     ).toEqual({
       setApproval: { id: 'APR_1', command: 'go test', reason: '需要你确认', risk: 'irreversible', canRemember: false }
     })
-    // can_remember=true 时透传（前端据此决定是否显示「本会话允许」）
     expect(
       decodeStreamEvent({
         type: 'tool_approval_request',
@@ -73,14 +75,9 @@ describe('解码器', () => {
     ).toEqual({
       setApproval: { id: 'APR_2', command: 'go test', reason: '需要你确认', risk: 'needs_approval', canRemember: true }
     })
-
     expect(decodeStreamEvent({ type: 'approval_decided', data: { id: 'APR_1', decision: 'approved' } }))
       .toEqual({ clearApproval: { id: 'APR_1', decision: 'approved' } })
     expect(decodeStreamEvent({ type: 'approval_decided', data: null })).toBeNull()
-  })
-
-  it('终因映射（含未定义终因兜底）', () => {
-    expect(decodeStreamEvent({ type: 'stopped', data: { reason: 'cancelled' } })).toEqual({ setStopReason: 'cancelled' })
   })
 
   /** 最小 ref state（满足 applyStreamUpdate 签名）。 */
@@ -99,29 +96,24 @@ describe('解码器', () => {
   }
   const sample = (id: string): ApprovalRequest => ({ id, command: 'go test', reason: '需确认' })
 
-  it('clearApproval 仅 id 匹配才清（防误清并发新请求）', () => {
-    const s1 = makeState(sample('APR_1'))
-    applyStreamUpdate({ clearApproval: { id: 'APR_1', decision: 'approved' } }, s1)
-    expect(s1.pendingApproval.value).toBeNull()
+  it('clearApproval 仅 id 匹配才清（防误清并发新请求），set→clear 全链路回到 null', () => {
+    const matched = makeState(sample('APR_1'))
+    applyStreamUpdate({ clearApproval: { id: 'APR_1', decision: 'approved' } }, matched)
+    expect(matched.pendingApproval.value).toBeNull()
 
-    const s2 = makeState(sample('APR_2'))
-    applyStreamUpdate({ clearApproval: { id: 'APR_1', decision: 'approved' } }, s2)
-    expect(s2.pendingApproval.value).toEqual(sample('APR_2'))
+    // id 不匹配：保留当前请求
+    const mismatched = makeState(sample('APR_2'))
+    applyStreamUpdate({ clearApproval: { id: 'APR_1', decision: 'approved' } }, mismatched)
+    expect(mismatched.pendingApproval.value).toEqual(sample('APR_2'))
 
-    const s3 = makeState(null)
-    applyStreamUpdate({ clearApproval: { id: 'APR_1', decision: 'denied' } }, s3)
-    expect(s3.pendingApproval.value).toBeNull()
+    const chain = makeState(null)
+    applyStreamUpdate({ setApproval: sample('APR_1') }, chain)
+    expect(chain.pendingApproval.value).toEqual(sample('APR_1'))
+    applyStreamUpdate({ clearApproval: { id: 'APR_1', decision: 'denied' } }, chain)
+    expect(chain.pendingApproval.value).toBeNull()
   })
 
-  it('setApproval → clearApproval 全链路最终回到 null', () => {
-    const state = makeState(null)
-    applyStreamUpdate({ setApproval: sample('APR_1') }, state)
-    expect(state.pendingApproval.value).toEqual(sample('APR_1'))
-    applyStreamUpdate({ clearApproval: { id: 'APR_1', decision: 'denied' } }, state)
-    expect(state.pendingApproval.value).toBeNull()
-  })
-
-  it('子 Agent 生命周期：start 建 running 任务，done 合并终态', () => {
+  it('子 Agent 生命周期：start 建 running 任务，done 合并终态，未 start 的 id 不产生悬空任务', () => {
     const start = decodeStreamEvent({ type: 'subagent_start', data: { sub_run_id: 'RUN_c', agent: 'coding' } })
     expect(start?.upsertTask?.state).toBe('running')
     expect(start?.upsertTask?.agent).toBe('coding')
@@ -137,7 +129,7 @@ describe('解码器', () => {
     const err = decodeStreamEvent({ type: 'subagent_error', data: { sub_run_id: 'RUN_x', agent: 'research', message: 'boom' } })
     expect(err?.updateTask?.state).toBe('failed')
     applyStreamUpdate(err!, state)
-    expect(state.tasks.value).toHaveLength(1) // 未 start 过的 id 不产生悬空任务
+    expect(state.tasks.value).toHaveLength(1)
   })
 })
 
@@ -152,7 +144,7 @@ describe('批渲染', () => {
   }
   const content = (s: string): ChatStreamEvent => ({ type: 'content', data: s })
 
-  it('一帧内多条增量只触发一次 apply 且拼接完整', () => {
+  it('批量合并：一帧内多条增量只 apply 一次且拼接完整；长流逐帧按序不丢', () => {
     const { calls, apply } = recorder()
     const b = new StreamEventBatcher(apply)
     b.push(content('你'))
@@ -163,6 +155,17 @@ describe('批渲染', () => {
     vi.advanceTimersByTime(50)
     expect(calls).toHaveLength(1)
     expect(calls[0].map((u) => u.appendContent).join('')).toBe('你好呀')
+
+    // 长流：10 帧全部落地，顺序与内容无损
+    const long = recorder()
+    const b2 = new StreamEventBatcher(long.apply)
+    for (let i = 0; i < 10; i++) {
+      b2.push(content(String(i)))
+      vi.advanceTimersByTime(50)
+    }
+    b2.flush()
+    expect(long.calls).toHaveLength(10)
+    expect(long.calls.flatMap((c) => c.map((u) => u.appendContent)).join('')).toBe('0123456789')
   })
 
   it('终态与审批事件不被延迟，且排在积压增量之后', () => {
@@ -195,18 +198,6 @@ describe('批渲染', () => {
     b2.dispose()
     vi.advanceTimersByTime(50)
     expect(r2.calls).toHaveLength(0)
-  })
-
-  it('长流多帧按序不丢', () => {
-    const { calls, apply } = recorder()
-    const b = new StreamEventBatcher(apply)
-    for (let i = 0; i < 10; i++) {
-      b.push(content(String(i)))
-      vi.advanceTimersByTime(50)
-    }
-    b.flush()
-    expect(calls).toHaveLength(10)
-    expect(calls.flatMap((c) => c.map((u) => u.appendContent)).join('')).toBe('0123456789')
   })
 })
 
@@ -271,8 +262,8 @@ describe('历史消息还原', () => {
       { kind: 'tool_call', seq: 3, data: { id: 't2', name: 'file_write' }, text: '' },
       { kind: 'tool_result', seq: 4, data: { tool_call_id: 't2', name: 'file_write', refused: true, content: '{"refused":true}' }, text: '' }
     ])
-    expect(failed[0].state).toBe('error') // 工具报错 → error
-    expect(failed[1].state).toBe('success') // 审批拒绝是「被拒」而非「故障」，成功态+文案标注
+    expect(failed[0].state).toBe('error')
+    expect(failed[1].state).toBe('success')
     expect(failed[1].result).toContain('已拒绝')
 
     const orphan = blocksToToolCalls([
@@ -282,16 +273,20 @@ describe('历史消息还原', () => {
   })
 
   it('终因分级与文案（防横幅空白）', () => {
-    expect(stopReasonSeverity('completed')).toBe('info')
-    expect(stopReasonSeverity(null)).toBe('info')
-    expect(stopReasonSeverity('cancelled')).toBe('warning')
-    expect(stopReasonSeverity('max_turns')).toBe('warning')
-    expect(stopReasonSeverity('tool_error_limit')).toBe('warning')
-    expect(stopReasonSeverity('token_budget')).toBe('warning')
-    expect(stopReasonSeverity('stagnation')).toBe('warning')
-    expect(stopReasonSeverity('error')).toBe('error')
-    expect(stopReasonSeverity('unknown_reason')).toBe('error')
-
+    const expected: [string | null, string][] = [
+      ['completed', 'info'],
+      [null, 'info'],
+      ['cancelled', 'warning'],
+      ['max_turns', 'warning'],
+      ['tool_error_limit', 'warning'],
+      ['token_budget', 'warning'],
+      ['stagnation', 'warning'],
+      ['error', 'error'],
+      ['unknown_reason', 'error']
+    ]
+    for (const [reason, severity] of expected) {
+      expect(stopReasonSeverity(reason as never)).toBe(severity)
+    }
     for (const r of ['completed', 'cancelled', 'max_turns', 'tool_error_limit', 'token_budget', 'stagnation', 'error']) {
       expect(stopReasonText(r)).not.toBe('')
     }

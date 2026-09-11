@@ -20,29 +20,33 @@ func newTrustSvc(t *testing.T) *TrustService {
 	return NewTrustService(repo.NewWorkspaceTrustRepo(gdb), roots...)
 }
 
-
-
-// TestTrustResolve_DefaultAsk 未登记目录：ask + 未命中。
-func TestTrustResolve_DefaultAsk(t *testing.T) {
-	svc := newTrustSvc(t)
-	res, err := svc.Resolve(context.Background(), filepath.Join(t.TempDir(), "unknown-project"))
-	require.NoError(t, err)
-	assert.Equal(t, domain.TrustStateAsk, res.State)
-	assert.False(t, res.Matched)
-}
-
-// TestTrustResolve_InheritedAllow 登记祖先目录：后代继承 allow。
-func TestTrustResolve_InheritedAllow(t *testing.T) {
-	svc := newTrustSvc(t)
+// TestTrustResolveStates 目录信任状态机：未登记 ask（fail-closed）→ 登记祖先后代继承 allow
+// → 显式 deny → 撤销回 ask。一条链路覆盖全部迁移，避免拆成多个单断言用例。
+func TestTrustResolveStates(t *testing.T) {
 	ctx := context.Background()
+	svc := newTrustSvc(t)
+
+	unknown := filepath.Join(t.TempDir(), "unknown-project")
+	res, err := svc.Resolve(ctx, unknown)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TrustStateAsk, res.State, "未登记目录必须 ask")
+	assert.False(t, res.Matched)
+
 	parent := filepath.Join(t.TempDir(), "proj")
 	child := filepath.Join(parent, "sub", "deep")
-	_, err := svc.Decide(ctx, domain.WorkspaceTrustREQ{Path: parent, State: string(domain.TrustStateAllow)})
+	_, err = svc.Decide(ctx, domain.WorkspaceTrustREQ{Path: parent, State: string(domain.TrustStateAllow)})
 	require.NoError(t, err)
-	res, err := svc.Resolve(ctx, child)
+	res, err = svc.Resolve(ctx, child)
 	require.NoError(t, err)
-	assert.Equal(t, domain.TrustStateAllow, res.State)
-	assert.Equal(t, parent, res.Source)
+	assert.Equal(t, domain.TrustStateAllow, res.State, "后代继承祖先 allow")
+	assert.Equal(t, parent, res.Source, "来源应指向登记的祖先目录")
+
+	denied := filepath.Join(t.TempDir(), "p")
+	_, err = svc.Decide(ctx, domain.WorkspaceTrustREQ{Path: denied, State: string(domain.TrustStateDeny)})
+	require.NoError(t, err)
+	res, err = svc.Resolve(ctx, denied)
+	require.NoError(t, err)
+	assert.Equal(t, domain.TrustStateDeny, res.State)
 }
 
 // TestTrustEnsure_ApproveAndPersist ask → 询问 → 批准后落盘 allow；下次直接 allow。
@@ -67,22 +71,18 @@ func TestTrustEnsure_ApproveAndPersist(t *testing.T) {
 	assert.Equal(t, 1, approveCount)
 }
 
-
-// TestTrustRevoke 撤销后回到 ask。
+// TestTrustRevoke 撤销后回到 ask（与 ResolveStates 分开：撤销是独立写路径）。
 func TestTrustRevoke(t *testing.T) {
 	svc := newTrustSvc(t)
 	ctx := context.Background()
 	p := filepath.Join(t.TempDir(), "p")
-	_, err := svc.Decide(ctx, domain.WorkspaceTrustREQ{Path: p, State: string(domain.TrustStateDeny)})
+	_, err := svc.Decide(ctx, domain.WorkspaceTrustREQ{Path: p, State: string(domain.TrustStateAllow)})
 	require.NoError(t, err)
-	res, err := svc.Resolve(ctx, p)
-	require.NoError(t, err)
-	assert.Equal(t, domain.TrustStateDeny, res.State)
 
 	require.NoError(t, svc.Revoke(ctx, p))
-	res2, err := svc.Resolve(ctx, p)
+	res, err := svc.Resolve(ctx, p)
 	require.NoError(t, err)
-	assert.Equal(t, domain.TrustStateAsk, res2.State)
+	assert.Equal(t, domain.TrustStateAsk, res.State, "撤销后必须回到 ask（fail-closed）")
 }
 
 func newWorkspaceTestDB(t *testing.T) *gorm.DB {
@@ -158,6 +158,3 @@ func TestWorkspaceListFilesHidesInternal(t *testing.T) {
 	require.False(t, paths[".workbaby/meta.json"], ".workbaby/ 必须隐藏")
 	require.False(t, paths[".index/cache.bin"], ".index/ 必须隐藏")
 }
-
-// 编译期检查：repo.NewChatSessionRepo 的引用不会让本文件编译失败（占位）
-var _ = repo.NewChatSessionRepo

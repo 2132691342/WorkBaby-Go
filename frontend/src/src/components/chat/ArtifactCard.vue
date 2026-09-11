@@ -6,7 +6,7 @@ import { openExternal } from '@/api/shellBridge'
 import { t } from '@/i18n'
 
 /**
- * 交付卡片（对标 WorkBuddy present_files）。
+ * 交付卡片：present_files 工具的产出清单。
  *
  * <p>渲染 present_files 工具发布的 {@code artifact} 事件：第一项自动聚焦（可预览类型内联预览），
  * 其余以卡片形式展示，点击打开 / 下载。

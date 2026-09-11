@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"net/url"
 
 	"WorkBaby/internal/domain"
@@ -23,6 +24,18 @@ func (h *Handler) UploadFile(name, srcPath, sessionID, folderID string) (domain.
 		return domain.FileRESP{}, pkg.New(1203, "source path required", "")
 	}
 	return h.fileSvc.Upload(h.ctx, name, srcPath, sessionID, folderID)
+}
+
+// UploadFileData 上传内存字节（粘贴 / 拖拽的图片没有本地路径，只能传内容）。
+func (h *Handler) UploadFileData(req domain.UploadDataREQ) (domain.FileRESP, error) {
+	if req.DataBase64 == "" {
+		return domain.FileRESP{}, pkg.New(1203, "file data required", "")
+	}
+	data, err := base64.StdEncoding.DecodeString(req.DataBase64)
+	if err != nil {
+		return domain.FileRESP{}, pkg.Wrap(1202, "decode file data failed", err)
+	}
+	return h.fileSvc.UploadData(h.ctx, req.Name, data, req.SessionID, req.FolderID)
 }
 
 // DeleteFile 删除文件（磁盘 + 记录）。

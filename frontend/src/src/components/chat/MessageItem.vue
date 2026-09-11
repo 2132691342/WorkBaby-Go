@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useClipboard } from '@vueuse/core'
-import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, Brain, ChevronDown } from '@/components/common/icons'
-import type { Message } from '@/types/api'
+import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, Brain, ChevronDown, Paperclip } from '@/components/common/icons'
+import type { Message, MessageAttachment } from '@/types/api'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
 import { formatRelativeTime } from '@/utils/time'
@@ -11,6 +11,7 @@ import { useDialog } from '@/composables/useDialog'
 import { useFocusMode } from '@/composables/useFocusMode'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import TaskTimeline from '@/components/chat/TaskTimeline.vue'
+import InlineDiffCard from '@/components/chat/InlineDiffCard.vue'
 import UsageBadge from '@/components/chat/UsageBadge.vue'
 import { resolveMessageBlocks, blocksToToolCalls, stripThinkBlocks, messageSkillHit } from '@/chat/models/blocks'
 import { splitMentions } from '@/chat/models/tokens'
@@ -50,6 +51,11 @@ const isUser = computed(() => props.message.role === 'user')
 /** 用户消息分段：`@引用` 渲染成气泡，与输入框镜像高亮同源（一眼看出带了什么上下文）。 */
 const userSegments = computed(() => splitMentions(props.message.content ?? ''))
 
+/** 用户消息附件：图片出缩略图，其余出文件 chip（刷新/切会话后仍可回看）。 */
+const userAttachments = computed<MessageAttachment[]>(() =>
+  (props.message.attachments ?? []).filter((a) => !!a?.id)
+)
+
 /** 历史消息的过程块 → ToolCallInfo（纯函数已在 blocks.ts 单测覆盖）。 */
 const historyTools = computed<ToolCallInfo[]>(() =>
   blocksToToolCalls(resolveMessageBlocks(props.message))
@@ -63,18 +69,6 @@ const fileChanges = computed(() => {
   if (!props.message.run_id) return []
   return chat.fileChanges.filter((c) => c.run_id === props.message.run_id)
 })
-
-/** 变更动作 → 展示色。 */
-function changeTint(action: string): string {
-  if (action === 'create') return 'text-wb-mint'
-  if (action === 'delete') return 'text-wb-danger'
-  return 'text-wb-primary-strong'
-}
-function changeTag(action: string): string {
-  if (action === 'create') return t('changes.action.create')
-  if (action === 'delete') return t('changes.action.delete')
-  return t('changes.action.modify')
-}
 
 /** 消息时间统一走 utils/time。 */
 const fmtTime = formatRelativeTime
@@ -208,8 +202,8 @@ async function forkFrom(): Promise<void> {
     class="flex flex-col"
     :class="isUser ? 'max-w-[76%] items-end' : 'w-full min-w-0 items-start'"
   >
-    <!-- 思考回看：无边框轻量行（对标竞品「已完成思考 · 思考了 6 秒 ⌄」），
-         展开后正文只留左侧细竖线，不套盒子、不抢正文注意力 -->
+    <!-- 思考回看：无边框轻量行，展开后正文只留左侧细竖线，
+         不套盒子、不抢正文注意力 -->
     <div v-if="!focusMode && !isUser && message.thinking && !editing">
       <button
         type="button"
@@ -241,18 +235,28 @@ async function forkFrom(): Promise<void> {
       />
     </div>
 
-    <!-- 气泡 / 编辑模式（原型 02 屏）：用户 = .msg-u 主色实底 + 14/14/3/14 圆角；
-         assistant = .bubble 正文裸排（不套盒子），工具时间线 / 变更 / 思考块各自自带边框 -->
-    <div
-      v-if="!editing"
-      class="text-[13px]"
-      :class="
-        isUser
-          ? 'rounded-[14px] rounded-br-[3px] bg-wb-primary px-[15px] py-[11px] leading-[1.75] text-white shadow-[var(--wb-shadow)]'
-          : 'leading-[1.78] text-wb-ink'
-      "
-    >
+    <!-- 气泡样式统一收口在 wb-ui.css 的语义类（.msg-u / .bubble）：
+         视觉令牌（底色/圆角/内边距/字号/行高）只定义一处，布局（对齐/限宽）在条目层，
+         这样改一次全局生效，不会出现「同一种气泡两种内联值」的漂移。 -->
+    <div v-if="!editing" :class="isUser ? 'msg-u' : 'bubble'">
       <span v-if="isUser" class="whitespace-pre-wrap"><template v-for="(seg, si) in userSegments" :key="si"><span v-if="seg.kind === 'mention'" class="utk">{{ seg.text }}</span><span v-else-if="seg.kind === 'cmd'" class="utk">{{ seg.text }}</span><template v-else>{{ seg.text }}</template></template></span>
+      <!-- 用户附件（图片缩略图 / 文件 chip）：粘贴与拖拽的图片在这里回看 -->
+      <div v-if="isUser && userAttachments.length > 0" class="mt-2 flex flex-wrap gap-2">
+        <a
+          v-for="a in userAttachments"
+          :key="a.id"
+          :href="a.url"
+          target="_blank"
+          rel="noopener"
+          class="block overflow-hidden rounded-lg border border-white/25 transition-opacity hover:opacity-90"
+          :title="a.name"
+        >
+          <img v-if="a.kind === 'image'" :src="a.url" :alt="a.name" class="max-h-40 max-w-[220px] object-cover" />
+          <span v-else class="flex items-center gap-1 px-2 py-1 text-[11px] text-white/90">
+            <Paperclip class="h-3 w-3" />{{ a.name }}
+          </span>
+        </a>
+      </div>
       <MarkdownRenderer v-else-if="message.content?.trim()" :content="message.content" :streaming="false" />
       <!-- assistant 整轮只跑了工具、没写收尾文本：给个简洁占位，避免「消息空白但工具齐全」的违和 -->
       <span v-else-if="historyTools.length > 0 || historySkillHit" class="text-[12px] text-wb-muted">
@@ -279,33 +283,17 @@ async function forkFrom(): Promise<void> {
       </div>
     </div>
 
-    <!-- 本轮文件变更摘要（chat:file-change 按 run_id 关联，一眼看到改了什么文件） -->
-    <div
-      v-if="!isUser && fileChanges.length > 0 && !editing"
-      class="mt-1 w-full rounded-xl border border-wb-border bg-wb-mint/[0.04] p-3"
-    >
-      <div class="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-wb-ink">
+    <!-- 本轮文件变更（chat:file-change 按 run_id 关联）：内联 diff 卡，
+         折叠态一行看清「改了哪个文件、增删多少」，点开就地看 diff / 回滚（Cursor 风格）。
+         不再让用户为了看一眼 diff 而离开当前阅读上下文去侧栏。 -->
+    <div v-if="!isUser && fileChanges.length > 0 && !editing" class="mt-2 w-full space-y-1.5">
+      <div class="flex items-center gap-1.5 text-[11px] font-medium text-wb-ink">
         <FileText class="h-3.5 w-3.5 text-wb-mint" />
         {{ t('changes.title') }}
         <span class="text-wb-muted">·</span>
         <span class="text-wb-muted">{{ fileChanges.length }} {{ t('changes.files') }}</span>
       </div>
-      <ul class="space-y-1">
-        <li v-for="chg in fileChanges" :key="chg.id" class="flex items-center gap-2 text-xs">
-          <span
-            class="w-11 shrink-0 rounded px-1 text-center text-[10px] font-medium"
-            :class="[changeTint(chg.action), `bg-wb-primary/[0.04]`]"
-          >
-            {{ changeTag(chg.action) }}
-          </span>
-          <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-wb-ink" :title="chg.rel_path">{{ chg.rel_path }}</span>
-          <span class="shrink-0 font-mono text-[10px] tabular-nums">
-            <span class="text-wb-mint">+{{ chg.added_lines }}</span>
-            <span class="text-wb-danger">-{{ chg.removed_lines }}</span>
-          </span>
-          <span v-if="chg.rolled_back" class="shrink-0 rounded bg-wb-warning/15 px-1 text-[9px] text-wb-warning">{{ t('changes.rolledBack') }}</span>
-        </li>
-      </ul>
+      <InlineDiffCard v-for="chg in fileChanges" :key="chg.id" :change="chg" />
     </div>
 
     <!-- 用量元信息：悬浮看精确值；为空隐藏 -->

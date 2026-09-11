@@ -15,8 +15,8 @@ import (
 
 // Checkpoint 单轮结束后的运行快照。
 //
-// 语义上是「可覆盖的最新一轮」：存储实现每 run 只留最后一个 turn 的快照
-// （Resume 只认最后一轮），逐轮累积会让一次 30 轮 run 放大成 30× 全文。
+// 语义是「可覆盖的最新一轮」：每 run 只留最后一个 turn（Resume 只认最后一轮），
+// 逐轮累积会让一次 30 轮 run 放大成 30× 全文。
 type Checkpoint struct {
 	RunID          string         `json:"runID"`
 	SessionID      string         `json:"sessionID"`
@@ -38,13 +38,11 @@ type StepRecord struct {
 	DurationMs int64  `json:"duration_ms,omitempty"`
 }
 
-// CheckpointStore 检查点存储抽象：
-//   - Append：每轮工具执行并回填后追加一行；
-//   - LoadLast：取最新一轮，供 Resume 续跑；
-//   - Cleanup：每会话保留最近 keep 个 run 的更早检查点清理。
+// CheckpointStore 检查点存储抽象：Append（每轮工具回填后追加）、LoadLast（取最新一轮供
+// Resume 续跑）、Cleanup（每会话保留最近 keep 个 run）。
 //
-// 内置 FileCheckpointStore（JSONL）；service 层提供 SQL 实现（agent_checkpoints 表，
-// 跨进程重启可恢复），经 Runner.WithCheckpointStore 注入。
+// 内置 FileCheckpointStore（JSONL）；service 层注入 SQL 实现（agent_checkpoints 表，
+// 跨进程重启可恢复）。
 type CheckpointStore interface {
 	Append(cp *Checkpoint) error
 	LoadLast(sessionID, runID string) (*Checkpoint, error)
@@ -56,7 +54,7 @@ type FileCheckpointStore struct {
 	root string
 }
 
-// NewCheckpointStore 构造 JSONL 文件检查点存储（保留旧名，兼容调用方）。
+// NewCheckpointStore 构造 JSONL 文件检查点存储。
 func NewCheckpointStore(root string) *FileCheckpointStore { return &FileCheckpointStore{root: root} }
 
 // Append 追加一行检查点。

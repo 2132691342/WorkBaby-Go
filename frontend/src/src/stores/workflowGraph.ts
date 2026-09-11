@@ -94,6 +94,9 @@ export const useWorkflowGraphStore = defineStore('workflowGraph', () => {
       // 防御：后端可能漏字段导致 null
       currentGraph = {
         name: g?.name ?? '',
+        // inputs 必须一并带回：编辑器当前没有入参编辑 UI，若加载时丢弃，
+        // 下一次保存就会把后端已配置的变量引用整体清空（静默数据丢失）。
+        inputs: g?.inputs ?? {},
         nodes: Array.isArray(g?.nodes) ? g.nodes : [],
         edges: Array.isArray(g?.edges) ? g.edges : [],
         outputs: g?.outputs ?? {}
@@ -314,12 +317,14 @@ export const useWorkflowGraphStore = defineStore('workflowGraph', () => {
     try {
       await apiPost(`/api/v1/workflows/${id}/update-graph`, {
         name: currentGraph.name,
+        inputs: currentGraph.inputs ?? {},
         nodes: currentGraph.nodes.map((n) => ({
           id: n.id,
           type: n.type,
           params: n.params ?? {},
           branch: n.branch ?? '',
-          pos: n.pos ?? null
+          pos: n.pos ?? null,
+          inputs: n.inputs ?? {}
         })),
         edges: currentGraph.edges.map((e) => ({
           from: e.from,

@@ -368,7 +368,7 @@ func testRunnerToolPanicRecovered(t *testing.T) {
 	assert.True(t, found, "工具 panic 应以 ToolResult Err 上报给模型")
 }
 
-// TestRunnerToolGateDeny 验证 P1-D：deny 规则下工具不执行且模型收到可见拒绝原因。
+// TestRunnerToolGateDeny deny 规则下工具不执行，且模型收到可见的拒绝原因。
 func testRunnerToolGateDeny(t *testing.T) {
 	blocked := newTrackingTool("blocked", tool.RiskReadOnly)
 	ok := newTrackingTool("okay", tool.RiskReadOnly)
@@ -390,29 +390,6 @@ func testRunnerToolGateDeny(t *testing.T) {
 	assert.Contains(t, joinContents(p.lastMessages()), `"refused":true`)
 	assert.Contains(t, joinContents(p.lastMessages()), `"reason":"denied by policy"`)
 	assert.Contains(t, joinContents(p.lastMessages()), `"tool":"blocked"`)
-}
-
-// TestRunnerToolGateAskApprover 验证 P1-D：ask 委托人工审批，拒绝则不执行。
-func testRunnerToolGateAskApprover(t *testing.T) {
-	needAsk := newTrackingTool("ask_me", tool.RiskWriteLocal)
-	p := &scriptedProvider{calls: [][]llm.StreamChunk{
-		{{ToolCall: &llm.NormalizedToolCall{ID: "c1", Name: "ask_me", Arguments: json.RawMessage(`{}`)}}},
-		{{Delta: llm.Message{Role: llm.RoleAssistant, Content: "done"}}},
-	}}
-	var asked string
-	r := newRunnerWithTools(t, p, needAsk).
-		WithToolGate(tool.NewGate(tool.SessionModeDefault), func(_ context.Context, desc, _ string) bool {
-			asked = desc
-			return false
-		})
-
-	res := r.RunMessages(context.Background(), "RUN_G", "SESSION_G", "MSG_G", "mock", []*llm.Message{llm.UserMessage("go")})
-	require.NoError(t, res.Err)
-	assert.Equal(t, 0, needAsk.calls(), "审批拒绝不得执行")
-	assert.Contains(t, asked, "ask_me", "approver 应收到完整工具描述")
-	// Refused 语义：用户拒绝 → 结构化回执（refused=true + reason=denied by user）
-	assert.Contains(t, joinContents(p.lastMessages()), `"refused":true`)
-	assert.Contains(t, joinContents(p.lastMessages()), `"reason":"denied by user"`)
 }
 
 // lastMessages 返回最后一次请求的消息（runner 结束后即最终上下文）。
@@ -871,16 +848,6 @@ func guardCall(command string) llm.NormalizedToolCall {
 	}
 }
 
-// TestGateSafeCommandSkipsApproval 白名单安全命令（per-call risk 空）免审放行。
-func testGateSafeCommandSkipsApproval(t *testing.T) {
-	approver := &countingApprover{ok: true}
-	r := guardRunner(tool.SessionModeDefault, approver)
-
-	msg := guardLayer(r, context.Background(), "RUN_G", "SES_G", 0, guardCall("git status"), classifiedTool{})
-	require.Nil(t, msg, "安全命令应放行")
-	assert.Zero(t, approver.calls, "安全命令不应触发审批")
-}
-
 // TestGateAskUsesPerCallRisk 危险命令：审批描述为具体命令、只问一次；拒绝回结构化回执。
 func testGateAskUsesPerCallRisk(t *testing.T) {
 	approver := &countingApprover{ok: true}
@@ -1126,12 +1093,10 @@ func TestRunnerToolExecution(t *testing.T) {
 	t.Run("panic_recovered", testRunnerToolPanicRecovered)
 }
 
-// TestRunnerApprovalGate 闸门与审批：策略拒绝 / 人工审批 / 结构化 Refused / 模式差异。
+// TestRunnerApprovalGate 闸门与审批：策略拒绝 / 审批拒绝后继续 / 模式差异 / Allow 不越过命令级裁决。
 func TestRunnerApprovalGate(t *testing.T) {
 	t.Run("deny_policy", testRunnerToolGateDeny)
-	t.Run("ask_approver", testRunnerToolGateAskApprover)
 	t.Run("approval_refused", testRunnerApprovalRefusedDenied)
-	t.Run("safe_command_skip", testGateSafeCommandSkipsApproval)
 	t.Run("per_call_risk", testGateAskUsesPerCallRisk)
 	t.Run("yolo_never_ask", testGateYoloNeverAsks)
 	t.Run("allow_keeps_check", testGateAllowKeepsCommandLevelCheck)

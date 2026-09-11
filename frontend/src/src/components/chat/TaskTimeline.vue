@@ -33,6 +33,11 @@ const props = defineProps<{
   retryable?: boolean
   /** 历史折叠形态：默认收起为一行 receipt 摘要，点击展开明细；流式时间线不传，保持逐行实时反馈。 */
   collapsible?: boolean
+  /**
+   * 流式紧凑形态：去掉外框与标题栏底色，工具行直接融进正文流。
+   * 历史消息用盒子强调"这是一段过程"；流式期间过程与正文同时在长，盒子反而把阅读节奏切断。
+   */
+  compact?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -41,9 +46,8 @@ const emit = defineEmits<{
 }>()
 
 // ===== 历史折叠态 =====
-// 历史消息默认收起为一行 receipt 摘要（对标竞品「已运行 2 条命令 ⌄」的轻量过程行），
-// 避免十几行工具明细在回看历史时抢占注意力；有失败调用时自动展开。
-// 流式时间线（collapsible 未传）保持逐行可见的实时反馈。
+// 历史消息默认收起为一行 receipt 摘要，避免十几行工具明细在回看历史时抢占注意力；
+// 有失败调用时自动展开。流式时间线（collapsible 未传）保持逐行可见的实时反馈。
 const open = ref(!props.collapsible || props.tools.some((t) => t.state === 'error'))
 const collapsed = computed(() => props.collapsible === true && !open.value)
 
@@ -145,7 +149,7 @@ function delegateMeta(tc: ToolCall): { agent: string; task: string } {
 
 /**
  * 行内参数摘要：从 args JSON 里挑最有信息量的单值（路径 / 命令 / 关键词），
- * 让「这一步在干什么」不用点开就知道——对标 Claude Code 的「● Read file.ts」单行形态。
+ * 让「这一步在干什么」不点开就知道。
  */
 function argSummary(tc: ToolCall): string {
   if (!tc.args || isDelegate(tc)) return ''
@@ -230,7 +234,7 @@ function elapsedMs(tc: ToolCall): number | undefined {
 /** 工具行耗时统一走 utils/time（口径全站一致）。 */
 const fmtDuration = formatDuration
 
-// ===== 回合级 receipt：把一串工具调用收敛成一句人话（nomifun 的 receipt 模式）=====
+// ===== 回合级 receipt：把一串工具调用收敛成一句人话 =====
 //
 // fail closed：无法归类的调用进 generic 独立计数，绝不猜测合并。
 const receipt = computed<ReceiptPart[]>(() => summarizeToolCalls(props.tools))
@@ -244,11 +248,9 @@ const turnDuration = computed<string>(() => fmtTurnDuration(totalToolMs(props.to
        保留现有能力：状态图标 / 工具图标 / 行内 arg 摘要 / 实时计时 / 复制 / 重试 / 子 Agent 委派卡片 -->
   <div
     v-if="props.tools.length > 0 || props.skillHit"
-    class="tl"
-    :class="{ 'tl--light': collapsed }"
+    :class="[props.compact ? 'tl-compact' : 'tl', { 'tl--light': collapsed }]"
   >
-    <!-- 历史折叠态：单行 receipt 摘要（对标「已搜索文件 2 次，已运行 1 条命令 ⌄」，
-         不带面板标题），点击展开完整明细 -->
+    <!-- 历史折叠态：单行 receipt 摘要（不带面板标题），点击展开完整明细 -->
     <button v-if="collapsed" type="button" class="tl-fold" @click="open = true">
       <ListTree class="ic" style="width: 13px; height: 13px" />
       <span v-for="p in receipt" :key="p.action" class="rcpt">{{ t(`tool.receipt.${p.action}`, p.count) }}</span>
@@ -408,6 +410,32 @@ const turnDuration = computed<string>(() => fmtTurnDuration(totalToolMs(props.to
   border: 0;
   background: transparent;
   margin-bottom: 2px;
+}
+/* 流式紧凑形态：无外框、标题栏无底色，工具行直接融进正文流。
+   流式期间正文与过程同时在增长，盒子边框会把阅读节奏切成两段。 */
+.tl-compact {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  margin-bottom: 6px;
+  overflow: visible;
+}
+.tl-compact .tl-hd {
+  padding: 0 4px 4px;
+  border-bottom: 0;
+  background: transparent;
+  font-weight: 500;
+  color: var(--wb-muted);
+}
+.tl-compact .tool {
+  border-bottom: 0;
+}
+.tl-compact .tool-hd {
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+.tl-compact .tool-hd:hover {
+  background: var(--wb-surface-hover);
 }
 .tl-fold {
   display: flex;

@@ -56,7 +56,9 @@ func (r *AiProviderRepo) List(ctx context.Context) ([]domain.AiProviderDO, error
 
 func (r *AiProviderRepo) ListEnabled(ctx context.Context) ([]domain.AiProviderDO, error) {
 	var ps []domain.AiProviderDO
-	if err := r.db.WithContext(ctx).Where("enabled = ?", true).Order("tier, created_at").Find(&ps).Error; err != nil {
+	// CASE 而非裸 tier：字符串序会让 backup 排在 primary 之前。
+	if err := r.db.WithContext(ctx).Where("enabled = ?", true).
+		Order("CASE WHEN tier = 'primary' THEN 0 ELSE 1 END, created_at").Find(&ps).Error; err != nil {
 		return nil, pkg.Wrap(2034, "list enabled providers failed", err)
 	}
 	return ps, nil

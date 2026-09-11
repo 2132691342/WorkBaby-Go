@@ -1293,9 +1293,10 @@ kbd.chip {
   background: var(--wb-ink);
   color: var(--wb-surface);
 }
+/* 用户气泡：只承载视觉（底色/圆角/内边距/字号/阴影）。
+   限宽与对齐由消息条目的布局负责（.wb-msg-item 的 flex 对齐 + 条目 max-width），
+   这里若再写 align-self/max-width，会与布局叠加成「气泡只有容器一半宽」。 */
 .msg-u {
-  align-self: flex-end;
-  max-width: 76%;
   background: var(--wb-primary);
   color: #fff;
   padding: 11px 15px;

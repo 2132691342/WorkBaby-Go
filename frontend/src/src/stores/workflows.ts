@@ -204,7 +204,8 @@ export const useWorkflowsStore = defineStore('workflows', () => {
     try {
       const exec = await apiPost<{ execution_id: string }>(
         `/api/v1/workflows/${selected.value.id}/run`,
-        { inputs: { test: 'p2-1' } }
+        // 手动运行不预设输入：需要的变量由工作流自身的图级 inputs 声明
+        { inputs: {} }
       )
       currentExecID.value = exec.execution_id
       currentExec.value = null

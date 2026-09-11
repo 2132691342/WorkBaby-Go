@@ -57,44 +57,57 @@ func assertPairingIntact(t *testing.T, ms []*llm.Message) {
 	}
 }
 
-// TestMicroCompressorPreservesToolPairing 回归：压缩绝不拆散 assistant(tool_calls) 与
-// 其 tool 结果。旧实现第一遍只删 tool 结果（assistant 悬空）、第二遍盲切（尾部孤儿 tool），
-// 两条路都会触发上游 400「tool result's tool id not found」。
+// TestMicroCompressorPreservesToolPairing 回归：压缩绝不拆散 assistant(tool_calls) 与其 tool 结果。
+// 旧实现第一遍只删 tool 结果（assistant 悬空）、第二遍盲切（尾部孤儿 tool），两条路都会
+// 触发上游 400「tool result's tool id not found」。
+//
+// 两种布局各跑一遍：多工具段（折叠路径）与「切点恰好落在工具对中间」（第二遍截断回退路径）。
 func TestMicroCompressorPreservesToolPairing(t *testing.T) {
-	big := strings.Repeat("工具结果很长", 40) // ≈70 token
-	msgs := []*llm.Message{
-		llm.SystemMessage("sys"),
-		llm.UserMessage("start"),
-		toolCallMsg("CALL_A", "exec"),
-		llm.ToolMessage("CALL_A", "exec", big),
-		llm.UserMessage("中间一轮"),
-		toolCallMsg("CALL_B", "file_read"),
-		llm.ToolMessage("CALL_B", "file_read", big),
-		llm.UserMessage("继续"),
+	big := strings.Repeat("工具结果很长", 40)
+	cases := []struct {
+		name   string
+		msgs   []*llm.Message
+		budget int
+	}{
+		{
+			name: "多工具段折叠后仍配对",
+			msgs: []*llm.Message{
+				llm.SystemMessage("sys"),
+				llm.UserMessage("start"),
+				toolCallMsg("CALL_A", "exec"),
+				llm.ToolMessage("CALL_A", "exec", big),
+				llm.UserMessage("中间一轮"),
+				toolCallMsg("CALL_B", "file_read"),
+				llm.ToolMessage("CALL_B", "file_read", big),
+				llm.UserMessage("继续"),
+			},
+			budget: 100,
+		},
+		{
+			name:   "截断切点落在工具对中间需回退",
+			msgs:   threeSegments(),
+			budget: 120,
+		},
 	}
-	budget := 100
-	require.Greater(t, EstimateTokens(msgs), budget, "前置：估算应超预算")
-
-	out := (MicroCompressor{}).Compress(msgs, budget)
-	assertPairingIntact(t, out)
-	assert.Equal(t, llm.RoleSystem, out[0].Role, "首条 system 保留")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Greater(t, EstimateTokens(tc.msgs), tc.budget, "前置：估算应超预算")
+			out := (MicroCompressor{}).Compress(tc.msgs, tc.budget)
+			assertPairingIntact(t, out)
+			assert.Equal(t, llm.RoleSystem, out[0].Role, "首条 system 保留")
+		})
+	}
 }
 
-// TestMicroCompressorSecondPassCutSafe 第二遍对半截断的落点恰好落在工具对中间时，
-// 必须回退到安全切点（工具对的 assistant 上），而不是留下尾部孤儿。
-func TestMicroCompressorSecondPassCutSafe(t *testing.T) {
-	var msgs []*llm.Message
-	msgs = append(msgs, llm.SystemMessage("sys"), llm.UserMessage("start"))
-	// 3 个工具段，每段 assistant(tool_calls) + 大 tool 结果；中点恰好落在某段中间
+// threeSegments 构造 3 个「assistant(tool_calls) + 大 tool 结果」段，使对半截断的切点落在段中间。
+func threeSegments() []*llm.Message {
+	out := []*llm.Message{llm.SystemMessage("sys"), llm.UserMessage("start")}
 	for i := 0; i < 3; i++ {
 		id := "CALL_" + string(rune('A'+i))
-		msgs = append(msgs, toolCallMsg(id, "exec"),
+		out = append(out, toolCallMsg(id, "exec"),
 			llm.ToolMessage(id, "exec", strings.Repeat("结果内容", 60)))
 	}
-	msgs = append(msgs, llm.UserMessage("end"))
-
-	out := (MicroCompressor{}).Compress(msgs, 120)
-	assertPairingIntact(t, out)
+	return append(out, llm.UserMessage("end"))
 }
 
 // TestRunnerContextBudgetCompress 冒烟：极小上下文预算下超长上下文仍能正常跑完（压缩不打断循环）。
@@ -131,15 +144,12 @@ func TestToolResultTruncateRuneSafe(t *testing.T) {
 	assert.True(t, strings.HasPrefix(got, strings.Repeat("汉", 10)), "内容前缀无损")
 }
 
-// TestEstimateOneMatchesEstimateTokens 回归：estimateOne 与 EstimateTokens 必须同口径。
-// 旧实现按「字符数/4」估算，中文低估 3~4 倍，Auto 压缩的尾部保留量随之失准，
-// 摘要会吞掉本该保留的近期上下文。
-func TestEstimateOneMatchesEstimateTokens(t *testing.T) {
-	text := &llm.Message{Role: llm.RoleUser, Content: strings.Repeat("部署配置", 100)}
-	assert.Equal(t, EstimateTokens([]*llm.Message{text}), estimateOne(text))
-
-	withCall := &llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
-		Function: llm.FunctionCall{Name: "exec", Arguments: `{"cmd":"ls -la"}`},
-	}}}
-	assert.Equal(t, EstimateTokens([]*llm.Message{withCall}), estimateOne(withCall))
+// TestEstimateTokensCountsChinese 回归：中文按 rune 口径估算，不能按「字符数/4」低估。
+// 低估 3~4 倍会让压缩的尾部保留量失准，摘要吞掉本该保留的近期上下文。
+// 断言行为区间（而非内部函数等价），实现换代时测试不会无故失效。
+func TestEstimateTokensCountsChinese(t *testing.T) {
+	text := &llm.Message{Role: llm.RoleUser, Content: strings.Repeat("部署配置", 100)} // 400 字
+	got := EstimateTokens([]*llm.Message{text})
+	assert.Greater(t, got, 200, "400 字中文不应被估到 200 token 以下")
+	assert.Less(t, got, 1000, "也不应高估到离谱")
 }

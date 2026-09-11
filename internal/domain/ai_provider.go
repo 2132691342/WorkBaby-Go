@@ -46,13 +46,37 @@ var AllProviderKindMetas = []ProviderKindMeta{
 	{Kind: ProviderKindOllama, Label: "Ollama（本地）", BaseURLDefault: "http://localhost:11434", ModelPlaceholder: "llama3"},
 }
 
-// ProviderTier 模型档位（路由优先级）。
+// ProviderTier 模型档位——**仅用于排序，不做故障转移**。
+//
+// 语义边界（避免误读成容灾能力）：
+//   - 它只决定两件事：默认 Provider 的选择顺序、同名模型命中时取哪一个；
+//   - 不会在主用报错/限流/熔断时自动切换到备用（无 failover 逻辑）；
+//   - 真正的主备切换由 Provider 熔断 + 用户在模型选择器手动切换承担。
 type ProviderTier string
 
 const (
 	ProviderTierPrimary ProviderTier = "primary"
 	ProviderTierBackup  ProviderTier = "backup"
 )
+
+// AllProviderTiers 合法档位（前端设置面板下拉由此驱动，杜绝自造取值）。
+var AllProviderTiers = []ProviderTier{ProviderTierPrimary, ProviderTierBackup}
+
+// NormalizeTier 归一化档位：未知值与空值一律回落 primary。
+func NormalizeTier(t ProviderTier) ProviderTier {
+	if t == ProviderTierPrimary || t == ProviderTierBackup {
+		return t
+	}
+	return ProviderTierPrimary
+}
+
+// TierRank 排序权重：primary 在前（仅排序用，见 ProviderTier 语义边界）。
+func (p AiProviderDO) TierRank() int {
+	if p.Tier == ProviderTierPrimary {
+		return 0
+	}
+	return 1
+}
 
 // AiProviderDO LLM Provider 持久化实体；apiKey 用 AES-GCM 加密落库（pkg/crypto.go）。
 //
@@ -63,30 +87,30 @@ const (
 // 显式声明优先是因为同一家上游不同模型能力差异极大（如 GPT-4o 支持视觉、
 // 同厂的 o1-mini 不支持），自动探测无法覆盖，必须留人工纠偏口。
 type AiProviderDO struct {
-	ID             string       `gorm:"primaryKey;size:64" json:"id"`
-	Name           string       `gorm:"size:128"           json:"name"`
-	Kind           ProviderKind `gorm:"size:32"            json:"kind"`
-	APIKey         string       `gorm:"type:text"          json:"-"` // 内部字段，不外露
-	BaseURL        string       `gorm:"size:512"           json:"base_url"`
-	Model          string       `gorm:"size:128"           json:"model"`
-	Alias          string       `gorm:"size:128"           json:"alias"`
-	Tier           ProviderTier `gorm:"size:16"            json:"tier"`
-	Enabled        bool         `gorm:"default:true"       json:"enabled"`
-	ContextWindow  int          `gorm:"default:0"          json:"context_window"`   // 最大输入 token；0 = 走全局默认
-	MaxOutputTokens int         `gorm:"default:0"          json:"max_output_tokens"` // 单次最大输出 token；0 = 不限制
-	CompressRatio  float64      `gorm:"default:0.9"        json:"compress_ratio"`    // 上下文占比达此比例触发压缩
-	Temperature    float64      `gorm:"default:0"          json:"temperature"`       // 0 = 走全局默认
-	TopP           float64      `gorm:"default:0"          json:"top_p"`             // 0 = 走全局默认
-	ThinkingEffort string       `gorm:"size:16;default:''" json:"thinking_effort"`   // 空 = 走全局默认
+	ID              string       `gorm:"primaryKey;size:64" json:"id"`
+	Name            string       `gorm:"size:128"           json:"name"`
+	Kind            ProviderKind `gorm:"size:32"            json:"kind"`
+	APIKey          string       `gorm:"type:text"          json:"-"` // 内部字段，不外露
+	BaseURL         string       `gorm:"size:512"           json:"base_url"`
+	Model           string       `gorm:"size:128"           json:"model"`
+	Alias           string       `gorm:"size:128"           json:"alias"`
+	Tier            ProviderTier `gorm:"size:16"            json:"tier"`
+	Enabled         bool         `gorm:"default:true"       json:"enabled"`
+	ContextWindow   int          `gorm:"default:0"          json:"context_window"`    // 最大输入 token；0 = 走全局默认
+	MaxOutputTokens int          `gorm:"default:0"          json:"max_output_tokens"` // 单次最大输出 token；0 = 不限制
+	CompressRatio   float64      `gorm:"default:0.9"        json:"compress_ratio"`    // 上下文占比达此比例触发压缩
+	Temperature     float64      `gorm:"default:0"          json:"temperature"`       // 0 = 走全局默认
+	TopP            float64      `gorm:"default:0"          json:"top_p"`             // 0 = 走全局默认
+	ThinkingEffort  string       `gorm:"size:16;default:''" json:"thinking_effort"`   // 空 = 走全局默认
 	// ThinkingStyle 思维参数的协议方言；空 = 按 baseURL + 模型名自动探测。
-	ThinkingStyle     string  `gorm:"size:32;default:''"  json:"thinking_style"`
-	SupportsToolCall  *bool   `gorm:"default:null"        json:"supports_tool_call"`
-	SupportsVision    *bool   `gorm:"default:null"        json:"supports_vision"`
-	SupportsReasoning *bool   `gorm:"default:null"        json:"supports_reasoning"`
-	CapabilitiesJSON  string  `gorm:"type:text;column:capabilities_json" json:"capabilities_json"`
-	PricingJSON       string  `gorm:"type:text;column:pricing_json"     json:"pricing_json"`
-	CreatedAt         int64   `gorm:"autoCreateTime:milli" json:"created_at"`
-	UpdatedAt         int64   `gorm:"autoUpdateTime:milli" json:"updated_at"`
+	ThinkingStyle     string `gorm:"size:32;default:''"  json:"thinking_style"`
+	SupportsToolCall  *bool  `gorm:"default:null"        json:"supports_tool_call"`
+	SupportsVision    *bool  `gorm:"default:null"        json:"supports_vision"`
+	SupportsReasoning *bool  `gorm:"default:null"        json:"supports_reasoning"`
+	CapabilitiesJSON  string `gorm:"type:text;column:capabilities_json" json:"capabilities_json"`
+	PricingJSON       string `gorm:"type:text;column:pricing_json"     json:"pricing_json"`
+	CreatedAt         int64  `gorm:"autoCreateTime:milli" json:"created_at"`
+	UpdatedAt         int64  `gorm:"autoUpdateTime:milli" json:"updated_at"`
 }
 
 // TableName 固定表名。
@@ -201,25 +225,25 @@ type ModelConfigFile struct {
 
 // ModelProvider model.json 中的单个 Provider 条目。
 type ModelProvider struct {
-	ID              string       `json:"id"`
-	Name            string       `json:"name"`
-	Kind            ProviderKind `json:"kind"`
-	BaseURL         string       `json:"base_url"`
-	APIKey          string       `json:"api_key"`
-	Model           string       `json:"model"`
-	Alias           string       `json:"alias"`
-	Tier            ProviderTier `json:"tier"`
-	Enabled         *bool        `json:"enabled"`
-	ContextWindow   int          `json:"context_window"`
-	MaxOutputTokens int          `json:"max_output_tokens"`
-	CompressRatio   float64      `json:"compress_ratio"`
-	Temperature     float64      `json:"temperature"`
-	TopP            float64      `json:"top_p"`
-	ThinkingEffort  string       `json:"thinking_effort"`
-	ThinkingStyle   string       `json:"thinking_style"`
-	SupportsToolCall  *bool `json:"supports_tool_call,omitempty"`
-	SupportsVision    *bool `json:"supports_vision,omitempty"`
-	SupportsReasoning *bool `json:"supports_reasoning,omitempty"`
+	ID                string       `json:"id"`
+	Name              string       `json:"name"`
+	Kind              ProviderKind `json:"kind"`
+	BaseURL           string       `json:"base_url"`
+	APIKey            string       `json:"api_key"`
+	Model             string       `json:"model"`
+	Alias             string       `json:"alias"`
+	Tier              ProviderTier `json:"tier"`
+	Enabled           *bool        `json:"enabled"`
+	ContextWindow     int          `json:"context_window"`
+	MaxOutputTokens   int          `json:"max_output_tokens"`
+	CompressRatio     float64      `json:"compress_ratio"`
+	Temperature       float64      `json:"temperature"`
+	TopP              float64      `json:"top_p"`
+	ThinkingEffort    string       `json:"thinking_effort"`
+	ThinkingStyle     string       `json:"thinking_style"`
+	SupportsToolCall  *bool        `json:"supports_tool_call,omitempty"`
+	SupportsVision    *bool        `json:"supports_vision,omitempty"`
+	SupportsReasoning *bool        `json:"supports_reasoning,omitempty"`
 }
 
 // visionModelHints 视觉能力模型名关键词（小写匹配）。

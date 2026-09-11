@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * PinnedPlan：composer 上方的计划胶囊（nomifun 的 pinned-plan 模式）。
+ * PinnedPlan：composer 上方的计划胶囊。
  *
  * <p>默认只显示 `3/7` + 迷你进度条，hover / focus 才展开清单——
  * 随时可见「还剩多少」但不喧宾夺主，也不占用消息流。

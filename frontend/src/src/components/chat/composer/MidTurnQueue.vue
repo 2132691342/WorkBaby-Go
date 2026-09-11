@@ -5,8 +5,8 @@ import { t } from '@/i18n'
 /**
  * 轮次中队列：助手流式回复期间用户可继续输入，消息入队并在当前轮结束后自动出队发送。
  *
- * <p>队列常驻持久化（导航/刷新不丢，ChatInput 负责 store 化），支持暂停自动出队、
- * 逐条编辑、上下排序与立即发送——对标 nomifun 的 CommandQueuePanel（拖拽以上下键替代，零依赖）。
+ * <p>队列持久化（导航 / 刷新不丢，由 ChatInput 负责 store 化），支持暂停自动出队、
+ * 逐条编辑、上下排序与立即发送；排序用上下键而非拖拽，零额外依赖。
  */
 export interface QueuedMessage {
   id: string

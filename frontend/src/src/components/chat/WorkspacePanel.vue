@@ -78,7 +78,8 @@ watch(
 async function load(id: string): Promise<void> {
   loading.value = true
   try {
-    files.value = await apiGet<WorkspaceFile[]>(`/api/v1/chat/workspace/files/${id}`)
+    // 路径与后端路由一致：/chat/workspace/:id/files（此前段序写反，被 catch 吞成空清单）
+    files.value = await apiGet<WorkspaceFile[]>(`/api/v1/chat/workspace/${id}/files`)
   } catch {
     files.value = []
   } finally {

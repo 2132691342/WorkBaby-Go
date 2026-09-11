@@ -248,6 +248,41 @@ func (c *Client) headers() map[string]string {
 	}
 }
 
+// anthropicUserContent 用户消息内容块；图片片段转 Anthropic source(base64) 形态。
+func anthropicUserContent(m *llm.Message) []map[string]any {
+	parts := make([]map[string]any, 0, len(m.Parts)+1)
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+	}
+	for _, p := range m.Parts {
+		switch p.Type {
+		case "text":
+			parts = append(parts, map[string]any{"type": "text", "text": p.Text})
+		case "image_url":
+			u := p.ImageDataURL()
+			mime, data := llm.SplitDataURL(u)
+			if data == "" {
+				continue
+			}
+			if mime == "" {
+				mime = "image/png"
+			}
+			parts = append(parts, map[string]any{
+				"type": "image",
+				"source": map[string]any{
+					"type":       "base64",
+					"media_type": mime,
+					"data":       data,
+				},
+			})
+		}
+	}
+	if len(parts) == 0 {
+		parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+	}
+	return parts
+}
+
 func (c *Client) buildBody(req *llm.ChatRequest, stream bool) map[string]any {
 	// system 单独提取（Anthropic Messages API 顶层 system 字段）。
 	systemParts := []map[string]any{}
@@ -261,7 +296,7 @@ func (c *Client) buildBody(req *llm.ChatRequest, stream bool) map[string]any {
 		}
 		switch m.Role {
 		case llm.RoleUser:
-			convo = append(convo, map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": m.Content}}})
+			convo = append(convo, map[string]any{"role": "user", "content": anthropicUserContent(m)})
 		case llm.RoleAssistant:
 			content := []map[string]any{}
 			if m.Thinking != "" {

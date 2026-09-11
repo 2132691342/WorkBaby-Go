@@ -7,7 +7,7 @@
 - 响应包裹：成功 `{code:0, data:...}`；失败 `{code:<错误码>, message:<文案>, detail?}`。
 - 请求体统一 JSON 绑定（类型不符即返回参数错误）；分页/条数参数由各接口的 `limit` / `k` 查询参数控制。
 - 契约版本：`GET /api/v1/meta/contract`；前端启动比对，不一致显式报错。
-- 错误码按域分段（示例）：2000 段持久化与路径、3000 段 LLM、4000 段工具与审批、5000 段会话与内核、6000 段记忆、8000 段技能、9000 段运行时与脚本。新增错误复用所属段位。
+- 错误码按域分段（新增错误复用所属段位）：1000 通用/文件/路径、2000 配置/持久化、3000 LLM/Provider、4000 工具/命令审批、5000 Agent/Harness（含会话与消息编排）、6000 Memory、7000 Knowledge/RAG、8000 Skill/MCP、9000 Workflow/Pet/Channel/Cron。
 
 ## 端点
 
@@ -108,6 +108,7 @@
 | POST | /ai-provider | 新建 |
 | GET | /ai-provider/available | 可用模型（供会话选择） |
 | GET | /ai-provider/kinds | 支持的协议类型 |
+| GET | /ai-provider/tiers | 合法档位取值（primary/backup，仅排序） |
 | GET | /ai-provider/:id | 详情 |
 | POST | /ai-provider/:id/update | 更新 |
 | POST | /ai-provider/:id/delete | 删除 |
@@ -224,7 +225,8 @@
 | POST | /folders/:id/delete | 删除 |
 | GET | /files/search | 搜索文件 |
 | GET | /files | 文件列表 |
-| POST | /files/upload | 上传（登记本地文件） |
+| POST | /files/upload | 上传（登记本地文件，需本地路径） |
+| POST | /files/upload-data | 上传内存字节（粘贴/拖拽的图片无本地路径） |
 | POST | /files/:id/delete | 删除 |
 | GET | /files/:id/preview-url | 预览地址 |
 
@@ -236,9 +238,14 @@
 |---|---|
 | `sse-ready` | 连接就绪（重放完成） |
 | `ping` | 心跳（前端 watchdog 续期） |
+| `chat:stream.start` | 流开始（携带模型名；前端由建流响应覆盖，不单独消费） |
 | `chat:stream` | 正文增量 |
 | `chat:thinking` | 思维链增量 |
+| `chat:tool-start` | 工具开始执行（前端由 `chat:tool` 落地 running 态，不单独消费） |
+| `chat:steer` | 插话已落库并入队（前端以本地回执提示） |
 | `chat:stats` | 本轮用量（input/output/cache/total/latency） |
+| `chat:turn-start` | 第 N 轮开始（多轮任务轮次推进可见） |
+| `chat:checkpoint` | 检查点已写入（续跑位点轮次） |
 | `chat:skill` | 命中技能（名称/来源/版本/工具白名单/注入字数） |
 | `chat:tool` | 工具调用开始（id/name/arguments/agent/activity） |
 | `chat:tool-result` | 工具结果（id/name/content/error/duration_ms/agent） |

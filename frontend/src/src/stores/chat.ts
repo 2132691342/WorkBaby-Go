@@ -86,6 +86,10 @@ export const useChatStore = defineStore('chat', () => {
   const streamingThinking = ref('')
   const streamingTools = ref<ToolCallInfo[]>([])
   const streamingStats = ref<ChatStats | null>(null)
+  /** 当前轮次（chat:turn-start，1 起）：长任务里「第 N 轮」是还在推进的关键信号。 */
+  const streamingTurn = ref(0)
+  /** 最近检查点位点（chat:checkpoint）：中断/崩溃后续跑提示据此说明从哪一轮接着做。 */
+  const lastCheckpointTurn = ref<number | null>(null)
   /** 本轮命中的 Skill（chat:skill）；流式气泡把它渲染到执行过程时间线首行。 */
   const streamingSkill = ref<SkillHit | null>(null)
   const streamingArtifacts = ref<ArtifactPayload | null>(null)
@@ -249,7 +253,7 @@ export const useChatStore = defineStore('chat', () => {
   async function selectSession(id: string): Promise<void> {
     currentID.value = id
     await loadMessages(id)
-    // 模型选择器跟随会话绑定的 provider（问题2：切到历史会话，顶部徽标/参数展示与实际运行模型一致）
+    // 模型选择器跟随会话绑定的 provider：切到历史会话时，顶部徽标与参数展示要与实际运行模型一致
     const s = sessions.value.find((x) => x.id === id)
     if (s?.provider_id && models.value.some((m) => m.id === s.provider_id)) {
       selectedModelID.value = s.provider_id
@@ -663,6 +667,8 @@ export const useChatStore = defineStore('chat', () => {
     runStartedAt.value = Date.now()
     userCancelled.value = false
     pendingApproval.value = null
+    streamingTurn.value = 0
+    lastCheckpointTurn.value = null
     // 注：本轮新增的 file_changes / artifacts 由流式事件增量累积；
     // 这里不清空——变更面板承载「本会话全部变更历史」，按 run 分组展示。
 
@@ -729,6 +735,8 @@ export const useChatStore = defineStore('chat', () => {
     runStartedAt.value = Date.now()
     userCancelled.value = false
     pendingApproval.value = null
+    streamingTurn.value = 0
+    lastCheckpointTurn.value = null
     try {
       const handle = streamChat(
         { message: '', session_id: sessionID, resume_run_id: runID },
@@ -927,6 +935,8 @@ export const useChatStore = defineStore('chat', () => {
         streamingThinking,
         streamingTools,
         streamingStats,
+        streamingTurn,
+        lastCheckpointTurn,
         streamingSkill,
         stopReason,
         streamingArtifacts,
@@ -1055,6 +1065,8 @@ export const useChatStore = defineStore('chat', () => {
     streamingThinking,
     streamingTools,
     streamingStats,
+    streamingTurn,
+    lastCheckpointTurn,
     streamingSkill,
     streamingArtifacts,
     streamingGenUi,

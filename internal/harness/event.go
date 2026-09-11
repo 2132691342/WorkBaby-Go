@@ -54,8 +54,8 @@ type ToolCallPayload struct {
 }
 
 // ToolResultPayload 工具执行结果事件载荷。
-// Data 携带工具的结构化产出（如 todo 计划快照），供前端渲染专用面板而非解析文本。
-// Refused = true 表示审批拒绝（非故障）：前端展示「已拒绝」态而非错误态。
+// Data 携带工具的结构化产出（如 todo 快照），供前端渲染专用面板而非解析文本；
+// Refused = true 表示审批拒绝（非故障），前端展示「已拒绝」态而非错误态。
 type ToolResultPayload struct {
 	ToolCallID string            `json:"tool_call_id"`
 	Name       string            `json:"name"`

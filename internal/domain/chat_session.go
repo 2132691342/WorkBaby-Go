@@ -12,16 +12,16 @@ const (
 
 // ChatSessionDO 会话持久化实体。
 type ChatSessionDO struct {
-	ID            string        `gorm:"primaryKey;size:64"  json:"id"`
-	Name          string        `gorm:"size:256"             json:"name"`
-	UserID        string        `gorm:"size:64;index"        json:"user_id"`
-	ProviderID    string        `gorm:"size:64;index"        json:"provider_id"`
-	Model         string        `gorm:"size:128"             json:"model"`
-	WorkspaceID   string        `gorm:"size:64;index"        json:"workspace_id"`
+	ID          string `gorm:"primaryKey;size:64"  json:"id"`
+	Name        string `gorm:"size:256"             json:"name"`
+	UserID      string `gorm:"size:64;index"        json:"user_id"`
+	ProviderID  string `gorm:"size:64;index"        json:"provider_id"`
+	Model       string `gorm:"size:128"             json:"model"`
+	WorkspaceID string `gorm:"size:64;index"        json:"workspace_id"`
 	// WorkspacePath 会话绑定的外部工作目录（绝对路径；空 = 默认工作区）。
 	// 绑定后：file/doc/archive/skillrun 工具的沙箱根、工作区面板、exec 的默认 cwd 都指向该目录；
 	// 与 workspace_id（逻辑文件夹树关联 id，历史字段）语义无关。
-	WorkspacePath string `gorm:"size:512"             json:"workspace_path"`
+	WorkspacePath string        `gorm:"size:512"             json:"workspace_path"`
 	Status        SessionStatus `gorm:"size:16"              json:"status"`
 	MessageCount  int           `gorm:"default:0"            json:"message_count"`
 	LastMessageAt int64         `gorm:"default:0"            json:"last_message_at"`
@@ -60,7 +60,7 @@ type ChatSessionPermissionREQ struct {
 	Mode string `json:"mode"`
 }
 
-// ChatSessionModelREQ 切换会话使用的 Provider/模型（问题2：选模型后参数/温度展示跟随该模型配置）。
+// ChatSessionModelREQ 切换会话使用的 Provider/模型（切换后输入框参数与温度展示跟随该模型配置）。
 // ProviderID 与 Model 至少提供一个；只给 Model 时按名字回查 provider。
 type ChatSessionModelREQ struct {
 	ProviderID string `json:"provider_id"`
@@ -126,8 +126,10 @@ var (
 // SendStreamREQ 流式发送入参；temperature/thinkingEffort 为请求级采样参数
 // （三层合并的最上层，nil/空 = 走 provider 级与全局默认）。
 type SendStreamREQ struct {
-	SessionID      string   `json:"session_id"`
-	Content        string   `json:"content"`
+	SessionID string `json:"session_id"`
+	Content   string `json:"content"`
+	// FileIDs 随消息发送的受管文件（图片会转成多模态 part，前提是模型支持视觉）。
+	FileIDs        []string `json:"file_ids,omitempty"`
 	Temperature    *float64 `json:"temperature,omitempty"`
 	ThinkingEffort string   `json:"thinking_effort,omitempty"` // off/low/medium/high
 }

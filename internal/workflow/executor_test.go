@@ -10,7 +10,6 @@ import (
 	"WorkBaby/internal/db"
 	"WorkBaby/internal/domain"
 	"WorkBaby/internal/event"
-	"WorkBaby/internal/pkg"
 	"WorkBaby/internal/repo"
 	"WorkBaby/internal/workflow/nodes"
 	"github.com/glebarez/sqlite"
@@ -156,16 +155,6 @@ func TestExecutorParallelLayer(t *testing.T) {
 	}
 }
 
-
-// failNode 总是失败。
-type failNode struct{ typ domain.WorkflowNodeType }
-
-func (n *failNode) Type() domain.WorkflowNodeType { return n.typ }
-func (n *failNode) Schema() nodes.Schema          { return nodes.Schema{Type: n.typ} }
-func (n *failNode) Execute(ctx context.Context, inputs map[string]any, cfg map[string]any, upstream map[string]any) (map[string]any, error) {
-	return nil, pkg.New(9105, "node intentionally fails", "")
-}
-
 // TestExecutorCancel 取消必须真正打断执行中的 run，终态 cancelled 而非 failed/completed。
 func TestExecutorCancel(t *testing.T) {
 	gdb := newWorkflowTestDB(t)
@@ -236,4 +225,3 @@ func TestExecutorCancel(t *testing.T) {
 		t.Fatalf("status = %s, want cancelled", final.Status)
 	}
 }
-

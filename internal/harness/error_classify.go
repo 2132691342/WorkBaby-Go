@@ -8,9 +8,8 @@ import (
 	"WorkBaby/internal/pkg"
 )
 
-// error_classify.go 运行错误分类：机器可读 kind + 可操作提示。
-//
-// <p>失败不再是一坨原始堆栈，用户能直接看到「去哪调配置」。分类只做模式匹配，不引入新依赖。
+// 运行错误分类：机器可读 kind + 可操作提示（hint 追加到用户可见消息尾部，
+// 用户直接看到「去哪调配置」）。只做关键词模式匹配，不引入新依赖。
 
 // 错误类别（ErrorPayload.Kind）。
 const (

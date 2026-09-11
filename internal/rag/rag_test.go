@@ -169,7 +169,3 @@ func TestReindexReplacesChunksAndFTS(t *testing.T) {
 }
 
 // ===== 检索器 =====
-
-// ===== 加载器 =====
-
-// TestTextLoaderRejectsOversizedFile 超过 maxFileBytes 的输入必须直接失败（防 DoS / 误用）。

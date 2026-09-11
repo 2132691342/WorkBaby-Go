@@ -23,7 +23,7 @@ func (h *Handler) SendStream(req domain.SendStreamREQ) (domain.SendStreamResult,
 		return domain.SendStreamResult{}, domain.ErrSessionInvalid
 	}
 	params := harness.RequestParams{Temperature: req.Temperature, Thinking: llm.ThinkingFromEffort(req.ThinkingEffort)}
-	r, err := h.chatSvc.SendStream(h.ctx, req.SessionID, req.Content, params)
+	r, err := h.chatSvc.SendStream(h.ctx, req.SessionID, req.Content, req.FileIDs, params)
 	if err != nil {
 		return domain.SendStreamResult{}, err
 	}

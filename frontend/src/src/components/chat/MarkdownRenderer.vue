@@ -34,7 +34,7 @@ const props = defineProps<{
 // 两个实例装同一套扩展规则（setupMarkdown），保证流式 → 终态的 DOM 结构一致、不跳动
 const mdStreaming = setupMarkdown(new MarkdownIt({
   html: false,
-  linkify: false,  // M3 档位 1（2026-08-28）：流式关闭 linkify，URL 识别延迟到终态
+  linkify: false,  // 流式关闭 linkify：URL 识别延迟到终态，省掉每帧的链接扫描
   breaks: true     // 流式与终态保持一致：换行渲染口径不同会导致流结束时整段重排
   // streaming 模式不传 highlight，对未闭合代码块也按纯文本处理（性能优先；高亮延迟到终态）
 }))
@@ -59,7 +59,18 @@ const mdFinal = setupMarkdown(new MarkdownIt({
 const streamingRef = computed(() => props.streaming === true)
 // 渲染前剥离 <think> 块：兼容端点把推理写进正文（原生 thinking 走独立通道）
 const contentRef = computed(() => stripThinkBlocks(props.content))
-const throttledContent = useThrottledContent(contentRef, streamingRef)
+
+/**
+ * 节流间隔随正文长度自适应：流式每次刷新都是「全量重新解析 + 全量替换 DOM」，
+ * 成本随长度线性上升；长答案放慢刷新，视觉上反而更跟手（不再一卡一卡地跳字）。
+ */
+const streamInterval = computed(() => {
+  const n = contentRef.value.length
+  if (n < 2000) return 70
+  if (n < 8000) return 130
+  return 200
+})
+const throttledContent = useThrottledContent(contentRef, streamingRef, streamInterval)
 
 // ===== 渲染 =====
 // 优化：流式时 DOMPurify 简化钩子（跳过一些检查以加速 sanitize）
@@ -99,10 +110,10 @@ function renderNow(content: string, isStreaming: boolean): void {
   try {
     const source = stripThinkTags(text)
     const raw = isStreaming ? mdStreaming.render(source) : mdFinal.render(source)
-    // 优化：流式时禁掉 DOMPurify 的 hook callbacks（保留 sanitize 基本能力但跳过 user-data 等检查）
-    renderedHtml.value = isStreaming
-      ? DOMPurify.sanitize(raw, { WHOLE_DOCUMENT: false, RETURN_DOM: false, SANITIZE_DOM: true })
-      : DOMPurify.sanitize(raw)
+    // 流式跳过 DOMPurify：两个 markdown-it 实例都是 html:false，源文本里的 HTML 一律被转义，
+    // 渲染结果不可能带可执行标记；sanitize 的耗时随长度线性上升，是长答案卡顿的主因之一。
+    // 终态（用户会留存/复制的内容）仍然完整 sanitize，双保险不丢。
+    renderedHtml.value = isStreaming ? raw : DOMPurify.sanitize(raw)
     renderFailed.value = false
   } catch (e) {
     // 畸形 markdown（超深嵌套 / 未闭合标签 / 异常 HTML 混排）会让 markdown-it 或 DOMPurify 抛错，

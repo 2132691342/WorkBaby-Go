@@ -6,9 +6,8 @@ import (
 	"WorkBaby/internal/llm"
 )
 
-// system 段裁剪优先级：数值越小越核心。system 消息被所有压缩器无条件保留，
-// 各能力注入又只增不减——没有裁剪序的话，Skill 正文 / Todo / 工作流清单这类
-// 大段材料会吃光小窗口模型的全部预算。
+// system 段裁剪优先级：数值越小越核心。system 消息被压缩器无条件保留，
+// 而能力注入只增不减，没有裁剪序时大段材料会吃光小窗口模型的预算。
 const (
 	PriorityEssential = 10 // 人格 / 环境信息 / 工作区纪律：永不裁剪
 	PriorityHigh      = 30 // 历史归档摘要 / 压缩保留指示
@@ -38,9 +37,8 @@ func (p ContextPiece) contextPriority() int {
 
 // ContextAssembler 按 Add 顺序把各段 system 材料装配为一条 system 消息。
 //
-// 与人格变体解耦：Definition.Persona 只是其中一段（key=persona），记忆/技能/工作区等
-// 段由装配方按需追加。空装配返回 nil（不产生 system 消息）。
-// 超预算裁剪走 BuildWithin：按 Priority 从低到高丢段，essential 永不丢弃。
+// 人格只是其中一段（key=persona），记忆 / 技能 / 工作区等由装配方按需追加；
+// 无段返回 nil（不产生 system 消息），超预算裁剪走 BuildWithin。
 type ContextAssembler struct {
 	pieces []ContextPiece
 }
@@ -69,7 +67,7 @@ func (a *ContextAssembler) Build() *llm.Message {
 }
 
 // BuildWithin 预算内装配：总 rune 数超过 maxRunes 时按 Priority 从低到高丢段
-//（同优先级取后加入者），返回被丢弃段的 key 列表（供可观测）。
+// （同优先级取后加入者），返回被丢弃段的 key 列表（供可观测）。
 // maxRunes<=0 或丢无可丢（只剩 essential）时保留全部剩余段。
 func (a *ContextAssembler) BuildWithin(maxRunes int) (*llm.Message, []string) {
 	if maxRunes <= 0 {
@@ -96,7 +94,6 @@ func (a *ContextAssembler) BuildWithin(maxRunes int) (*llm.Message, []string) {
 	return assemble(pieces), dropped
 }
 
-// assemble 合并段为一条 system 消息；无段返回 nil。
 func assemble(pieces []ContextPiece) *llm.Message {
 	if len(pieces) == 0 {
 		return nil

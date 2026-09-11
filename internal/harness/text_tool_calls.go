@@ -9,9 +9,10 @@ import (
 	"WorkBaby/internal/llm"
 )
 
-// 文本工具调用兜底：部分 OpenAI 兼容端点不支持结构化 tool_calls，把调用意图写成正文。
-// 按 XML 标签 → Markdown 代码块 → 裸 JSON 三种形态解析（name/tool、input/arguments 别名都认）。
-// 安全约束：只认本次 run 暴露的工具名（defs 白名单），单轮最多解析 maxTextToolCalls 个。
+// 文本工具调用兜底：部分 OpenAI 兼容端点不支持结构化 tool_calls，会把调用意图写进正文。
+//
+// 按 XML 标签 → Markdown 代码块 → 裸 JSON 三种形态解析（name/tool、input/arguments 别名都认）；
+// 只认本次 run 暴露的工具名（defs 白名单），单轮最多解析 maxTextToolCalls 个。
 type textToolCall struct {
 	Name      string         `json:"name"`
 	Tool      string         `json:"tool"`
@@ -110,8 +111,7 @@ var nestedToolCallMarkers = []string{
 }
 
 // HasNestedToolCallMarker 检测参数文本里是否嵌着工具调用标记（提示注入防护）。
-//
-// <p>命中即拒绝执行：正常参数（路径 / 命令 / 查询语句）不会包含这些形态；
+// 命中即拒绝执行：正常参数（路径 / 命令 / 查询语句）不会包含这些形态，
 // 误杀率远低于把网页里的伪调用当真执行的风险。
 func HasNestedToolCallMarker(args string) bool {
 	lower := strings.ToLower(args)

@@ -310,10 +310,19 @@ func (c *Client) toChatResponse(r *OpenAIResponse) (*llm.ChatResponse, error) {
 
 type reqMessage struct {
 	Role       llm.RoleType  `json:"role"`
-	Content    string        `json:"content"`
+	Content    any           `json:"content"` // string 或 []reqContentPart（多模态）
 	Name       string        `json:"name,omitempty"`
 	ToolCalls  []reqToolCall `json:"tool_calls,omitempty"`   // assistant 消息携带
 	ToolCallID string        `json:"tool_call_id,omitempty"` // tool 消息携带
+}
+
+// reqContentPart OpenAI 多模态片段（text / image_url）。
+type reqContentPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
 }
 
 type reqToolCall struct {
@@ -334,10 +343,39 @@ type reqTool struct {
 	} `json:"function"`
 }
 
+// openAIContent 有多模态片段时展开为 parts 数组，否则用纯文本（兼容老上游）。
+func openAIContent(m *llm.Message) any {
+	if len(m.Parts) == 0 {
+		return m.Content
+	}
+	parts := make([]reqContentPart, 0, len(m.Parts)+1)
+	if m.Content != "" {
+		parts = append(parts, reqContentPart{Type: "text", Text: m.Content})
+	}
+	for _, p := range m.Parts {
+		switch p.Type {
+		case "text":
+			parts = append(parts, reqContentPart{Type: "text", Text: p.Text})
+		case "image_url":
+			if u := p.ImageDataURL(); u != "" {
+				part := reqContentPart{Type: "image_url"}
+				part.ImageURL = &struct {
+					URL string `json:"url"`
+				}{URL: u}
+				parts = append(parts, part)
+			}
+		}
+	}
+	if len(parts) == 0 {
+		return m.Content
+	}
+	return parts
+}
+
 func toReqMessages(ms []*llm.Message) []reqMessage {
 	out := make([]reqMessage, 0, len(ms))
 	for _, m := range ms {
-		rm := reqMessage{Role: m.Role, Content: m.Content, Name: m.Name, ToolCallID: m.ToolCallID}
+		rm := reqMessage{Role: m.Role, Content: openAIContent(m), Name: m.Name, ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
 			rt := reqToolCall{ID: tc.ID, Type: tc.Type}
 			rt.Function.Name = tc.Function.Name

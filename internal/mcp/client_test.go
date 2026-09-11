@@ -68,33 +68,8 @@ func TestStdioClientHandshakeAndListTools(t *testing.T) {
 	}
 }
 
-func TestStdioClientCallTool(t *testing.T) {
-	c := dialFixture(t, fixtureOK)
-	ctx := context.Background()
-	if _, err := c.Initialize(ctx); err != nil {
-		t.Fatalf("initialize: %v", err)
-	}
-
-	res, err := c.CallTool(ctx, "echo", json.RawMessage(`{"msg":"hi"}`))
-	if err != nil {
-		t.Fatalf("call echo: %v", err)
-	}
-	if res.IsError {
-		t.Fatalf("echo should not be an error result")
-	}
-	if len(res.Content) != 1 || res.Content[0].Text != "echo: hi" {
-		t.Fatalf("echo result = %+v", res.Content)
-	}
-
-	res, err = c.CallTool(ctx, "boom", json.RawMessage(`{}`))
-	if err != nil {
-		t.Fatalf("call boom: %v", err)
-	}
-	if !res.IsError {
-		t.Fatalf("boom should be an error result")
-	}
-}
-
+// TestMCPAdapterExecute 走业务实际入口（Adapter）：成功路径回填内容、isError 路径
+// 既回填原文又给出错误。Client 层的 CallTool 原样返回由此间接覆盖，不再单独设用例。
 func TestMCPAdapterExecute(t *testing.T) {
 	c := dialFixture(t, fixtureOK)
 	ctx := context.Background()
@@ -120,7 +95,6 @@ func TestMCPAdapterExecute(t *testing.T) {
 		t.Fatalf("content = %q, want %q", out.Content, "kaboom")
 	}
 }
-
 
 func TestStdioClientDeadServerFailsCalls(t *testing.T) {
 	c := dialFixture(t, fixtureCrash)
@@ -177,7 +151,6 @@ func TestManagerReloadRegistersAndUnregisters(t *testing.T) {
 		t.Fatalf("status should not be ready after disable: %+v", st)
 	}
 }
-
 
 func TestManagerStartupFailureDegrades(t *testing.T) {
 	toolReg := tool.NewRegistry()

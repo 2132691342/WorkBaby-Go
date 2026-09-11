@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { ChevronDown, Wrench, Eye, Brain, ImageIcon, Sparkles, Clock, AlertTriangle, ZapOff } from '@/components/common/icons'
+import { ChevronDown, Wrench, Eye, Brain, Sparkles, Clock, AlertTriangle, ZapOff } from '@/components/common/icons'
 import type { AvailableModel, CircuitState } from '@/types/api'
 import { t } from '@/i18n'
 
@@ -106,13 +106,9 @@ const recentModels = computed(() => {
     .filter((m): m is AvailableModel => !!m)
 })
 
-// 价格等级计算（可根据实际 pricing 字段扩展）
-function priceLevel(model: AvailableModel): string {
-  // 暂时根据 tier 返回
-  const tier = model.tier?.toLowerCase() ?? ''
-  if (tier === 'premium') return '$$$'
-  if (tier === 'standard') return '$$'
-  return '$'
+/** 档位标签：primary/backup 仅为排序档位（取值由后端 domain.ProviderTier 定义）。 */
+function tierLabel(model: AvailableModel): string {
+  return model.tier === 'backup' ? t('chat.tierBackup') : t('chat.tierPrimary')
 }
 
 /** 供应商品牌识别：返回首字母缩写 + 品牌色（未知供应商回退主题色），替代 emoji/通用图标。 */
@@ -265,7 +261,7 @@ onUnmounted(() => {
               <span class="block truncate font-medium">{{ m.alias || m.model }}</span>
               <span class="block truncate text-[10px] text-wb-muted">{{ m.name }}</span>
             </span>
-            <span class="text-[10px] text-wb-muted">{{ priceLevel(m) }}</span>
+            <span class="text-[10px] text-wb-muted">{{ tierLabel(m) }}</span>
           </button>
         </template>
 
@@ -309,16 +305,11 @@ onUnmounted(() => {
               </template>
               <!-- 能力标签图标 -->
               <span class="flex shrink-0 items-center gap-0.5">
-                <!-- 工具调用 -->
-                <Wrench v-if="m.kind && m.kind.includes('tool')" class="h-3 w-3 text-wb-muted" :title="t('chat.toolCall')" />
-                <!-- 视觉 -->
-                <Eye v-if="m.kind && m.kind.includes('vision')" class="h-3 w-3 text-wb-muted" :title="t('chat.vision')" />
-                <!-- 思考 -->
-                <Brain v-if="m.tier === 'premium'" class="h-3 w-3 text-wb-muted" :title="t('chat.thinking')" />
-                <!-- 图片输出 -->
-                <ImageIcon v-if="m.kind && m.kind.includes('image')" class="h-3 w-3 text-wb-muted" :title="t('chat.imageOut')" />
+                <Wrench v-if="m.tool_call" class="h-3 w-3 text-wb-muted" :title="t('chat.toolCall')" />
+                <Eye v-if="m.vision" class="h-3 w-3 text-wb-muted" :title="t('chat.vision')" />
+                <Brain v-if="m.reasoning" class="h-3 w-3 text-wb-muted" :title="t('chat.thinking')" />
               </span>
-              <span class="text-[10px] text-wb-muted">{{ priceLevel(m) }}</span>
+              <span class="text-[10px] text-wb-muted">{{ tierLabel(m) }}</span>
             </button>
           </div>
         </div>

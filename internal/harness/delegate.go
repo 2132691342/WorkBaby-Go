@@ -25,8 +25,9 @@ type delegateFlight struct {
 }
 
 // Delegate 以指定 Agent 定义跑一个子任务，只把摘要回传给父 Agent（tool.Delegator 实现）。
-// 四重隔离：子 run 只看到「人设 + 任务」；独立预算；工具集只能收缩不能升权；
-// 正文流不进父回答。并发相同 (agent, task) 共享一次执行；事件转发父 sink 供前端展示。
+//
+// 四重隔离：子 run 只看到「人设 + 任务」、独立预算、工具集只能收缩不能升权、正文流不进父回答。
+// 并发相同 (agent, task) 共享一次执行；工具层事件转发父 sink 供前端展示过程。
 func (r *Runner) Delegate(ctx context.Context, agentName, task string) (string, error) {
 	if r.provider == nil || r.tools == nil {
 		return "", pkg.New(5008, "委派不可用：当前运行环境未配置模型或工具", "")

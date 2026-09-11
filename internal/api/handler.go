@@ -607,6 +607,8 @@ func (h *Handler) Startup(ctx context.Context) error {
 	// 文件系统：文件夹树 + 文件托管 + 会话工作区面板（面板与工具链共用会话目录解析）
 	h.folderSvc = service.NewFolderService(repo.NewFolderRepo(gdb))
 	h.fileSvc = service.NewFileService(repo.NewFileRepo(gdb), filepath.Join(paths.Home, "files"))
+	// 附件读取能力：聊天消息的图片附件经此转 data URI 发给多模态模型
+	h.chatSvc.WithFileStore(h.fileSvc)
 	h.workspaceSvc = service.NewWorkspaceService(filepath.Join(paths.Home, "workspaces"), func(sessionID string) string {
 		return h.chatSvc.WorkspaceRoot(h.ctx, sessionID, filepath.Join(paths.Home, "workspaces", sessionID))
 	})

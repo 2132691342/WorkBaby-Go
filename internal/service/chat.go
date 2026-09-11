@@ -25,6 +25,12 @@ import (
 	"WorkBaby/internal/tool/planmode"
 )
 
+// FileStore 附件读取能力（ChatService 只用于把图片附件转成 LLM 多模态 part）。
+type FileStore interface {
+	Get(ctx context.Context, id string) (domain.FileRESP, error)
+	ReadDataURL(ctx context.Context, id string) (string, error)
+}
+
 // ChatService 会话 + 消息编排；接入 harness.Runner 调用真实 LLM。
 type ChatService struct {
 	sessions    *repo.ChatSessionRepo
@@ -35,22 +41,23 @@ type ChatService struct {
 	bus         *event.Bus
 	reg         *registry.Registry
 	tools       *ToolService
-	mem         *memory.Service            // 上下文占用统计（/context 分段）读取长期记忆
-	trust       *TrustService              // 目录信任；nil = 关闭
-	planStore   *planmode.Store            // 计划模式状态；nil = 不启用
-	mu          sync.Mutex                 // 串行化 session seq 自增与并发 run 拒绝
-	runs        *runRegistry               // 活动 run 注册中心（按 sessionID → cancel）；用于前端「停止」按钮
-	checkpoints harness.CheckpointStore    // 检查点存储（SQL 默认；nil = 关闭）
-	events      *event.RunEventLog         // run 事件日志：分配序号 + 缓存，供 SSE 断线重放
-	runRec      *repo.RunRecordRepo        // 运行历史索引；nil = 不记录
-	execs       *harness.ExecutionRegistry // 执行平面
-	blocks      *repo.MessageBlockRepo     // 消息块持久化；nil = 不落块
-	approval    *ApprovalService           // 工具策略门 ask 决策的人工审批；nil = 策略门不启用
-	steers      *steerQueue                // run 中用户新消息的注入队列（steering / follow-up）
-	seqMu       sync.Mutex                 // 保护 seqs
-	seqs        map[string]int64           // 会话消息序号分配水位（工具消息与注入消息统一分配，防撞号）
-	dataHome    string                     // 数据根（paths.Home）；目录策略默认根由此派生
-	caps        *capability.Registry       // 能力注册表：上下文装配 / 工具暴露 / run 后沉淀三条通道
+	mem         *memory.Service                     // 上下文占用统计（/context 分段）读取长期记忆
+	trust       *TrustService                       // 目录信任；nil = 关闭
+	planStore   *planmode.Store                     // 计划模式状态；nil = 不启用
+	mu          sync.Mutex                          // 串行化 session seq 自增与并发 run 拒绝
+	runs        *runRegistry                        // 活动 run 注册中心（按 sessionID → cancel）；用于前端「停止」按钮
+	checkpoints harness.CheckpointStore             // 检查点存储（SQL 默认；nil = 关闭）
+	events      *event.RunEventLog                  // run 事件日志：分配序号 + 缓存，供 SSE 断线重放
+	runRec      *repo.RunRecordRepo                 // 运行历史索引；nil = 不记录
+	execs       *harness.ExecutionRegistry          // 执行平面
+	blocks      *repo.MessageBlockRepo              // 消息块持久化；nil = 不落块
+	files       FileStore                           // 受管文件读取（消息附件 → 多模态 part）；nil = 附件降级为文本
+	approval    *ApprovalService                    // 工具策略门 ask 决策的人工审批；nil = 策略门不启用
+	steers      *steerQueue                         // run 中用户新消息的注入队列（steering / follow-up）
+	seqMu       sync.Mutex                          // 保护 seqs
+	seqs        map[string]int64                    // 会话消息序号分配水位（工具消息与注入消息统一分配，防撞号）
+	dataHome    string                              // 数据根（paths.Home）；目录策略默认根由此派生
+	caps        *capability.Registry                // 能力注册表：上下文装配 / 工具暴露 / run 后沉淀三条通道
 	skillSync   func(context.Context, string) error // 技能目录同步钩子（run 前按会话工作区叠加）；nil = 不启用
 }
 
@@ -109,6 +116,9 @@ func (s *ChatService) WithApprovalService(a *ApprovalService) *ChatService { s.a
 
 // WithTrustService 注入目录信任；仅在 harness 装配 PathTrust 时才生效。
 func (s *ChatService) WithTrustService(t *TrustService) *ChatService { s.trust = t; return s }
+
+// WithFileStore 注入附件读取能力（图片 → data URI）；nil 时消息附件只降级为文本提示。
+func (s *ChatService) WithFileStore(f FileStore) *ChatService { s.files = f; return s }
 
 // WithDataHome 注入数据根（paths.Home）；目录策略（记忆/快照默认根）由此派生。
 // 必须在装配会话级目录解析闭包前调用。
@@ -382,6 +392,7 @@ func toMessageRESP(m *domain.MessageDO) domain.MessageRESP {
 		CacheRead:    m.CacheRead,
 		TotalTokens:  m.TotalTokens,
 		LatencyMs:    m.LatencyMs,
+		Attachments:  m.Attachments(),
 		Cost:         m.Cost,
 		CreatedAt:    m.CreatedAt,
 		UpdatedAt:    m.UpdatedAt,
@@ -429,7 +440,11 @@ func (s *ChatService) CreateSession(ctx context.Context, req *domain.ChatSession
 
 // resolveDefaultProviderModel 选择一个 enabled 的 Provider 与模型：
 //   - 优先按 row.Model 精确匹配 ai_providers.model 字段（前端只传 model 时回查 provider）
+//   - 同名模型命中多个时取 tier 档位更高者（primary 优先）
 //   - 退路：取第一个 enabled 的 Provider
+//
+// 注意：这里只是「选出唯一答案」，不做失败重试与故障切换——
+// 运行期如果该 Provider 报错，由熔断状态与用户在模型选择器手动切换处理。
 //
 // 返回 (providerID, model, found)；found=false 时调用方应继续走 5003 错误（用户根本没配 Provider）。
 func (s *ChatService) resolveDefaultProviderModel(ctx context.Context, modelHint string) (string, string, bool) {
@@ -440,7 +455,7 @@ func (s *ChatService) resolveDefaultProviderModel(ctx context.Context, modelHint
 	if err != nil || len(all) == 0 {
 		return "", "", false
 	}
-	// 1) model 精确匹配（trim 后比较；优先 tier1）
+	// 1) model 精确匹配（trim 后比较；同名模型取 primary 档）
 	if modelHint != "" {
 		hint := strings.TrimSpace(modelHint)
 		var hit *domain.AiProviderDO
@@ -450,7 +465,7 @@ func (s *ChatService) resolveDefaultProviderModel(ctx context.Context, modelHint
 				continue
 			}
 			if strings.TrimSpace(p.Model) == hint {
-				if hit == nil || p.Tier < hit.Tier {
+				if hit == nil || p.TierRank() < hit.TierRank() {
 					hit = &p
 				}
 			}
@@ -579,7 +594,7 @@ func (s *ChatService) WorkspaceRoot(ctx context.Context, sessionID, defRoot stri
 	return defRoot
 }
 
-// UpdateSessionModel 切换会话使用的 Provider/模型（问题2：聊天输入框的思考强度/温度展示跟随所选模型）。
+// UpdateSessionModel 切换会话使用的 Provider/模型（切换后输入框的思考强度与温度展示跟随新模型）。
 // 规则：ProviderID 非空时以它为准（校验 enabled）；否则按 Model 名字回查 provider；
 // 两者都未命中返回 3003 便于前端提示「模型不可用」。
 func (s *ChatService) UpdateSessionModel(ctx context.Context, id string, req *domain.ChatSessionModelREQ) (*domain.ChatSessionRESP, error) {
@@ -801,7 +816,7 @@ func (s *ChatService) blocksByMessage(ctx context.Context, sessionID string) (ma
 
 // SendStream 立即返回 runID/消息 ID；流式事件经 harness → event.Bus → api 层 → chat:* 推前端。
 // params 为请求级采样参数（温度/思考开关；零值 = 不覆盖）。
-func (s *ChatService) SendStream(ctx context.Context, sessionID, content string, params harness.RequestParams) (*domain.SendStreamResult, error) {
+func (s *ChatService) SendStream(ctx context.Context, sessionID, content string, fileIDs []string, params harness.RequestParams) (*domain.SendStreamResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -823,12 +838,18 @@ func (s *ChatService) SendStream(ctx context.Context, sessionID, content string,
 	// v1：chat 固定走 default Agent；前端 Agent 选择器待 P3 接入。
 	// 首条用户消息自动命名（无历史消息可推导时），让会话在列表里可辨认。
 	firstTurn := ses.MessageCount == 0
-	ids, err := s.prepareRun(ctx, ses, content, harness.ScopeChatTurn, defaultAgentName)
+	atts := s.resolveAttachments(ctx, fileIDs)
+	ids, err := s.prepareRun(ctx, ses, content, atts, harness.ScopeChatTurn, defaultAgentName)
 	if err != nil {
 		return nil, err
 	}
 	if firstTurn {
-		s.autoTitleSession(ctx, ses, content)
+		// 只有附件没有文字时（纯图片提问）用附件名兜底，避免会话标题为空
+		titleSrc := content
+		if strings.TrimSpace(titleSrc) == "" && len(atts) > 0 {
+			titleSrc = atts[0].Name
+		}
+		s.autoTitleSession(ctx, ses, titleSrc)
 	}
 
 	// 异步跑；用可取消 ctx（前端「停止」→ CancelStream 触发）
@@ -861,7 +882,7 @@ type runIDs struct {
 //
 // chat / 后台任务共用：同一会话串行落 seq，run 身份在消息落库前就已确定
 // （runID 需先写入消息行，供前端按 run 过滤事件）。调用方负责持 s.mu。
-func (s *ChatService) prepareRun(ctx context.Context, ses *domain.ChatSessionDO, content string, scope harness.Scope, agentName string) (runIDs, error) {
+func (s *ChatService) prepareRun(ctx context.Context, ses *domain.ChatSessionDO, content string, atts []domain.MessageAttachment, scope harness.Scope, agentName string) (runIDs, error) {
 	seqStart, err := s.allocSeq(ctx, ses.ID, 2)
 	if err != nil {
 		return runIDs{}, err
@@ -889,6 +910,7 @@ func (s *ChatService) prepareRun(ctx context.Context, ses *domain.ChatSessionDO,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	userMsg.SetAttachments(atts)
 	if err := s.messages.Insert(ctx, userMsg); err != nil {
 		return runIDs{}, err
 	}
@@ -909,6 +931,38 @@ func (s *ChatService) prepareRun(ctx context.Context, ses *domain.ChatSessionDO,
 	ses.LastMessageAt = now
 	_ = s.sessions.Update(ctx, ses)
 	return runIDs{RunID: runID, UserMsgID: userMsg.ID, AssistantMsgID: assistantMsg.ID}, nil
+}
+
+// resolveAttachments 受管文件 ID → 消息附件；图片标为 image，多模态链路据此展开。
+func (s *ChatService) resolveAttachments(ctx context.Context, ids []string) []domain.MessageAttachment {
+	if s.files == nil || len(ids) == 0 {
+		return nil
+	}
+	out := make([]domain.MessageAttachment, 0, len(ids))
+	for _, id := range ids {
+		f, err := s.files.Get(ctx, id)
+		if err != nil {
+			pkg.L.Warn("resolve attachment failed", "fileID", id, "err", err.Error())
+			continue
+		}
+		name := f.OriginalName
+		if name == "" {
+			name = f.Name
+		}
+		kind := domain.AttachmentFile
+		if strings.HasPrefix(f.MimeType, "image/") {
+			kind = domain.AttachmentImage
+		}
+		out = append(out, domain.MessageAttachment{
+			ID:   f.ID,
+			Name: name,
+			MIME: f.MimeType,
+			Size: f.Size,
+			Kind: kind,
+			URL:  "/files/files/" + f.ID,
+		})
+	}
+	return out
 }
 
 // nextSeq 会话下一条消息序号（数据库当前最大值 + 1）。
@@ -1024,7 +1078,7 @@ func (s *ChatService) RunAgent(ctx context.Context, sessionID, userInput, agentN
 	if agentName == "" {
 		agentName = defaultAgentName
 	}
-	ids, err := s.prepareRun(ctx, ses, userInput, harness.ScopeTask, agentName)
+	ids, err := s.prepareRun(ctx, ses, userInput, nil, harness.ScopeTask, agentName)
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -1132,7 +1186,7 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 		s.failRun(ctx, runID, ses.ID, assistantMsgID, err)
 		return harness.RunResult{Reason: harness.ReasonError, Err: err}
 	}
-	llmMsgs, err := s.toLLMMessages(hists)
+	llmMsgs, err := s.toLLMMessagesWithVision(ctx, hists, s.providerVision(ctx, ses.ProviderID))
 	if err != nil {
 		s.failRun(ctx, runID, ses.ID, assistantMsgID, err)
 		return harness.RunResult{Reason: harness.ReasonError, Err: err}
@@ -1202,6 +1256,20 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 				persistBlock(e, domain.BlockSkill, skillBlockPayload(st))
 			}
 			s.emit(runID, ses.ID, "chat:stream.start", map[string]any{"model": ses.Model})
+		case harness.EventTurnStart:
+			// 第 N 轮开始（Turn 从 0 计，这里归一为 1 起）：长任务的轮次推进需要用户可见，
+			// 前端据此在流式区标注「第 N 轮」并在时间线按轮分段，而不是一坨无结构的步骤。
+			if isChild {
+				return
+			}
+			s.emit(runID, ses.ID, "chat:turn-start", map[string]any{"turn": e.Turn + 1})
+		case harness.EventCheckpoint:
+			// 检查点已写入（每轮工具回填后）：这是「崩溃/中断后能续跑到哪」的位点。
+			// 前端记录最近位点，续跑提示据此说明从哪一轮接着做；失败不影响 run。
+			if isChild {
+				return
+			}
+			s.emit(runID, ses.ID, "chat:checkpoint", map[string]any{"turn": e.Turn + 1})
 		case harness.EventTurnDelta:
 			if isChild {
 				return
@@ -1643,8 +1711,8 @@ func (s *ChatService) buildSystem(ctx context.Context, ses *domain.ChatSessionDO
 	if ins := compactInstructions(ses); ins != "" {
 		asm.Add(harness.ContextPiece{Key: "compact", Title: "压缩保留指示", Body: ins, Priority: harness.PriorityHigh})
 	}
-	// 验证提醒：上一轮修改了文件但没跑任何命令验证 → 注入提醒（nomifun 的
-	// MISSING_VERIFICATION 模式）——改了代码却直接交付是「跑不完整任务」的常见根因。
+	// 验证提醒：上一轮修改了文件但没执行任何命令 → 注入提醒。
+	// 改了代码却直接交付是「任务跑不完整」的常见根因。
 	if hint := s.verificationReminder(ctx, ses.ID); hint != "" {
 		asm.Add(harness.ContextPiece{Key: "verify", Title: "验证提醒", Body: hint, Priority: harness.PriorityLow})
 	}
@@ -1745,7 +1813,24 @@ func skillBlockPayload(st *capability.RunState) map[string]any {
 // toLLMMessages 历史消息 → llm.Message；重建 assistant 的工具调用与 tool 消息上下文。
 // 过滤孤儿 tool 消息（tool_call_id 无前置 assistant 匹配）与空 assistant 占位——
 // 不剥掉上游 LLM 会以 400 拒绝整轮。本条用户消息由 prepareRun 先落库，随历史一并带出。
+// toLLMMessages 无附件展开的口径（上下文占用透视等非 run 路径）。
 func (s *ChatService) toLLMMessages(hists []domain.MessageDO) ([]*llm.Message, error) {
+	return s.buildLLMMessages(context.Background(), hists, false)
+}
+
+// toLLMMessagesWithVision vision=true 时把最后一条用户消息的图片附件转成多模态 part
+// （历史轮次的图片只降级为文本提示，避免老图片反复吃 token）。
+func (s *ChatService) toLLMMessagesWithVision(ctx context.Context, hists []domain.MessageDO, vision bool) ([]*llm.Message, error) {
+	return s.buildLLMMessages(ctx, hists, vision)
+}
+
+func (s *ChatService) buildLLMMessages(ctx context.Context, hists []domain.MessageDO, vision bool) ([]*llm.Message, error) {
+	lastUser := -1
+	for i := range hists {
+		if hists[i].Role == domain.MessageRoleUser {
+			lastUser = i
+		}
+	}
 	knownToolIDs := make(map[string]struct{}, len(hists))
 	for _, m := range hists {
 		if m.Role != domain.MessageRoleAssistant || m.ToolCalls == "" {
@@ -1782,6 +1867,9 @@ func (s *ChatService) toLLMMessages(hists []domain.MessageDO) ([]*llm.Message, e
 			}
 		}
 		lm := &llm.Message{Role: llm.RoleType(m.Role), Content: m.Content, Thinking: m.Thinking}
+		if m.Role == domain.MessageRoleUser {
+			s.applyAttachments(ctx, lm, &m, i == lastUser && vision)
+		}
 		if m.Role == domain.MessageRoleTool {
 			lm.ToolCallID = m.ToolCallID
 			// 空 tool 结果兜底：GLM 等厂商对空 content 一律 400（1214）；剥掉会破坏配对，故填充
@@ -1804,6 +1892,47 @@ func (s *ChatService) toLLMMessages(hists []domain.MessageDO) ([]*llm.Message, e
 		out = append(out, lm)
 	}
 	return out, nil
+}
+
+// applyAttachments 把消息附件挂到 LLM 消息上：图片 + 模型支持视觉 → 多模态 part；
+// 其余（含不支持视觉时的图片）降级为文本行，保证模型至少知道用户附了什么。
+func (s *ChatService) applyAttachments(ctx context.Context, lm *llm.Message, m *domain.MessageDO, vision bool) {
+	atts := m.Attachments()
+	if len(atts) == 0 {
+		return
+	}
+	var lines []string
+	for _, a := range atts {
+		if vision && a.Kind == domain.AttachmentImage && s.files != nil {
+			u, err := s.files.ReadDataURL(ctx, a.ID)
+			if err == nil && u != "" {
+				lm.Parts = append(lm.Parts, llm.ContentPart{Type: "image_url", ImageURL: &llm.ImageURL{URL: u}})
+				continue
+			}
+		}
+		lines = append(lines, "[附件] "+a.Name+"（"+a.MIME+"）")
+	}
+	if len(lines) == 0 {
+		return
+	}
+	note := strings.Join(lines, "\n")
+	if lm.Content == "" {
+		lm.Content = note
+		return
+	}
+	lm.Content += "\n" + note
+}
+
+// providerVision 会话所用 Provider 是否支持视觉（显式声明 > 模型名推断）。
+func (s *ChatService) providerVision(ctx context.Context, providerID string) bool {
+	if providerID == "" {
+		return false
+	}
+	p, err := s.provRepo.GetByID(ctx, providerID)
+	if err != nil {
+		return false
+	}
+	return p.SupportsVisionEffective()
 }
 
 // nextSeqAfter 计算当前最大 seq（供工具消息续接）。

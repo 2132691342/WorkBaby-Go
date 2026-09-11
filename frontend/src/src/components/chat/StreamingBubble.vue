@@ -23,6 +23,8 @@ const {
   streamingThinking,
   streamingTools,
   streamingStats,
+  streamingTurn,
+  lastCheckpointTurn,
   streamingSkill,
   streamingArtifacts,
   streamingGenUi,
@@ -55,8 +57,9 @@ watch(streamingThinking, async () => {
 </script>
 
 <template>
-  <!-- 原型 .bubble：正文裸排，块级内容（思考 / 时间线 / 卡片）各自自带边框 -->
-  <div class="text-[13px] leading-[1.78] text-wb-ink">
+  <!-- 与历史消息同一套语义类（.bubble）：流式与终态正文的排版完全同源，
+       避免「流式时一个样、结束后另一个样」的跳变 -->
+  <div class="bubble">
     <!-- 建流瞬时错误自动重试提示（限流/5xx；正文恢复自动消失） -->
     <div
       v-if="streamingRetry"
@@ -93,10 +96,22 @@ watch(streamingThinking, async () => {
       </div>
     </div>
 
-    <!-- 任务步骤时间线（工具调用可视化）；焦点模式下隐藏（与 Claude Code focus 一致）。
-         原型 .tl 自带边框与底色，这里不再套染色包装（消除双重边框） -->
+    <!-- 轮次标记：多轮任务里「第 N 轮」是「还在干活」的关键信号；
+         单轮（turn<=1）不显示，避免给简单问答加噪声。检查点位点仅在多轮时一并展示。 -->
+    <div
+      v-if="!focusMode && streamingTurn > 1"
+      class="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] text-wb-muted"
+    >
+      <span class="font-medium text-wb-ink/70">{{ t('chat.turnLabel', streamingTurn) }}</span>
+      <span v-if="lastCheckpointTurn" class="text-wb-muted/70">
+        {{ t('chat.checkpointLabel', lastCheckpointTurn) }}
+      </span>
+    </div>
+
+    <!-- 任务步骤时间线（工具调用可视化）；焦点模式下隐藏。
+         compact：流式期间工具行内联进正文流，不加外框（盒子会把阅读节奏切成两段）。 -->
     <div v-if="!focusMode && (tools.length > 0 || streamingSkill)" class="mb-3">
-      <TaskTimeline :tools="tools" :skill-hit="streamingSkill" />
+      <TaskTimeline :tools="tools" :skill-hit="streamingSkill" compact />
     </div>
 
     <!-- 交付成果卡片（present_files 交付） -->

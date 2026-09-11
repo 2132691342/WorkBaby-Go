@@ -8,11 +8,10 @@ import (
 	"WorkBaby/internal/llm"
 )
 
-// Definition 声明式 Agent 定义——「Agent 是什么」：
-// 人设 / 工具策略 / 记忆策略 / 运行预算。纯数据，不携带依赖注入。
+// Definition 声明式 Agent 定义：人设 / 工具策略 / 记忆策略 / 运行预算。纯数据，无依赖注入。
 //
-// 装配方（service）按 Definition 物化每次 run 的 Runner 配置；同一定义可随处运行
-// （chat / workflow 节点 / cron / 子 Agent），替换每调用点的硬编码参数。
+// 装配方（service）按定义物化每次 run 的 Runner 配置，因此同一定义可在 chat / 工作流节点 /
+// 定时任务 / 子 Agent 中复用，替换各调用点的硬编码参数。
 type Definition struct {
 	Name        string       // 唯一名（"default" / "coding" / "research" / "writer"）
 	Description string       // 一句话职责（未来供 UI 选择与命令面板）
@@ -22,9 +21,8 @@ type Definition struct {
 	Budget      Budget       // 运行预算
 }
 
-// ToolPolicy Agent 层工具白名单/黑名单。
-// 与执行层（tool/policy.go，P1-D）分工：本结构是「Agent 该带哪些工具」的声明，
-// 执行层负责 allow/ask/deny 运行时裁决。
+// ToolPolicy Agent 层的工具白名单/黑名单：声明「本 Agent 该带哪些工具」。
+// 与执行层 internal/tool/policy.go 分工：后者负责 allow/ask/deny 的运行时裁决。
 type ToolPolicy struct {
 	Allow    []string // 白名单（glob）；空 = 全部可见工具
 	Deny     []string // 黑名单（glob）
@@ -74,12 +72,8 @@ func (d Definition) PersonaSystemMessage() *llm.Message {
 	return llm.SystemMessage(d.Persona)
 }
 
-// FilterTools 按 Agent 策略过滤工具定义：
-//   - 命中 Deny 的剔除；
-//   - Allow 非空时仅保留命中 Allow 的（支持 glob）；
-//   - MaxTools>0 时按顺序截断。
-//
-// 在装配方既有过滤（启用状态 / Skill 白名单）之后应用。
+// FilterTools 按 Agent 策略过滤工具定义：Deny 命中剔除 → Allow 非空时仅留命中（glob）
+// → MaxTools 按序截断。在装配方既有过滤（启用状态 / Skill 白名单）之后应用。
 func (d Definition) FilterTools(defs []llm.ToolDefinition) []llm.ToolDefinition {
 	if len(d.Tools.Allow) == 0 && len(d.Tools.Deny) == 0 && d.Tools.MaxTools <= 0 {
 		return defs
@@ -104,10 +98,8 @@ func (d Definition) FilterTools(defs []llm.ToolDefinition) []llm.ToolDefinition 
 // 工具 schema 与历史消息抢同一个 prompt 预算，MCP 挂载几十个工具时会挤掉对话历史。
 const ToolDefBudgetPercent = 15
 
-// TrimToolDefs 按 token 预算裁剪工具定义：超限时从尾部（调用方给定的优先级序）丢弃，
-// 保留至少 minToolDefs 个，返回保留集与被丢弃的工具名。
-//
-// 只在下游明确给出预算时生效；maxTokens<=0 视为不限。
+// TrimToolDefs 按 token 预算裁剪工具定义：超限时从尾部丢弃（调用方给定的优先级序），
+// 至少保留 minToolDefs 个，返回保留集与被丢弃的工具名；maxTokens<=0 视为不限。
 func TrimToolDefs(defs []llm.ToolDefinition, maxTokens int) ([]llm.ToolDefinition, []string) {
 	if maxTokens <= 0 || len(defs) <= minToolDefs {
 		return defs, nil
@@ -137,10 +129,7 @@ func matchAnyGlob(name string, pats []string) bool {
 // Persona 语义段（内置 Agent 复用）。
 const (
 	// personaMethodology 通用工作方法论：内置 Agent 共用，避免各人设各维护一套原则。
-	//
-	// 空泛的「先理解再行动」无法指导行为——这里每条都是可判定的动作约束，
-	// 尤其是「用工具验证结果」与「失败要改道」：前者决定任务能否真正闭环，
-	// 后者决定模型会不会在原地空转把轮次预算烧光。
+	// 每条都是可判定的动作约束——空泛的「先理解再行动」无法指导行为。
 	personaMethodology = `
 ## 工作原则
 1. 先探查再动手：信息不足时先用 file_list / file_read / doc_reader / knowledge_search 看清现状，不凭猜测下结论。

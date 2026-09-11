@@ -63,6 +63,12 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
       return { type: 'content', data: p.delta ?? '' }
     case 'chat:thinking':
       return { type: 'thinking', data: p.delta ?? '' }
+    case 'chat:turn-start':
+      // 第 N 轮开始（N 从 1 计）：长任务里轮次推进是重要的「还在干活」信号
+      return { type: 'turn_start', data: { turn: Number(p.turn ?? 0) } }
+    case 'chat:checkpoint':
+      // 检查点已写入：这是崩溃/中断后续跑的位点，前端记录下来用于续跑说明
+      return { type: 'checkpoint', data: { turn: Number(p.turn ?? 0) } }
     case 'chat:stats':
       // 每轮结束累计用量 → decoder 的 stats 分支（setStats）
       return {
@@ -202,11 +208,20 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
   }
 }
 
-/** SSE 事件名白名单（订阅这些类型，其余忽略）。 */
+/**
+ * SSE 事件名白名单：只有「前端需要渲染」的事件才登记。
+ *
+ * <p>后端还会发一些前端无需感知的事件（`chat:stream.start` 已由建流响应覆盖、
+ * `chat:tool-start` 由 `chat:tool` 一并落地为 running 状态、`chat:steer` 由本地 toast 回执、
+ * harness 的 `agent.*` 属内核内部事件不跨层），这些**有意不登记**——
+ * 白名单是「关心的子集」，不等于「后端事件全集」，不要因为对不上就误判为漏收。
+ */
 const EVENT_NAMES = [
   'chat:stream',
   'chat:thinking',
   'chat:stats',
+  'chat:turn-start',
+  'chat:checkpoint',
   'chat:skill',
   'chat:tool',
   'chat:tool-result',
@@ -241,7 +256,7 @@ const EVENT_NAMES = [
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8000
 /**
- * 双看门狗阈值（对齐 go-micro / trpc-agent 的 transport 设计）：
+ * 双看门狗阈值：
  *   - IDLE_MS：完全无任何事件（含 ping）的最大容忍时间——TCP 未断但数据不通；
  *   - STALL_MS：仅 ping 而无业务事件的最大容忍时间——服务端心跳还在发，
  *     但 chat:stream / chat:thinking 都卡住，常见于模型侧抽风或 SSE 缓冲满。

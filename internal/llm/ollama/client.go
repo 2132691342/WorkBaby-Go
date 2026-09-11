@@ -171,10 +171,26 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
+// ollamaImages 抽取图片片段的裸 base64（Ollama 不接受 data URI 前缀）。
+func ollamaImages(m *llm.Message) []string {
+	out := []string{}
+	for _, p := range m.Parts {
+		_, data := llm.SplitDataURL(p.ImageDataURL())
+		if data != "" {
+			out = append(out, data)
+		}
+	}
+	return out
+}
+
 func (c *Client) buildBody(req *llm.ChatRequest, stream bool) map[string]any {
 	msgs := []map[string]any{}
 	for _, m := range req.Messages {
 		entry := map[string]any{"role": string(m.Role), "content": m.Content}
+		// Ollama 图片走独立的 images 字段（裸 base64，不带 data URI 前缀）
+		if imgs := ollamaImages(m); len(imgs) > 0 {
+			entry["images"] = imgs
+		}
 		if len(m.ToolCalls) > 0 {
 			entry["tool_calls"] = toolcall.ToOpenAI(toNormalized(m.ToolCalls))
 		}

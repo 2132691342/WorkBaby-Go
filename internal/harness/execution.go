@@ -7,8 +7,8 @@ import (
 )
 
 // Scope 一次执行的入口作用域。
-// 所有 Agent 轮次必须归属一个 run：chat 每轮铸造一个，工作流步骤 / 子 Agent /
-// 后台任务注册时 parent_run_id 指向其父 run，形成统一执行拓扑。
+// 所有 Agent 轮次必须归属一个 run：chat 每轮登记一个，工作流步骤 / 子 Agent / 后台任务
+// 的 parent_run_id 指向其父 run，形成统一执行拓扑。
 type Scope string
 
 const (
@@ -45,8 +45,8 @@ type ExecutionRun struct {
 	UpdatedAt   int64          `json:"updated_at"`
 }
 
-// ExecutionRegistry 单进程执行注册表：铸造 / 查询 / 终态 / 活跃列表。
-// 桌面单进程语义：进程内可见即可，跨重启不恢复（恢复由 P1-C 的 SQL 检查点承担）。
+// ExecutionRegistry 单进程执行注册表：登记 / 查询 / 终态 / 活跃列表。
+// 桌面单进程语义：进程内可见即可，跨重启不恢复（续跑由 SQL 检查点承担）。
 type ExecutionRegistry struct {
 	mu    sync.RWMutex
 	runs  map[string]*ExecutionRun

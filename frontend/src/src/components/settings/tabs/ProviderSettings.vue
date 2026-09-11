@@ -24,7 +24,7 @@ import type { AiProvider } from '@/types/api'
 const settings = useSettingsStore()
 const toast = useToast()
 const dialog = useDialog()
-const { providers, providerKinds, loading, error, circuitStates, chatDefaults } = storeToRefs(settings)
+const { providers, providerKinds, providerTiers, loading, error, circuitStates, chatDefaults } = storeToRefs(settings)
 const { load, updateProvider, removeProvider, testProvider, resetCircuit, loadChatDefaults, saveChatDefaults } = settings
 
 onMounted(() => {
@@ -55,7 +55,7 @@ type ProviderDraft = {
 
 const emptyDraft = (): ProviderDraft => ({
   name: '', kind: '', api_key: '', base_url: '', model: '', alias: '',
-  tier: 'tier1', enabled: true,
+  tier: 'primary', enabled: true,
   context_window: null, max_output_tokens: null,
   compress_ratio: 0.9, temperature: null, top_p: null,
   thinking_effort: null, thinking_style: '',
@@ -91,7 +91,8 @@ function startEditProvider(p: AiProvider): void {
     base_url: p.base_url ?? '',
     model: p.model,
     alias: p.alias ?? '',
-    tier: p.tier,
+    // 历史脏值（如 tier1）回填时归一到后端枚举，避免保存后路由优先级失效
+    tier: providerTiers.value.includes(p.tier) ? p.tier : providerTiers.value[0] ?? 'primary',
     enabled: p.enabled,
     context_window: p.context_window ?? null,
     max_output_tokens: p.max_output_tokens ?? null,
@@ -415,9 +416,9 @@ defineExpose({ load })
         </Field>
         <Field :label="t('settings.tier')">
           <select v-model="draft.tier" class="input">
-            <option value="tier1">tier1</option>
-            <option value="tier2">tier2</option>
+            <option v-for="tr in providerTiers" :key="tr" :value="tr">{{ t(`settings.tier_${tr}`) }}</option>
           </select>
+          <p class="mt-1 fs12 text-wb-muted">{{ t('settings.tierHint') }}</p>
         </Field>
         <Field :label="t('common.status')">
           <div class="flex-r" style="cursor: pointer" @click="draft.enabled = !draft.enabled">
