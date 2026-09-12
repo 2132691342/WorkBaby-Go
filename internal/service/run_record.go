@@ -67,6 +67,9 @@ func (s *ChatService) finishRunRecord(ctx context.Context, runID string, res har
 		"output_tokens": res.Accumulated.OutputTokens,
 		"cache_read":    res.Accumulated.CacheReadTokens,
 		"total_tokens":  res.Accumulated.TotalTokens,
+		"llm_ms":        res.Timings.LLMMs,
+		"tools_ms":      res.Timings.ToolsMs,
+		"compress_ms":   res.Timings.CompressMs,
 		"ended_at":      time.Now().UnixMilli(),
 	}
 	if err := s.runRec.Finish(ctx, runID, upd); err != nil {
@@ -80,6 +83,7 @@ func toRunRecordRESP(r *domain.RunRecordDO) domain.RunRecordRESP {
 		Status: r.Status, Reason: r.Reason, Turns: r.Turns,
 		InputTokens: r.InputTokens, OutputTokens: r.OutputTokens,
 		CacheRead: r.CacheRead, TotalTokens: r.TotalTokens,
+		LLMMs: r.LLMMs, ToolsMs: r.ToolsMs, CompressMs: r.CompressMs,
 		StartedAt: r.StartedAt, EndedAt: r.EndedAt,
 	}
 }

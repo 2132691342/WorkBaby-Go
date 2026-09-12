@@ -68,28 +68,32 @@ foreach ($pkg in $pkgs) {
 $pkgAll = @($dep.Keys | Where-Object { $_ -like 'WorkBaby/internal/pkg*' })
 $domainAll = @($dep.Keys | Where-Object { $_ -like 'WorkBaby/internal/domain*' })
 $repoAll = @($dep.Keys | Where-Object { $_ -like 'WorkBaby/internal/repo*' })
+$apiAll = @($dep.Keys | Where-Object { $_ -like 'WorkBaby/internal/api*' })
 $serviceAll = @($dep.Keys | Where-Object { $_ -like 'WorkBaby/internal/service*' })
 $serverAll = @($dep.Keys | Where-Object { $_ -like 'WorkBaby/internal/server*' })
 $harnessAll = @($dep.Keys | Where-Object { $_ -like 'WorkBaby/internal/harness*' })
 
-# repo / domain 禁止依赖的 internal 上层包（repo 仅允许 domain/db/repo/pkg）
+# repo / domain 禁止依赖的 internal 上层包（repo 仅允许 domain/db/repo/pkg）。
+# api-no-repo：组合根已下沉 internal/bootstrap（App 持有 repo），api 层经 App 取用——
+# 业务数据访问必须经 service，api 不得直接 import repo。
 $capDomain = @('WorkBaby/internal/api','WorkBaby/internal/service','WorkBaby/internal/server',
     'WorkBaby/internal/harness','WorkBaby/internal/llm','WorkBaby/internal/tool','WorkBaby/internal/skill',
     'WorkBaby/internal/mcp','WorkBaby/internal/memory','WorkBaby/internal/rag','WorkBaby/internal/workflow',
-    'WorkBaby/internal/media','WorkBaby/internal/pet','WorkBaby/internal/channel','WorkBaby/internal/cron',
+    'WorkBaby/internal/pet','WorkBaby/internal/channel','WorkBaby/internal/cron',
     'WorkBaby/internal/runtime','WorkBaby/internal/config','WorkBaby/internal/event')
 
 # server 允许依赖 api/domain/event/pkg/gin，禁止 service/repo/能力域
 $forbidServer = @('WorkBaby/internal/service','WorkBaby/internal/repo','WorkBaby/internal/db',
     'WorkBaby/internal/harness','WorkBaby/internal/llm','WorkBaby/internal/tool','WorkBaby/internal/skill',
     'WorkBaby/internal/mcp','WorkBaby/internal/memory','WorkBaby/internal/rag','WorkBaby/internal/workflow',
-    'WorkBaby/internal/media','WorkBaby/internal/pet','WorkBaby/internal/channel','WorkBaby/internal/cron',
+    'WorkBaby/internal/pet','WorkBaby/internal/channel','WorkBaby/internal/cron',
     'WorkBaby/internal/runtime','WorkBaby/internal/config')
 
 Assert-NoImports 'pkg-no-internal' $pkgAll @('WorkBaby/internal')
 # domain 允许依赖叶子工具包 internal/pkg，禁止依赖其他任何 internal 业务包。
 Assert-NoImports 'domain-no-upward' $domainAll @('WorkBaby/internal') @('WorkBaby/internal/pkg')
 Assert-NoImports 'repo-no-upward' $repoAll $capDomain
+Assert-NoImports 'api-no-repo' $apiAll @('WorkBaby/internal/repo')
 Assert-NoImports 'service-no-http' $serviceAll @('github.com/gin-gonic','github.com/wailsapp')
 Assert-NoImports 'server-no-downward' $serverAll $forbidServer
 Assert-NoImports 'harness-no-http' $harnessAll @('github.com/gin-gonic','github.com/wailsapp')

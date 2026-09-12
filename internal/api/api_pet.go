@@ -113,8 +113,9 @@ func (h *Handler) PetToggleMode() (map[string]any, error) {
 		return nil, pkg.New(9405, "window not ready", "")
 	}
 	if h.petMode {
-		// 退出桌宠态：还原尺寸/位置/最小尺寸/置顶，恢复普通窗口行为
+		// 退出桌宠态：还原尺寸/位置/最小尺寸/置顶 + 清空命中区域，恢复普通窗口行为
 		h.petX, h.petY = wruntime.WindowGetPosition(h.ctx)
+		_ = pet.ClearHitRegion()
 		wruntime.WindowSetSize(h.ctx, h.mainW, h.mainH)
 		wruntime.WindowSetPosition(h.ctx, h.mainX, h.mainY)
 		wruntime.WindowSetMinSize(h.ctx, mainMinWidth, mainMinHeight)
@@ -132,6 +133,19 @@ func (h *Handler) PetToggleMode() (map[string]any, error) {
 		wruntime.EventsEmit(h.ctx, "pet:show", nil)
 	}
 	return map[string]any{"mode": petModeName(h.petMode)}, nil
+}
+
+// SetPetClickThrough 设置桌宠命中区域：区域外像素不接收点击，交给下层窗口。
+// 前端按可见元素包围盒上报物理像素矩形；enabled=false 或空列表恢复整窗可交互。
+func (h *Handler) SetPetClickThrough(req domain.PetClickThroughREQ) (map[string]any, error) {
+	if !req.Enabled || len(req.Rects) == 0 {
+		_ = pet.ClearHitRegion()
+		return map[string]any{"enabled": false}, nil
+	}
+	if err := pet.ApplyHitRegion(req.Rects); err != nil {
+		return nil, pkg.Wrap(9407, "apply pet hit region failed", err)
+	}
+	return map[string]any{"enabled": true, "rects": len(req.Rects)}, nil
 }
 
 // PetMove 桌宠拖拽：相对位移。

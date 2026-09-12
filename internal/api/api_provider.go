@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 
 	"WorkBaby/internal/domain"
+	"WorkBaby/internal/llm"
 	"WorkBaby/internal/pkg"
 	"WorkBaby/internal/service"
 )
@@ -71,6 +72,12 @@ func (h *Handler) ListProviderTiers() ([]domain.ProviderTier, error) {
 	return domain.AllProviderTiers, nil
 }
 
+// ListProviderPresets 内置常见模型服务预设：前端「新增模型」一键预填 kind/base_url/models，
+// 新增一个兼容 provider 不需要写任何代码。
+func (h *Handler) ListProviderPresets() ([]llm.ProviderPreset, error) {
+	return llm.ProviderPresets(), nil
+}
+
 // TestProviderConnect 校验 Provider 字段完整性并测试连通。
 func (h *Handler) TestProviderConnect(id string) error {
 	return h.provSvc.TestConnect(h.ctx, id)
@@ -80,7 +87,7 @@ func (h *Handler) TestProviderConnect(id string) error {
 // 语义：CLOSED = registry 已构建可用；OPEN = 未构建/构建失败（reason 说明原因）；
 // DISABLED = 用户在设置里关闭（不参与构建，也就不该展示成「熔断」）。
 func (h *Handler) GetCircuitStatus() ([]domain.ProviderCircuitRESP, error) {
-	ps, err := h.provRepo.List(h.ctx)
+	ps, err := h.app.ProvRepo.List(h.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +121,7 @@ func (h *Handler) syncProviders() {
 	if err := h.provSvc.SaveModelFile(h.ctx, filepath.Join(h.paths.Home, "model.json")); err != nil {
 		pkg.L.Warn("save model.json failed", "err", err)
 	}
-	if pwds, lerr := h.provRepo.List(h.ctx); lerr == nil {
+	if pwds, lerr := h.app.ProvRepo.List(h.ctx); lerr == nil {
 		_ = h.reg.Build(pwds, func(encrypted string) (string, error) {
 			return h.cipher.Decrypt(encrypted)
 		})
@@ -123,7 +130,7 @@ func (h *Handler) syncProviders() {
 
 // ResetCircuit 重置指定 provider 的熔断（重新构建实例并标记就绪）。
 func (h *Handler) ResetCircuit(id string) (map[string]any, error) {
-	p, err := h.provRepo.GetByID(h.ctx, id)
+	p, err := h.app.ProvRepo.GetByID(h.ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +155,7 @@ func (h *Handler) ReloadProvidersFromFile() (map[string]any, error) {
 		return nil, pkg.Wrap(2005, "sync model.json to db failed", err)
 	}
 	// 重建 Registry（含解密）
-	if pwds, lerr := h.provRepo.List(h.ctx); lerr == nil {
+	if pwds, lerr := h.app.ProvRepo.List(h.ctx); lerr == nil {
 		_ = h.reg.Build(pwds, func(encrypted string) (string, error) {
 			return h.cipher.Decrypt(encrypted)
 		})

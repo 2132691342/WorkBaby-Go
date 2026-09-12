@@ -60,6 +60,24 @@ const streamingRef = computed(() => props.streaming === true)
 // 渲染前剥离 <think> 块：兼容端点把推理写进正文（原生 thinking 走独立通道）
 const contentRef = computed(() => stripThinkBlocks(props.content))
 
+// streamSafeMarkdown 流式期间的最小修复：未闭合的 code fence（最后一个 ``` 奇数个）
+// 自动补一个闭合 ```——避免流到一半时 markdown-it 把"```python"当成正常段落渲染，
+// 等下一字符落库再回炉重渲造成 layout shift / 闪烁。终态模式不做（避免污染落库内容）。
+//
+// 只影响渲染管道；contentRef 的源仍是 props.content（流结束时 rAF 重渲到终态视图）。
+function streamSafeMarkdown(text: string): string {
+  if (!text) return text
+  // 数行内 ``` 出现次数；奇数说明少了一个闭合。
+  let count = 0
+  let idx = 0
+  while ((idx = text.indexOf('```', idx)) !== -1) {
+    count++
+    idx += 3
+  }
+  if (count % 2 === 1) return text + '\n```'
+  return text
+}
+
 /**
  * 节流间隔随正文长度自适应：流式每次刷新都是「全量重新解析 + 全量替换 DOM」，
  * 成本随长度线性上升；长答案放慢刷新，视觉上反而更跟手（不再一卡一卡地跳字）。
@@ -71,6 +89,10 @@ const streamInterval = computed(() => {
   return 200
 })
 const throttledContent = useThrottledContent(contentRef, streamingRef, streamInterval)
+// 流式期才做"未闭合 code fence 自动补齐"修复；终态视图直接渲染源（落库内容不被修改）。
+const renderableContent = computed(() =>
+  streamingRef.value ? streamSafeMarkdown(throttledContent.value) : throttledContent.value,
+)
 
 // ===== 渲染 =====
 // 优化：流式时 DOMPurify 简化钩子（跳过一些检查以加速 sanitize）
@@ -147,15 +169,9 @@ async function enhance(): Promise<void> {
 }
 
 /**
- * 容器内点击的一次性事件委托。
- * v-html 重写的是容器的 innerHTML，容器自身的监听器始终存活，故挂一次即可覆盖全部重渲染。
- *
- * <p>两类拦截：
- * <ul>
- *   <li>链接：一律 preventDefault 后交系统浏览器打开——WebView 内导航会把
- *       整个 SPA 页面替换掉，应用随之假死；</li>
- *   <li>代码块复制按钮：位于 details&gt;summary 内时需阻断 summary 的折叠切换。</li>
- * </ul>
+ * 容器内点击的一次性事件委托（v-html 只换 innerHTML，容器监听器始终存活）。
+ * 链接一律 preventDefault 后交系统浏览器打开（WebView 内导航会替换整个 SPA）；
+ * 代码块复制按钮需阻断所在 details>summary 的折叠切换。
  */
 function onBodyClick(e: MouseEvent): void {
   const target = e.target instanceof Element ? e.target : null
@@ -185,7 +201,7 @@ onMounted(() => {
 // throttled 已是最终值且不再变化，非 immediate 的 watch 永不触发，
 // renderedHtml 永远是空串 → 「流式可见、结束后整条消息空白」的根因。
 watch(
-  throttledContent,
+  renderableContent,
   (v) => {
     renderNow(v, streamingRef.value)
     if (!streamingRef.value) void enhance()

@@ -1,11 +1,8 @@
 package harness
 
-// 工具调用洋葱链：把横切关注点拆成可组合的一层一层，替代原先 148 行的过程式 execOne。
-//
+// 工具调用洋葱链：横切关注点拆成可组合的层，每层只做一件事并返回「继续 / 短路」。
 // 顺序即语义（外 → 内）：暴露 → 解析 → 参数 → 注入防护 → 目录信任 → 策略门
-//                      → 停滞 → 循环/预算 → 幂等恢复 → 执行。
-// 每层只做一件事并返回「继续 / 短路」二值决策：新增一道守卫只需插入一层，
-// 不必再改动主流程，也不会与既有守卫的执行顺序耦合。
+// → 停滞 → 循环/预算 → 幂等恢复 → 执行。新增守卫只需插入一层。
 
 import (
 	"context"
@@ -62,6 +59,7 @@ func chain(layers ...toolHandler) toolHandler {
 func (r *Runner) toolChain() toolHandler {
 	return chain(
 		r.layerExposed,
+		r.layerToolSearch,
 		r.layerResolve,
 		r.layerValidateArgs,
 		r.layerInjectionGuard,
@@ -131,14 +129,20 @@ func (r *Runner) layerPathTrust(tc *toolCallCtx) *llm.Message {
 	return nil
 }
 
-// layerPolicyGate 工具策略门——统一护栏链的单层裁决点。
-//
-// 实现 RiskClassifier 的工具（exec / run_skill_script）按 per-call 命令级风险裁决；
-// 其余工具显式 Allow 即放行、ask 才按静态风险问。放行后 ctx 标记 GuardChain（单层闸门）。
-func (r *Runner) layerPolicyGate(tc *toolCallCtx) *llm.Message {
+// layerPolicyGate 工具策略门：实现 RiskClassifier 的工具按 per-call 风险裁决，
+// 其余工具显式 Allow 即放行、ask 才按静态风险问。
+// 未装配策略门时直接放行且不标记护栏链（该标记是「已裁决过」的凭据，谎报会让工具内审批兜底失效）。
+func (r *Runner) layerPolicyGate(tc *toolCallCtx) (msg *llm.Message) {
 	if r.hooks.ToolGate == nil {
 		return nil
 	}
+	// 通过本层的所有路径（Allow / Yolo / 已批准）统一标记，工具内部据此跳过自有审批，
+	// 消除同一次调用被问两遍；拒绝路径返回非 nil，不标记。
+	defer func() {
+		if msg == nil {
+			tc.ctx = tool.WithGuardChain(tc.ctx)
+		}
+	}()
 	desc := tc.tool.Name() + "(" + string(tc.call.Arguments) + ")"
 	risk := ""
 	cmdLevel := false // 工具给出了 per-call 命令级裁决
@@ -172,13 +176,28 @@ func (r *Runner) layerPolicyGate(tc *toolCallCtx) *llm.Message {
 	return nil
 }
 
+// toolCallSignature 工具调用签名（name + 键序归一化的参数）。JSON 反序列化后再序列化，
+// map 键按字典序输出——同一调用换个参数书写顺序（{"a":1,"b":2} vs {"b":2,"a":1}）仍判为重复；
+// 非法 JSON 回退原文。并行与串行路径共用（计数在 loopMu 下）。
+func toolCallSignature(name string, args json.RawMessage) string {
+	var v any
+	if err := json.Unmarshal(args, &v); err != nil {
+		return name + "|" + string(args)
+	}
+	norm, err := json.Marshal(v)
+	if err != nil {
+		return name + "|" + string(args)
+	}
+	return name + "|" + string(norm)
+}
+
 // layerStagnation 停滞检测：同名同参连续出现（仅串行路径共享 state）。
 // 命中不是「拒绝」，而是熔断信号：置 Stagnant 让主循环收尾。
 func (r *Runner) layerStagnation(tc *toolCallCtx) *llm.Message {
 	if tc.state == nil {
 		return nil
 	}
-	key := tc.call.Name + "|" + string(tc.call.Arguments)
+	key := toolCallSignature(tc.call.Name, tc.call.Arguments)
 	if key == tc.state.LastToolKey {
 		tc.state.SameKeyCount++
 	} else {
@@ -201,7 +220,7 @@ func (r *Runner) layerLoopBudget(tc *toolCallCtx) *llm.Message {
 	if r.cfg.LoopLimit <= 0 && r.cfg.MaxToolCalls <= 0 {
 		return nil
 	}
-	key := tc.call.Name + "|" + string(tc.call.Arguments)
+	key := toolCallSignature(tc.call.Name, tc.call.Arguments)
 	r.loopMu.Lock()
 	if r.loopHits == nil {
 		r.loopHits = map[string]int{}
@@ -253,12 +272,12 @@ func (r *Runner) layerExecute(tc *toolCallCtx) *llm.Message {
 	cancel()
 	durationMs := time.Since(start).Milliseconds()
 
-	// 工具后处理缝：逐字段覆盖结果（脱敏 / 富化），先于事件与幂等记忆
-	if r.hooks.AfterToolCall != nil {
-		r.hooks.AfterToolCall(tc.ctx, tc.call.Name, tc.call.Arguments, &result)
+	// 工具后处理缝（多槽）：逐字段覆盖结果（脱敏 / 富化），先于事件与幂等记忆
+	for _, hook := range r.hooks.AfterToolCalls {
+		hook(tc.ctx, tc.call.Name, tc.call.Arguments, &result)
 	}
 
-	content := truncate(result.Content, tc.resultLimit)
+	content := truncateResult(result.Content, tc.resultLimit)
 	errMsg := ""
 	if result.Err != nil {
 		errMsg = result.Err.Error()
@@ -277,6 +296,7 @@ func (r *Runner) layerExecute(tc *toolCallCtx) *llm.Message {
 		Meta:       result.Meta,
 		Data:       result.Data,
 		Refused:    result.Refused,
+		UIHint:     tool.MetaOf(tc.tool).UIHint,
 	}})
 
 	// 幂等记忆：仅记成功调用（失败/拒绝不记，Resume 时重试）
@@ -317,4 +337,17 @@ func refusedContent(name string, reason RefusedReason, detail string) string {
 		return `{"refused":true,"reason_code":"` + string(reason) + `"}`
 	}
 	return string(bs)
+}
+
+// truncateResult 工具结果回填截断：rune 安全切 + 显式标注（让模型知道内容被裁剪，
+// 避免把截断处当成完整结果）。n 为 rune 数；未装配上限（<=0）原样返回。
+func truncateResult(s string, n int) string {
+	if n <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "\n... (truncated)"
 }

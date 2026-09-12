@@ -57,7 +57,7 @@ WorkBaby/
 │   ├── service/                  # ③ 业务编排层（事务边界；不写 SQL；不引 gin/Wails）
 │   ├── repo/                     # ④ 持久层（GORM；不引上层）
 │   ├── domain/                   # ⑤ 域模型（一个聚合根一个文件，DO/DTO/REQ/VO/RESP 同居一处）
-│   ├── harness/                  # ⑥ Agent 内核（runner/event/checkpoint/middleware）
+│   ├── harness/                  # ⑥ Agent 内核（runner/event/checkpoint/usage）
 │   ├── llm/                      # ⑦ LLM 适配（provider + openai/anthropic/ollama/registry/toolcall）
 │   ├── tool/                     # ⑧ 工具系统（registry + exec/file/http/websearch/webfetch/...）
 │   ├── skill/                    # ⑨ Skill（parser/registry/builtin）

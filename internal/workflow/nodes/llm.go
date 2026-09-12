@@ -38,12 +38,8 @@ type ReactResult struct {
 // 避免 nodes 包直接依赖 harness —— 保持 workflow 为叶子包。
 type ReactFunc func(ctx context.Context, req ReactRequest) (ReactResult, error)
 
-// LLMNode 调用 LLM 生成文本。
-//
-// cfg 必填 providerID/model；可选 systemPrompt / userPromptTemplate / temperature；
-// 可选 tools（工具名数组）+ maxTurns：配置后走 ReAct（模型可多轮调用工具），
-// 未配置或装配方未提供 ReactFunc 时退化为单次补全。
-// 用户提示词优先 upstream.userPrompt，其次 cfg.userPromptTemplate。
+// LLMNode 调用 LLM 生成文本。配置 tools + maxTurns 且装配了 ReactFunc 时走 ReAct 多轮工具循环，
+// 否则退化为单次补全；用户提示词优先 upstream.userPrompt，其次 cfg.userPromptTemplate。
 type LLMNode struct {
 	reg       *registry.Registry
 	react     ReactFunc
@@ -168,15 +164,26 @@ func (n *LLMNode) Execute(ctx context.Context, inputs map[string]any, cfg map[st
 	}
 	var text strings.Builder
 	var usage llm.TokenUsage
+	var streamErr error
 	for chunk := range stream {
 		if chunk.Err != nil {
-			return nil, pkg.Wrap(9105, "LLM 流式错误", chunk.Err)
+			// 不提前返回：排空到 channel 关闭，避免上游生产者在满缓冲的 send 上永久阻塞
+			if streamErr == nil {
+				streamErr = chunk.Err
+			}
+			continue
+		}
+		if streamErr != nil {
+			continue
 		}
 		text.WriteString(chunk.Delta.Content)
 		text.WriteString(chunk.Delta.Thinking)
 		if chunk.FinalUsage != nil {
 			usage = *chunk.FinalUsage
 		}
+	}
+	if streamErr != nil {
+		return nil, pkg.Wrap(9105, "LLM 流式错误", streamErr)
 	}
 	out := map[string]any{"text": text.String(), "usage": usage, "providerID": providerID}
 	// 补全路径同样计量：不落库的话工作流 LLM 节点的 token 消耗会完全不可见

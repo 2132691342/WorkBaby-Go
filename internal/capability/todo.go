@@ -12,7 +12,7 @@ import (
 
 // TodoStore 计划存取最小接口（对齐 tool/todo.Store，避免包耦合）。
 type TodoStore interface {
-	Load(sessionID string) ([]domain.TodoItem, error)
+	Load(ctx context.Context, sessionID string) ([]domain.TodoItem, error)
 }
 
 // Todo 计划能力：把会话当前待办计划作为常驻 system 段每轮回显。
@@ -40,7 +40,7 @@ func (t *Todo) Preload(ctx context.Context, c *PreloadCtx) ([]harness.ContextPie
 	if t == nil || t.store == nil {
 		return nil, nil
 	}
-	items, err := t.store.Load(c.SessionID)
+	items, err := t.store.Load(ctx, c.SessionID)
 	if err != nil || len(items) == 0 {
 		return nil, nil // 无计划 / 存储异常：静默跳过，不阻断 run
 	}

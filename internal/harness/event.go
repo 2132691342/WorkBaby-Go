@@ -67,6 +67,9 @@ type ToolResultPayload struct {
 	Refused    bool              `json:"refused,omitempty"`
 	// RefusedReason 拒绝原因枚举（harness.RefusedReason）：前端与上层可编程式反应，不解析文案。
 	RefusedReason string `json:"refused_reason,omitempty"`
+	// UIHint 结果分型（tool.ToolMeta.UIHint：diff / memory / workflow…）：前端差异化渲染，
+	// 显式声明优先于内容嗅探。
+	UIHint string `json:"ui_hint,omitempty"`
 }
 
 // UsagePayload run 终止/轮次结束事件的 token 用量。

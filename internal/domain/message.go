@@ -28,6 +28,18 @@ const (
 	MessageStatusArchived  MessageStatus = "archived"  // 已归档：/compact 剔出上下文（UI仍可见）
 )
 
+// MessageContextScope 消息是否进入 LLM 上下文。
+//
+// 消息分层：UI 专属消息（界面提示、genui 包装、系统通知）可完整落库并在界面上回放，
+// 但不参与上下文装配——前端可放心新增消息形态而不污染模型上下文。
+// 零值按 MessageScopeLLM 处理（历史数据与既有写入路径无需回填）。
+type MessageContextScope string
+
+const (
+	MessageScopeLLM MessageContextScope = "llm" // 进入 LLM 上下文（默认）
+	MessageScopeUI  MessageContextScope = "ui"  // 仅界面可见
+)
+
 // MessageStopReason 流式停止原因。
 type MessageStopReason string
 
@@ -111,6 +123,8 @@ type MessageDO struct {
 	ToolCallID   string            `gorm:"size:64"              json:"tool_call_id"`    // role=tool 时关联的调用 ID
 	ToolCalls    string            `gorm:"type:text"            json:"tool_calls_json"` // role=assistant 时序列化的工具调用
 	Status       MessageStatus     `gorm:"size:16"              json:"status"`
+	// ContextScope 消息分层：ui = 仅界面可见（不进 LLM 上下文）；空/llm = 正常参与。
+	ContextScope MessageContextScope `gorm:"size:16"            json:"context_scope"`
 	StopReason   MessageStopReason `gorm:"size:32"          json:"stop_reason"`
 	Model        string            `gorm:"size:128"             json:"model"`
 	InputTokens  int               `gorm:"default:0"            json:"input_tokens"`
@@ -174,6 +188,8 @@ type MessageRESP struct {
 	ToolCallID   string              `json:"tool_call_id"`
 	ToolCalls    string              `json:"tool_calls_json"`
 	Status       MessageStatus       `json:"status"`
+	// ContextScope 消息分层：ui = 仅界面可见（不进 LLM 上下文）。
+	ContextScope MessageContextScope `json:"context_scope"`
 	StopReason   MessageStopReason   `json:"stop_reason"`
 	Model        string              `json:"model"`
 	InputTokens  int                 `json:"input_tokens"`

@@ -161,6 +161,74 @@ func TestExecutorParallelLayer(t *testing.T) {
 	}
 }
 
+// TestExecutorResumeFrom 断点续跑复用已完成节点：a 不重跑、b 正常执行、终态 completed。
+//
+// 这条不变量是「进程重启后工作流能接着跑」的地基：重跑已完成节点会重复副作用，
+// 而漏跑未完成节点会让结果静默缺失。
+func TestExecutorResumeFrom(t *testing.T) {
+	gdb := newWorkflowTestDB(t)
+	wfRepo := repo.NewWorkflowRepo(gdb)
+	execRepo := repo.NewWorkflowExecutionRepo(gdb)
+	nodeRepo := repo.NewWorkflowNodeExecutionRepo(gdb)
+	ctx := context.Background()
+	a := &mockNode{typ: domain.WorkflowNodeHTTP, out: map[string]any{"v": 1}}
+	b := &mockNode{typ: domain.WorkflowNodeCode, out: map[string]any{"sum": 2}}
+
+	ex := New(ExecutorConfig{
+		DB: gdb, WFRepo: wfRepo, ExecRepo: execRepo, NodeRepo: nodeRepo, Bus: event.New(),
+		Nodes: []nodes.Node{a, b},
+	})
+
+	row := &domain.WorkflowDO{
+		ID: "WORKFLOW_RESUME", Name: "resume",
+		Graph: `{"nodes":[
+			{"id":"a","type":"http","config":{"url":"https://x"}},
+			{"id":"b","type":"code","deps":["a"],"config":{"script":"return 1;"}}
+		],"outputs":{"sum":"b.sum"}}`,
+		Enabled: true,
+	}
+	if err := wfRepo.Create(ctx, row); err != nil {
+		t.Fatalf("create wf: %v", err)
+	}
+
+	// 构造中断现场：a 已完成、b 未跑、执行处于 paused（等价于进程重启后的排空态）
+	const execID = "WFEXEC_RESUME"
+	now := time.Now().UnixMilli()
+	if err := execRepo.Create(ctx, &domain.WorkflowExecutionDO{
+		ID: execID, WorkflowID: "WORKFLOW_RESUME",
+		Status: domain.WorkflowStatusPaused, Inputs: `{}`, StartedAt: now,
+	}); err != nil {
+		t.Fatalf("create exec: %v", err)
+	}
+	if err := nodeRepo.Create(ctx, &domain.WorkflowNodeExecutionDO{
+		ID: "WFNODE_A", ExecutionID: execID, NodeID: "a",
+		NodeType: domain.WorkflowNodeHTTP, Status: domain.NodeStatusRunning, StartedAt: now,
+	}); err != nil {
+		t.Fatalf("create node a: %v", err)
+	}
+	if err := nodeRepo.MarkFinished(ctx, "WFNODE_A", domain.NodeStatusCompleted, `{"v":1}`, ""); err != nil {
+		t.Fatalf("finish node a: %v", err)
+	}
+
+	if err := ex.ResumeFrom(ctx, execID); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+
+	if got := a.calls.Load(); got != 0 {
+		t.Fatalf("已完成节点不得重跑，a.calls=%d", got)
+	}
+	if got := b.calls.Load(); got != 1 {
+		t.Fatalf("未完成节点应执行一次，b.calls=%d", got)
+	}
+	final, err := execRepo.GetByID(ctx, execID)
+	if err != nil {
+		t.Fatalf("get exec: %v", err)
+	}
+	if final.Status != domain.WorkflowStatusCompleted {
+		t.Fatalf("status = %s, want completed", final.Status)
+	}
+}
+
 // TestExecutorCancel 取消必须真正打断执行中的 run，终态 cancelled 而非 failed/completed。
 func TestExecutorCancel(t *testing.T) {
 	gdb := newWorkflowTestDB(t)

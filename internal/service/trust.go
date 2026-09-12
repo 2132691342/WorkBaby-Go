@@ -13,14 +13,9 @@ import (
 	"WorkBaby/internal/repo"
 )
 
-// TrustService 工作目录信任（工作目录信任三态）。
-//
-// 三态语义：allow 直行 / ask 执行前询问（未登记目录的默认态） / deny 永不执行。
-// 判定沿祖先链就近上溯——用户信任 D:\projects 即信任其下全部子目录，
-// 未登记任何祖先时恒为 ask（fail-closed，不落库，避免用临时目录污染登记表）。
-//
-// roots 是恒信任的内置根（会话工作区 + 数据目录），无需也无法被撤销：
-// 工具默认就在这些目录里干活，把它们纳入询问只会制造噪声。
+// TrustService 工作目录信任三态：allow 直行 / ask 执行前询问 / deny 永不执行。
+// 判定沿祖先链就近上溯，未登记任何祖先时恒为 ask（fail-closed，不落库）。
+// roots 为恒信任的内置根（会话工作区与数据目录），不可撤销。
 type TrustService struct {
 	repo     *repo.WorkspaceTrustRepo
 	roots    []string

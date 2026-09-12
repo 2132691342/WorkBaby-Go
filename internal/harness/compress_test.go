@@ -25,9 +25,7 @@ func toolCallMsg(id, name string) *llm.Message {
 	}
 }
 
-// assertPairingIntact 断言消息序列满足上游 LLM 的工具配对协议：
-// 每条 tool 消息的 tool_call_id 都能在前置 assistant.tool_calls 中找到；
-// 每个带 tool_calls 的 assistant 后面紧跟覆盖其全部调用 id 的 tool 结果。
+// assertPairingIntact 断言消息序列满足上游工具配对协议（无孤儿 tool、无悬空 tool_calls）。
 func assertPairingIntact(t *testing.T, ms []*llm.Message) {
 	t.Helper()
 	seen := map[string]bool{}
@@ -57,11 +55,8 @@ func assertPairingIntact(t *testing.T, ms []*llm.Message) {
 	}
 }
 
-// TestMicroCompressorPreservesToolPairing 回归：压缩绝不拆散 assistant(tool_calls) 与其 tool 结果。
-// 旧实现第一遍只删 tool 结果（assistant 悬空）、第二遍盲切（尾部孤儿 tool），两条路都会
-// 触发上游 400「tool result's tool id not found」。
-//
-// 两种布局各跑一遍：多工具段（折叠路径）与「切点恰好落在工具对中间」（第二遍截断回退路径）。
+// TestMicroCompressorPreservesToolPairing 压缩绝不拆散 assistant(tool_calls) 与其 tool 结果
+// （拆散会触发上游 400）。两种布局各跑一遍：多工具段折叠、切点落在工具对中间。
 func TestMicroCompressorPreservesToolPairing(t *testing.T) {
 	big := strings.Repeat("工具结果很长", 40)
 	cases := []struct {
@@ -133,20 +128,17 @@ func TestRunnerContextBudgetCompress(t *testing.T) {
 	assert.Contains(t, res.Content, "done")
 }
 
-// TestToolResultTruncateRuneSafe 回归：截断必须落在 rune 边界——旧实现按 byte 切，
-// 50k 边界会把 3 字节汉字劈成残片，乱码回填给 LLM（严格上游直接 400）。
+// TestToolResultTruncateRuneSafe 截断必须落在 rune 边界（按 byte 切会产出非法 UTF-8）。
 func TestToolResultTruncateRuneSafe(t *testing.T) {
 	s := strings.Repeat("汉", 51_000) // 153_000 bytes，超 rune 限
-	got := truncate(s, 50_000)
+	got := truncateResult(s, 50_000)
 	assert.True(t, utf8.ValidString(got), "截断结果必须是合法 UTF-8")
 	assert.True(t, strings.HasSuffix(got, "\n... (truncated)"))
 	assert.LessOrEqual(t, len([]rune(got)), 50_000+len("\n... (truncated)"))
 	assert.True(t, strings.HasPrefix(got, strings.Repeat("汉", 10)), "内容前缀无损")
 }
 
-// TestEstimateTokensCountsChinese 回归：中文按 rune 口径估算，不能按「字符数/4」低估。
-// 低估 3~4 倍会让压缩的尾部保留量失准，摘要吞掉本该保留的近期上下文。
-// 断言行为区间（而非内部函数等价），实现换代时测试不会无故失效。
+// TestEstimateTokensCountsChinese 中文按 rune 口径估算（低估会让压缩吃掉本该保留的近期上下文）。
 func TestEstimateTokensCountsChinese(t *testing.T) {
 	text := &llm.Message{Role: llm.RoleUser, Content: strings.Repeat("部署配置", 100)} // 400 字
 	got := EstimateTokens([]*llm.Message{text})

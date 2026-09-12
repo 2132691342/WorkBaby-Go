@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"errors"
+	"time"
 
 	"WorkBaby/internal/domain"
 	"WorkBaby/internal/pkg"
@@ -82,6 +83,19 @@ func (r *CronJobRepo) UpdateRunState(ctx context.Context, id string, lastRunAt i
 			"updated_at":  lastRunAt,
 		}).Error; err != nil {
 		return pkg.Wrap(2071, "update cron run state failed", err)
+	}
+	return nil
+}
+
+// IncrementRunCount 累计执行次数（failed=true 同步累加 fail_count）。
+func (r *CronJobRepo) IncrementRunCount(ctx context.Context, id string, failed bool) error {
+	updates := map[string]any{"run_count": gorm.Expr("run_count + 1"), "updated_at": time.Now().UnixMilli()}
+	if failed {
+		updates["fail_count"] = gorm.Expr("fail_count + 1")
+	}
+	if err := r.db.WithContext(ctx).Model(&domain.CronJobDO{}).
+		Where("id = ?", id).Updates(updates).Error; err != nil {
+		return pkg.Wrap(2071, "increment cron run count failed", err)
 	}
 	return nil
 }

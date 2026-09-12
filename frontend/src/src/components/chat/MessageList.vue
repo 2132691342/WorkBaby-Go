@@ -57,7 +57,13 @@ const props = defineProps<{
 }>()
 
 const chat = useChatStore()
-const { pendingApproval, stopReason } = storeToRefs(chat)
+const { pendingApprovals, stopReason } = storeToRefs(chat)
+const { approveAllPending } = chat
+
+/** 可批量放行的审批数（不可逆与补充输入必须逐条处理，不参与批量）。 */
+const approvableCount = computed(
+  () => pendingApprovals.value.filter((p) => p.risk === 'needs_approval').length
+)
 const router = useRouter()
 
 /** 尚未配置任何可用模型：空态卡给出直达设置页的引导，杜绝「发了消息没反应」的懵态。 */
@@ -145,13 +151,11 @@ watch(
 )
 
 /**
- * 判断第 i 条消息是否在「当前可视线附近」。
- * 流式中只保留最后 1 条 + 上下 5 条；其余用 content-visibility: auto 跳过渲染。
+ * 判断第 i 条消息是否在「当前可视线附近」（流式期只保留最后 1 条 + 上下 5 条，
+ * 其余靠 content-visibility 跳过渲染）。
  */
 /**
- * 轮次分组：一条 user 消息开启一轮，其后的 assistant / tool 都归属同一轮。
- * 组内紧凑、组间宽松 —— 「我问了什么 → 它做了什么」在视觉上是一体的，
- * 而不是若干条等距、彼此无关的卡片（长会话里最难读的就是等距流）。
+ * 轮次分组：一条 user 消息开启一轮，其后的 assistant / tool 归属同一轮；组内紧凑、组间宽松。
  */
 const groups = computed<{ key: string; items: { m: Message; index: number }[] }[]>(() => {
   const out: { key: string; items: { m: Message; index: number }[] }[] = []
@@ -259,9 +263,16 @@ function isNearCurrent(i: number): boolean {
 
       <!-- 审批内联：从页面顶部下移至此，贴近当前运行消息，
            与触发审批的工具调用保持空间上下文（红色=不可逆，警告=可恢复） -->
-      <div v-if="pendingApproval" class="flex justify-start">
+      <div v-if="pendingApprovals.length" class="flex flex-col gap-2 justify-start">
         <div class="w-full min-w-0">
           <ApprovalInline />
+        </div>
+        <!-- 队列中还有未展示的请求：批量放行可恢复项，不可逆项仍需逐条确认 -->
+        <div v-if="approvableCount > 1" class="flex items-center gap-2">
+          <button type="button" class="btn" @click="approveAllPending">
+            {{ t('chat.approveAll', approvableCount) }}
+          </button>
+          <span class="fs11 muted">{{ t('chat.approvalQueue', pendingApprovals.length) }}</span>
         </div>
       </div>
 

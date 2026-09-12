@@ -1,11 +1,5 @@
 // Package toolcall 提供 NormalizedToolCall 与各 Provider 互转（含流式累积器）。
-//
-// 各家协议差异：
-//   - OpenAI：tool_calls[i].function.arguments 是字符串片段（流式累积）
-//   - Anthropic：content_block.type=="tool_use" 一次性完整块
-//   - Ollama：message.tool_calls 一次性完整数组
-//
-// harness 只面对 llm.NormalizedToolCall；Adapter 负责差异吸收。
+// 协议差异：OpenAI 的 arguments 是流式字符串片段，Anthropic 与 Ollama 是一次性完整块。
 package toolcall
 
 import (

@@ -31,6 +31,10 @@ const sessionMetaKeyArchiveSummary = "compact_archive_summary"
 // 记录最近一次压缩覆盖到哪一轮、涉及哪些工具调用锚点，供对账与问题定位。
 const sessionMetaKeyCompressBoundary = "compress_boundary"
 
+// sessionMetaKeyAgentName 会话级 Agent 覆盖：非空时 SendStream 优先使用，
+// 由 /agent <name> 命令写入；空回退 harness 内置 defaultAgentName。
+const sessionMetaKeyAgentName = "agent_name"
+
 // SearchSessions 跨会话检索（/resume 快速检索）。
 //
 // 标题命中优先于正文命中；两者都命中时只出现一次（标题命中优先）。
@@ -152,7 +156,7 @@ func SessionTitleFrom(content string) string {
 	if s == "" {
 		return ""
 	}
-	return truncateRunes(collapseSpaces(s), 40)
+	return pkg.TruncateRunes(collapseSpaces(s), 40)
 }
 
 // trimNumberedPrefix 剥掉 "1. " / "2) " 这类数字有序列表前缀；没匹配则原样返回。

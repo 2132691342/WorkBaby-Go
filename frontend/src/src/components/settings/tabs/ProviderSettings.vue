@@ -12,19 +12,13 @@ import Field from '@/components/common/Field.vue'
 import type { AiProvider } from '@/types/api'
 
 /**
- * 设置 · 模型 tab。
- *
- * <p>布局：
- * <ol>
- *   <li><b>顶部卡片</b>：新增模型按钮（弹窗录入，与编辑共用同一弹窗）。</li>
- *   <li><b>全局默认参数</b>卡片：温度 / 思考强度 / 压缩阈值 / 输入上限。</li>
- *   <li><b>已配置模型</b>卡片：表格一行一模型，状态徽标 + 测试 / 编辑 / 删除。</li>
- * </ol>
+ * 设置 · 模型 tab：新增模型（弹窗与编辑共用）、全局默认参数（温度/思考强度/压缩阈值/输入上限）、
+ * 已配置模型表格（状态徽标 + 测试 / 编辑 / 删除）。
  */
 const settings = useSettingsStore()
 const toast = useToast()
 const dialog = useDialog()
-const { providers, providerKinds, providerTiers, loading, error, circuitStates, chatDefaults } = storeToRefs(settings)
+const { providers, providerKinds, providerTiers, providerPresets, loading, error, circuitStates, chatDefaults } = storeToRefs(settings)
 const { load, updateProvider, removeProvider, testProvider, resetCircuit, loadChatDefaults, saveChatDefaults } = settings
 
 onMounted(() => {
@@ -73,12 +67,26 @@ function openCreate(): void {
   dialogMode.value = 'create'
   editingProviderID.value = null
   draft.value = emptyDraft()
+  presetSelection.value = ''
   // 默认取第一个可用 kind（若尚未选择），减少一次必点操作
   if (!draft.value.kind && providerKinds.value.length > 0) {
     draft.value.kind = providerKinds.value[0]!.kind
   }
   dialogFeedback.value = null
   dialogVisible.value = true
+}
+
+// ===== 预设快捷填充：选中常见服务后预填 kind / base_url / 首选模型 =====
+const presetSelection = ref('')
+
+function applyPreset(name: string): void {
+  presetSelection.value = name
+  const preset = providerPresets.value.find((p) => p.name === name)
+  if (!preset) return
+  if (draft.value.name === '') draft.value.name = preset.name
+  draft.value.kind = preset.kind
+  draft.value.base_url = preset.base_url
+  if (preset.models.length > 0) draft.value.model = preset.models[0]!
 }
 
 function startEditProvider(p: AiProvider): void {
@@ -168,7 +176,8 @@ async function handleSaveChatDefaults(): Promise<void> {
     default_temperature: chatDefaults.value.default_temperature ?? null,
     default_thinking: chatDefaults.value.default_thinking ?? null,
     compression_ratio: chatDefaults.value.compression_ratio ?? null,
-    max_input_chars: chatDefaults.value.max_input_chars ?? null
+    max_input_chars: chatDefaults.value.max_input_chars ?? null,
+    max_run_tokens: chatDefaults.value.max_run_tokens ?? null
   }
   await saveChatDefaults()
 }
@@ -316,6 +325,11 @@ defineExpose({ load })
           <input v-model.number="chatDefaults.max_input_chars" class="input mono" type="number" min="100" step="1000" :placeholder="t('settings.chatDefaults.builtin')" />
           <p class="fs11 muted mt4">{{ t('settings.chatDefaults.maxInputTip') }}</p>
         </div>
+        <div class="field">
+          <label>{{ t('settings.chatDefaults.maxRunTokens') }}</label>
+          <input v-model.number="chatDefaults.max_run_tokens" class="input mono" type="number" min="0" step="1000" :placeholder="t('settings.chatDefaults.builtin')" />
+          <p class="fs11 muted mt4">{{ t('settings.chatDefaults.maxRunTokensTip') }}</p>
+        </div>
       </div>
       <div class="flex-r mt14">
         <span class="sp" />
@@ -403,6 +417,12 @@ defineExpose({ load })
       <!-- 单列栅格：每个输入项/下拉框独占整行，宽度一致、左缘对齐 -->
       <div class="wb-fgrid wb-fgrid--1">
         <p class="wb-fsect__title">{{ t('settings.section.basic') }}</p>
+        <Field v-if="dialogMode === 'create' && providerPresets.length > 0" :label="t('settings.providerPreset')">
+          <select class="input" :value="presetSelection" @change="applyPreset(($event.target as HTMLSelectElement).value)">
+            <option value="">{{ t('settings.providerPresetCustom') }}</option>
+            <option v-for="p in providerPresets" :key="p.name" :value="p.name">{{ p.name }}</option>
+          </select>
+        </Field>
         <Field :label="t('settings.name')" required :error="dialogFeedback ?? undefined">
           <input v-model="draft.name" class="input" :placeholder="t('settings.namePlaceholder')" />
         </Field>

@@ -1,13 +1,8 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
 
 /**
- * 路由表（WorkBaby Go 版 · Wails v2 嵌入式前端）。
- *
- * <p>Wails v2 用 wails:// scheme 与 WebView2 通信，createWebHistory 在 wails
- * 单 HTML 资源下无法 fallback（刷新会 404），统一改用 createWebHashHistory。
- * 路由表与 Java 版完全一致（23 条），便于视觉/验收对照。
- *
- * <p>鉴权：Wails 绑定本身即鉴权，没有 /api/v1/auth/session；路由层不做守卫。
+ * 路由表：Wails 单 HTML 资源下 history 模式无法 fallback，统一用 hash 路由。
+ * 鉴权由 Wails 绑定承载，路由层不做守卫。
  */
 
 const routes: RouteRecordRaw[] = [

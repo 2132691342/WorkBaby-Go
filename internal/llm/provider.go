@@ -9,12 +9,8 @@ import (
 // ProviderKind Provider 协议族；与 domain.ProviderKind 同义（避免循环 import，参数化时直接传这个）。
 type ProviderKind = domain.ProviderKind
 
-// Provider 抽象。
-//
-// 设计要点：
-//   - Stream 返回的 channel 在流结束/ctx 取消后由实现负责 close；
-//   - 流中错误通过 StreamChunk{Err} 发送，harness 据此识别并终止；
-//   - ToolCalls 在 ChatResponse 是一次性完整列表；Stream 模式下以归一化的 ToolCall 切片分散在多个 chunk 中。
+// Provider 抽象。Stream 返回的 channel 由实现负责 close；流中错误经 StreamChunk{Err} 传递；
+// Chat 的 ToolCalls 是一次性完整列表，Stream 模式下以归一化 ToolCall 分散在多个 chunk。
 type Provider interface {
 	Name() string
 	Kind() ProviderKind

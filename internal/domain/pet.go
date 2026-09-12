@@ -18,8 +18,10 @@ type PetConfigDO struct {
 	ChatBackground    bool `gorm:"default:false" json:"chat_background"`
 	BackgroundOpacity int  `gorm:"default:18" json:"background_opacity"` // 不透明度百分比（0~100）
 	BackgroundBlurPx  int  `gorm:"default:0" json:"background_blur_px"`
-	CreatedAt         int64 `gorm:"autoCreateTime:milli" json:"created_at"`
-	UpdatedAt        int64   `gorm:"autoUpdateTime:milli" json:"updated_at"`
+	// ClickThrough 桌宠形态下透明区域点击穿透（Windows 原生窗口区域裁剪）。
+	ClickThrough bool  `gorm:"default:false" json:"click_through"`
+	CreatedAt    int64 `gorm:"autoCreateTime:milli" json:"created_at"`
+	UpdatedAt    int64 `gorm:"autoUpdateTime:milli" json:"updated_at"`
 }
 
 // TableName 固定表名。
@@ -27,34 +29,50 @@ func (PetConfigDO) TableName() string { return "pet_configs" }
 
 // PetConfigREQ 配置写入请求（对齐前端 PetConfigReq）。
 type PetConfigREQ struct {
-	Enabled          *bool    `json:"enabled"`
-	Mode             string   `json:"mode"`
-	SpriteID         string   `json:"sprite_id"`
-	PositionX        *int     `json:"position_x"`
-	PositionY        *int     `json:"position_y"`
-	Scale            *float64 `json:"scale"`
-	BubbleEnabled    *bool    `json:"bubble_enabled"`
-	BubbleDurationMs *int     `json:"bubble_duration_ms"`
-	ChatBackground    *bool `json:"chat_background"`
-	BackgroundOpacity *int  `json:"background_opacity"`
-	BackgroundBlurPx  *int  `json:"background_blur_px"`
+	Enabled           *bool    `json:"enabled"`
+	Mode              string   `json:"mode"`
+	SpriteID          string   `json:"sprite_id"`
+	PositionX         *int     `json:"position_x"`
+	PositionY         *int     `json:"position_y"`
+	Scale             *float64 `json:"scale"`
+	BubbleEnabled     *bool    `json:"bubble_enabled"`
+	BubbleDurationMs  *int     `json:"bubble_duration_ms"`
+	ChatBackground    *bool    `json:"chat_background"`
+	BackgroundOpacity *int     `json:"background_opacity"`
+	BackgroundBlurPx  *int     `json:"background_blur_px"`
+	ClickThrough      *bool    `json:"click_through"`
 }
 
 // PetConfigRESP 出参（对齐前端 PetConfig）。
 type PetConfigRESP struct {
-	UserID           string  `json:"user_id"`
-	Enabled          bool    `json:"enabled"`
-	Mode             string  `json:"mode"`
-	SpriteID         string  `json:"sprite_id"`
-	PositionX        int     `json:"position_x"`
-	PositionY        int     `json:"position_y"`
-	Scale            float64 `json:"scale"`
-	BubbleEnabled    bool    `json:"bubble_enabled"`
-	BubbleDurationMs int     `json:"bubble_duration_ms"`
-	ChatBackground    bool `json:"chat_background"`
-	BackgroundOpacity int  `json:"background_opacity"`
-	BackgroundBlurPx  int  `json:"background_blur_px"`
-	UpdatedAt         int64 `json:"updated_at"`
+	UserID            string  `json:"user_id"`
+	Enabled           bool    `json:"enabled"`
+	Mode              string  `json:"mode"`
+	SpriteID          string  `json:"sprite_id"`
+	PositionX         int     `json:"position_x"`
+	PositionY         int     `json:"position_y"`
+	Scale             float64 `json:"scale"`
+	BubbleEnabled     bool    `json:"bubble_enabled"`
+	BubbleDurationMs  int     `json:"bubble_duration_ms"`
+	ChatBackground    bool    `json:"chat_background"`
+	BackgroundOpacity int     `json:"background_opacity"`
+	BackgroundBlurPx  int     `json:"background_blur_px"`
+	ClickThrough      bool    `json:"click_through"`
+	UpdatedAt         int64   `json:"updated_at"`
+}
+
+// PetHitRect 桌宠命中矩形（窗口客户区物理像素；区域并集 = 可交互范围）。
+type PetHitRect struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+	W int `json:"w"`
+	H int `json:"h"`
+}
+
+// PetClickThroughREQ 设置桌宠命中区域：enabled=false 或不带矩形时恢复整窗可交互。
+type PetClickThroughREQ struct {
+	Enabled bool         `json:"enabled"`
+	Rects   []PetHitRect `json:"rects"`
 }
 
 // PetSpriteDO 桌宠 sprite（pet_sprites 表；文件落 {home}/sprites/{id}.{ext}）。

@@ -29,12 +29,8 @@ type ResolvedParams struct {
 	ExtraBody   map[string]any
 }
 
-// ResolveParams 三级合并：
-//
-//	req > provider > defaults
-//
-// 规则：字段层面取「优先级最高处的非 nil 值」；ExtraBody 浅合并，req 覆盖 provider 同名 key。
-// ThinkingConfig 不参与零值判断——req/provider 显式 disabled 也保留（disable 是显式意图）。
+// ResolveParams 三级合并 req > provider > defaults：逐字段取最高优先级处的非 nil 值；
+// ExtraBody 浅合并（req 覆盖同名 key）；Thinking 显式 disabled 保留，不被 defaults 覆盖。
 func ResolveParams(req *ChatRequest, provider *ProviderParams, def Defaults) ResolvedParams {
 	out := ResolvedParams{}
 	// Temperature

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useClipboard } from '@vueuse/core'
-import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, ChevronDown, Paperclip } from '@/components/common/icons'
+import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, ChevronDown, Paperclip, Wrench } from '@/components/common/icons'
 import type { Message, MessageAttachment } from '@/types/api'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
@@ -10,9 +10,11 @@ import { useToast } from '@/composables/useToast'
 import { useDialog } from '@/composables/useDialog'
 import { useFocusMode } from '@/composables/useFocusMode'
 import MessageBlocksRenderer from '@/components/chat/MessageBlocksRenderer.vue'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import InlineDiffCard from '@/components/chat/InlineDiffCard.vue'
 import UsageBadge from '@/components/chat/UsageBadge.vue'
-import { resolveMessageBlocks, stripThinkBlocks } from '@/chat/models/blocks'
+import { resolveMessageBlocks, stripThinkBlocks, blocksToToolCalls } from '@/chat/models/blocks'
+import { summarizeToolCalls, totalToolMs, fmtTurnDuration } from '@/chat/models/toolGroupSummary'
 import { splitMentions } from '@/chat/models/tokens'
 
 /**
@@ -57,6 +59,33 @@ const userAttachments = computed<MessageAttachment[]>(() =>
 /** 历史消息的过程块 → ToolCallInfo（纯函数已在 blocks.ts 单测覆盖）。 */
 /** 历史消息的过程块（按 seq 排序）—— MessageBlocksRenderer 直接消费。 */
 const historyBlocks = computed(() => resolveMessageBlocks(props.message))
+
+// ===== turn 折叠叙事 =====
+// 忙碌回合默认把「思考 + 工具」压成一行迹线，正文（答案）照常显示；点开恢复完整过程。
+// 简单回合（过程 < 2 步）不折叠。
+const traceTools = computed(() => blocksToToolCalls(historyBlocks.value))
+const traceProcessCount = computed(
+  () => traceTools.value.length + historyBlocks.value.filter((b) => b.kind === 'thinking' && !!b.text).length
+)
+const traceFoldable = computed(
+  () => !isUser.value && !!props.message.content?.trim() && traceProcessCount.value >= 2
+)
+/** 迹线展开态（默认折叠）。 */
+const traceOpen = ref(false)
+/** 迹线摘要：聚合 receipt（读取文件 3 · 执行命令 2）+ 总耗时。 */
+const traceSummary = computed(() => {
+  const parts = summarizeToolCalls(traceTools.value).map((p) => t(`tool.receipt.${p.action}`, p.count))
+  const dur = fmtTurnDuration(
+    totalToolMs(
+      traceTools.value.map((tc) => ({ durationMs: tc.duration_ms, startedAt: tc.started_at, state: tc.state })),
+      Date.now()
+    )
+  )
+  if (dur) parts.push(dur)
+  return parts
+})
+/** 当前是否处于折叠叙事态（焦点模式只留正文，不走折叠）。 */
+const traceCollapsed = computed(() => traceFoldable.value && !traceOpen.value && !focusMode.value)
 
 /** 本条消息关联的文件变更（chat:file-change 已流式累积；历史消息按 run_id 精确对应）。 */
 const fileChanges = computed(() => {
@@ -197,8 +226,8 @@ async function forkFrom(): Promise<void> {
     :class="isUser ? 'max-w-[76%] items-end' : 'w-full min-w-0 items-start'"
   >
     <!-- 思考回看：无边框轻量行，展开后正文只留左侧细竖线，
-         不套盒子、不抢正文注意力 -->
-    <div v-if="!focusMode && !isUser && message.thinking && !editing">
+         不套盒子、不抢正文注意力（折叠叙事态下思考属于过程迹线，不单独出） -->
+    <div v-if="!focusMode && !traceCollapsed && !isUser && message.thinking && !editing">
       <button
         type="button"
         class="flex items-center gap-1.5 rounded px-1 py-0.5 text-[11.5px] text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-ink"
@@ -217,18 +246,47 @@ async function forkFrom(): Promise<void> {
       >{{ message.thinking }}</pre>
     </div>
 
-    <!-- 历史过程块按序渲染：thinking / tool_call / tool_result / artifact / skill / genui 穿插——
-         与 ClaudeCode 等同类 agent 一致：不再把工具堆在一组、正文在另一组。
+    <!-- 历史过程块按序渲染：thinking / tool_call / tool_result / artifact / skill / genui 时序穿插。
          message.content 作为最后一条 text 块传入（持久化模型里正文不入块）。
          焦点模式仅保留正文（渲染层根据 streaming_mode 标记折叠非正文块）。 -->
     <div v-if="!isUser && !editing" class="w-full">
-      <MessageBlocksRenderer
-        :blocks="historyBlocks"
-        :content="message.content ?? ''"
-        :streaming_mode="false"
-        :retryable="!streaming && isLast"
-        @retry="onToolRetry"
-      />
+      <!-- 折叠叙事态：过程压成一行迹线（思考 + 工具 receipt + 耗时），正文照常显示 -->
+      <template v-if="traceCollapsed">
+        <button
+          type="button"
+          class="flex items-center gap-1.5 self-start rounded px-1 py-0.5 text-[11.5px] text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-ink"
+          @click="traceOpen = true"
+        >
+          <Wrench class="h-3.5 w-3.5" />
+          <span>{{ t('chat.processTitle') }}</span>
+          <span v-for="p in traceSummary" :key="p" class="text-wb-muted">· {{ p }}</span>
+          <span class="text-wb-primary-strong">{{ t('chat.traceExpand') }}</span>
+          <ChevronDown class="h-3 w-3" />
+        </button>
+        <MarkdownRenderer :content="message.content ?? ''" />
+      </template>
+
+      <!-- 展开态：按序穿插的完整过程 + 正文（MessageBlocksRenderer 会把正文补为末尾 text 块） -->
+      <template v-else>
+        <button
+          v-if="traceFoldable"
+          type="button"
+          class="flex items-center gap-1.5 self-start rounded px-1 py-0.5 text-[11.5px] text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-ink"
+          @click="traceOpen = false"
+        >
+          <Wrench class="h-3.5 w-3.5" />
+          <span>{{ t('chat.processTitle') }}</span>
+          <span class="text-wb-primary-strong">{{ t('chat.traceCollapse') }}</span>
+          <ChevronDown class="h-3 w-3 rotate-180" />
+        </button>
+        <MessageBlocksRenderer
+          :blocks="historyBlocks"
+          :content="message.content ?? ''"
+          :streaming_mode="false"
+          :retryable="!streaming && isLast"
+          @retry="onToolRetry"
+        />
+      </template>
     </div>
 
     <!-- 气泡样式统一收口在 wb-ui.css 的语义类（.msg-u / .bubble）：

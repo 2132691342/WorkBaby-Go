@@ -1,19 +1,10 @@
 <script setup lang="ts">
 /**
- * 桌宠桌面窗口页。
- *
- * <p>由桌面壳以独立无边框置顶窗口加载（路由 /pet/desktop，App.vue 对其跳过主壳与鉴权门）。
- * 职责：
- * <ul>
- *   <li>渲染桌宠形象：优先用户 sprite（gin 同源 /files/sprites/{id}，加载失败回退内置 SVG）</li>
- *   <li>每 2.5s 轮询 GET /api/v1/pet/state 驱动表情与动画（IDLE/WALKING/CLICKED/THINKING/SPEAKING）</li>
- *   <li>拖拽移动窗口：pointer 增量经 rAF 节流后走 IPC pet.move；双击收起（pet.hide）</li>
- *   <li>迷你聊天：点击对话按钮展开聊天面板，复用 chat store（独立「桌宠对话」会话），
- *       流式回复实时进面板——桌宠不只是摆件，是能直接对话的助手</li>
- * </ul>
+ * 桌宠形态窗口：渲染 sprite（失败回退内置 SVG）、轮询状态驱动动画、拖拽移动窗口、
+ * 双击收起，以及复用 chat store 的迷你聊天面板；开启点击穿透时上报命中区域。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { apiGet } from '@/api/client'
+import { apiGet, apiPost } from '@/api/client'
 import { getServerPort } from '@/api/http'
 import { invokeShell } from '@/api/shellBridge'
 import { useChatStore } from '@/stores/chat'
@@ -24,6 +15,7 @@ interface PetConfigResp {
   sprite_id: string | null
   bubble_enabled: boolean | null
   scale: number | null
+  click_through: boolean | null
 }
 
 const chat = useChatStore()
@@ -34,6 +26,8 @@ const bubbleEnabled = ref(true)
 const scale = ref(1)
 const online = ref(false)
 const spriteFailed = ref(false)
+/** 透明区域点击穿透（Windows 原生 SetWindowRgn；由后端按上报矩形裁剪窗口区域）。 */
+const clickThrough = ref(false)
 
 // sprite 走 gin 同源全 URL：dev（vite）与生产（wails 嵌入）都能加载；相对路径在 dev 下会 404
 const spriteUrl = computed(() => {
@@ -140,9 +134,63 @@ async function loadConfig(): Promise<void> {
     spriteFailed.value = false
     bubbleEnabled.value = r.bubble_enabled !== false
     if (r.scale && r.scale > 0.3 && r.scale <= 2) scale.value = r.scale
+    clickThrough.value = r.click_through === true
   } catch {
     /* 未登录/无配置时用内置形象兜底 */
   }
+}
+
+// ===== 点击穿透：可见元素包围盒 → 命中区域 =====
+interface HitRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** 命中区域外扩像素：卡片有漂浮动画（±6px），不留裕量会让边缘点击被裁掉。 */
+const HIT_PADDING_PX = 8
+
+/** 采集可见交互元素的包围盒（物理像素；SetWindowRgn 用的是窗口物理坐标）。 */
+function collectHitRects(): HitRect[] {
+  const dpr = window.devicePixelRatio || 1
+  const els = Array.from(document.querySelectorAll<HTMLElement>('.pet-card, .pet-bubble, .pet-chat'))
+  const rects: HitRect[] = []
+  for (const el of els) {
+    const r = el.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) continue
+    rects.push({
+      x: Math.max(0, Math.round(r.left * dpr) - HIT_PADDING_PX),
+      y: Math.max(0, Math.round(r.top * dpr) - HIT_PADDING_PX),
+      w: Math.round(r.width * dpr) + HIT_PADDING_PX * 2,
+      h: Math.round(r.height * dpr) + HIT_PADDING_PX * 2
+    })
+  }
+  return rects
+}
+
+let maskTimer: number | undefined
+
+/** 上报命中区域；空列表时跳过（后端对空列表会整窗放开，避免瞬时状态误伤交互）。 */
+function pushHitMask(): void {
+  if (!clickThrough.value) return
+  const rects = collectHitRects()
+  if (rects.length === 0) return
+  void apiPost('/api/v1/pet/window/click-through', { enabled: true, rects }).catch(() => {
+    /* 原生层未就绪时静默降级为整窗可交互 */
+  })
+}
+
+/** 去抖重算：聊天气泡/面板的出现消失有过渡动画，立即取 rect 会拿到中间态。 */
+function scheduleHitMask(): void {
+  if (!clickThrough.value) return
+  if (maskTimer) window.clearTimeout(maskTimer)
+  maskTimer = window.setTimeout(pushHitMask, 120)
+}
+
+/** 关闭穿透（恢复整窗可交互）。 */
+function clearHitMask(): void {
+  void apiPost('/api/v1/pet/window/click-through', { enabled: false, rects: [] }).catch(() => {})
 }
 
 // ===== 拖拽移动窗口（rAF 节流 IPC） =====
@@ -193,20 +241,31 @@ function hide(): void {
 }
 
 onMounted(() => {
-  void loadConfig()
+  void loadConfig().then(() => scheduleHitMask())
   void refreshState()
   void setupPetSession()
   pollTimer = window.setInterval(() => void refreshState(), 2500)
+  window.addEventListener('resize', scheduleHitMask)
 })
 
 onBeforeUnmount(() => {
   if (pollTimer) window.clearInterval(pollTimer)
+  if (maskTimer) window.clearTimeout(maskTimer)
   if (rafID) cancelAnimationFrame(rafID)
+  window.removeEventListener('resize', scheduleHitMask)
+  clearHitMask()
   // 还原主窗会话选择，避免桌宠专属会话「劫持」主聊天上下文
   if (prevSessionID && prevSessionID !== petSessionID) {
     void chat.selectSession(prevSessionID)
   }
 })
+
+// 穿透开关 / 可见元素变化（聊天气泡、面板、缩放、心情）→ 重算命中区域
+watch(clickThrough, (on) => {
+  if (on) scheduleHitMask()
+  else clearHitMask()
+})
+watch([chatOpen, scale, bubbleEnabled, mood], () => scheduleHitMask())
 </script>
 
 <template>

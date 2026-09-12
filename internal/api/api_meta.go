@@ -26,8 +26,8 @@ func (h *Handler) GetRuntimeStatus() domain.RuntimeStatusRESP {
 
 func (h *Handler) GetHealth() domain.HealthInfo {
 	pc := 0
-	if h.provRepo != nil {
-		if rows, err := h.provRepo.List(h.ctx); err == nil {
+	if h.app.ProvRepo != nil {
+		if rows, err := h.app.ProvRepo.List(h.ctx); err == nil {
 			pc = len(rows)
 		}
 	}

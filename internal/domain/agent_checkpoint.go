@@ -1,13 +1,7 @@
 package domain
 
-// AgentCheckpointDO Agent 运行检查点。
-//
-// 替代 JSONL 文件：跨进程重启可恢复，前端可列「可恢复的运行」。
-// 语义与 harness.Checkpoint 一致但按 DO 平铺（复杂字段 JSON 文本化，
-// 转换在 service 层 adapter 完成，repo 只做无业务语义的读写）。
-//
-// 每个 run 只有一个有效行（最新一轮）：adapter 落库后清掉同 run 更早的 turn，
-// 避免长 run 逐轮全量快照把磁盘放大数十倍。
+// AgentCheckpointDO Agent 运行检查点：跨进程重启可续跑。
+// 复杂字段 JSON 文本化，转换在 service 层完成；每个 run 只保留最新一轮（避免磁盘放大）。
 type AgentCheckpointDO struct {
 	ID                 string `gorm:"primaryKey;size:64"                    json:"id"`
 	SessionID          string `gorm:"size:64;index:idx_cp_session"          json:"session_id"`

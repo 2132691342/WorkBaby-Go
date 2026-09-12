@@ -223,7 +223,7 @@ func (s *TaskService) runOne(t *domain.TaskDO) {
 		t.State = domain.TaskCompleted
 		if out != nil {
 			t.RunID = out.RunID
-			t.Result = truncateRunes(out.Content, taskResultMax)
+			t.Result = pkg.TruncateRunes(out.Content, taskResultMax)
 			if out.Err != nil {
 				t.Error = out.Err.Error()
 			}

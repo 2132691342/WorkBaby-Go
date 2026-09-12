@@ -76,10 +76,11 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 	}
 	if resp.StatusCode >= 400 {
 		_ = resp.Body.Close()
-		return nil, pkg.Wrap(3100, "ollama stream"+llm.RetryAfterHint(resp.StatusCode, resp.Header.Get), llm.MapHTTPStatus(resp.StatusCode))
+		err := pkg.Wrap(3100, "ollama stream", llm.MapHTTPStatus(resp.StatusCode))
+		return nil, llm.WithRetryAfter(err, llm.ParseRetryAfter(resp.StatusCode, resp.Header.Get))
 	}
 
-	out := make(chan llm.StreamChunk, 32)
+	out, send := llm.NewChunkStream(ctx, 32)
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
@@ -88,7 +89,7 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 			line, rerr := r.ReadBytes('\n')
 			if rerr != nil {
 				if rerr != io.EOF {
-					out <- llm.StreamChunk{Err: pkg.Wrap(3005, "ollama stream read", rerr)}
+					send(llm.StreamChunk{Err: pkg.Wrap(3005, "ollama stream read", rerr)})
 				}
 				return
 			}
@@ -98,24 +99,32 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 			}
 			var s OllamaStream
 			if err := json.Unmarshal([]byte(l), &s); err != nil {
-				out <- llm.StreamChunk{Err: pkg.Wrap(3033, "decode ollama chunk", err)}
+				if !send(llm.StreamChunk{Err: pkg.Wrap(3033, "decode ollama chunk", err)}) {
+					return
+				}
 				continue
 			}
 			if s.Message.Content != "" || s.Message.Thinking != "" {
-				out <- llm.StreamChunk{Delta: llm.Message{Role: llm.RoleAssistant, Content: s.Message.Content, Thinking: s.Message.Thinking}}
+				if !send(llm.StreamChunk{Delta: llm.Message{Role: llm.RoleAssistant, Content: s.Message.Content, Thinking: s.Message.Thinking}}) {
+					return
+				}
 			}
 			for _, tc := range s.Message.ToolCalls {
 				otc := toolcall.OpenAIToolCall{Index: 0, ID: tc.ID, Type: "function", Function: toolcall.OpenAIFunctionCall{Name: tc.Function.Name, Arguments: toJSON(tc.Function.Arguments)}}
 				calls := toolcall.NewAccumulator().Feed(otc)
 				for _, c := range calls {
 					cc := c
-					out <- llm.StreamChunk{ToolCall: &cc}
+					if !send(llm.StreamChunk{ToolCall: &cc}) {
+						return
+					}
 				}
 			}
 			if s.Done {
 				if s.DoneReason != "" {
 					fr := s.DoneReason
-					out <- llm.StreamChunk{FinishReason: &fr}
+					if !send(llm.StreamChunk{FinishReason: &fr}) {
+						return
+					}
 				}
 				u := llm.TokenUsage{
 					InputTokens:     s.PromptEvalCount,
@@ -127,7 +136,9 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 					u.CacheReadTokens = 0
 				}
 				u.TotalTokens = u.InputTokens + u.OutputTokens
-				out <- llm.StreamChunk{FinalUsage: &u}
+				if !send(llm.StreamChunk{FinalUsage: &u}) {
+					return
+				}
 				return
 			}
 		}

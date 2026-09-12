@@ -117,6 +117,8 @@ export interface Message {
   tool_call_id: string | null
   tool_calls_json: string | null
   status: string
+  /** 消息分层：'ui' = 仅界面可见（不进 LLM 上下文）；空 = 正常参与上下文。 */
+  context_scope?: string | null
   stop_reason: string | null
   model: string | null
   input_tokens?: number | null
@@ -308,6 +310,23 @@ export interface AiProviderKind {
   model_placeholder: string
 }
 
+/** 常见模型服务预设（GET /api/v1/ai-provider/presets）：新增 provider 一键预填。 */
+export interface ProviderPreset {
+  name: string
+  kind: string
+  base_url: string
+  models: string[]
+  note?: string
+}
+
+/** 免审授权（GET /api/v1/chat/approval-grants）：「本会话允许」的持久化授权。 */
+export interface ApprovalGrant {
+  id: string
+  command: string
+  risk: string
+  created_at: number
+}
+
 /** Provider 熔断/就绪状态（GET /api/v1/ai-provider/circuit-status）。 */
 export interface CircuitState {
   id: string
@@ -493,6 +512,10 @@ export interface RunRecord {
   output_tokens: number
   cache_read_tokens: number
   total_tokens: number
+  /** 分段耗时归因（毫秒）：等模型 / 跑工具 / 压上下文。 */
+  llm_ms: number
+  tools_ms: number
+  compress_ms: number
   started_at: number
   ended_at: number
 }
@@ -780,7 +803,7 @@ export interface WorkflowNodeExecution {
   execution_id: string
   node_id: string
   node_type: string
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED' | string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'waiting_input' | string
   error_msg?: string | null
   started_at?: number | null
   finished_at?: number | null
@@ -832,13 +855,59 @@ export interface WorkflowNodeTypeInfo {
 export interface WorkflowExecution {
   id: string
   workflow_id: string
-  status: 'PENDING' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | string
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled' | string
   inputs: Record<string, unknown> | null
   outputs: Record<string, unknown> | null
   error_msg: string | null
   started_at: number | null
   finished_at: number | null
   created_at: number
+}
+
+/** 等待人工输入（HumanInput 节点）的上下文：事件载荷带 prompt/TTL，节点状态兜底时为空。 */
+export interface WorkflowPendingInput {
+  executionID: string
+  nodeID: string
+  prompt: string
+  ttlSeconds: number
+}
+
+/**
+ * 前端审批队列项。
+ *
+ * 与后端 ApprovalPending 的差别：流式事件只带决策必需字段（id / 命令 / 风险），
+ * 不含 run_id / expires_at 等审计信息；队列统一用这个较窄的形状承载，
+ * 启动恢复时用后端列表项填充（结构兼容）。
+ */
+export interface PendingApproval {
+  id: string
+  command: string
+  reason: string
+  risk: string
+  can_remember?: boolean
+}
+
+/** 结构化状态作用域：user 跨会话 / session 会话内 / temp 本轮。 */
+export type SessionVarScope = 'user' | 'session' | 'temp'
+
+/** 会话变量项（跨轮次结构化状态；进 system 注入）。 */
+export interface SessionVarItem {
+  key: string
+  value: string
+  scope: SessionVarScope
+}
+
+/** 会话变量清单（GET /api/v1/chat/sessions/:id/vars）。 */
+export interface SessionVarRESP {
+  session_id: string
+  items: SessionVarItem[]
+}
+
+/** 会话变量写入/删除入参；scope 缺省为 session。 */
+export interface SessionVarREQ {
+  key: string
+  value: string
+  scope?: SessionVarScope
 }
 
 /** 情景记忆条目。 */
@@ -888,6 +957,35 @@ export interface RecallEntry {
   source: string
   title: string
   snippet: string
+}
+
+/** 回写候选类型。 */
+export type InboxKind = 'fact' | 'procedure' | 'skill'
+
+/** 回写候选评审状态。 */
+export type InboxStatus = 'pending' | 'approved' | 'rejected'
+
+/** 回写收件箱条目（run 终局抽取 → 人审合入）。 */
+export interface InboxItem {
+  id: string
+  kind: InboxKind
+  title: string
+  summary: string
+  payload: Record<string, unknown> | null
+  status: InboxStatus
+  source: 'llm' | 'deterministic'
+  confidence: number
+  session_id: string | null
+  run_id: string | null
+  created_at: number
+  updated_at: number
+}
+
+/** 回写收件箱概览。 */
+export interface InboxStats {
+  pending: number
+  approved: number
+  rejected: number
 }
 
 /** GenUI 节点类型。 */
@@ -1007,6 +1105,8 @@ export interface PetConfig {
   background_opacity: number
   /** 背景模糊像素（0 = 不模糊） */
   background_blur_px: number
+  /** 桌宠形态下透明区域点击穿透（Windows 原生窗口区域裁剪） */
+  click_through: boolean
   updated_at: number | null
 }
 
@@ -1023,6 +1123,7 @@ export interface PetConfigReq {
   chat_background?: boolean
   background_opacity?: number
   background_blur_px?: number
+  click_through?: boolean
 }
 
 /** 桌宠 sprite（GET /api/v1/pet/sprites）。 */

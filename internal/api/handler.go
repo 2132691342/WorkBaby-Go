@@ -1,4 +1,5 @@
-// Package api 是 Wails 绑定层（薄；一个文件一个功能域，全平铺）；唯一直接 import wails runtime 的层。
+// Package api 组合根 + 系统能力绑定层（薄；一个文件一个功能域）：装配全部 service 与工具，
+// 业务 API 由 server 层经 gin HTTP 暴露，本层 Wails 绑定仅系统能力；唯一直接 import wails runtime 的层。
 package api
 
 import (
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"WorkBaby/internal/bootstrap"
 	"WorkBaby/internal/capability"
 	"WorkBaby/internal/channel"
 	"WorkBaby/internal/channel/email"
@@ -20,13 +22,13 @@ import (
 	"WorkBaby/internal/domain"
 	"WorkBaby/internal/event"
 	"WorkBaby/internal/harness"
+	"WorkBaby/internal/keepawake"
 	"WorkBaby/internal/llm/registry"
 	"WorkBaby/internal/mcp"
 	"WorkBaby/internal/memory"
 	"WorkBaby/internal/pet"
 	"WorkBaby/internal/pkg"
 	"WorkBaby/internal/rag"
-	"WorkBaby/internal/repo"
 	"WorkBaby/internal/runtime"
 	"WorkBaby/internal/service"
 	"WorkBaby/internal/skill"
@@ -40,6 +42,7 @@ import (
 	httptool "WorkBaby/internal/tool/http"
 	"WorkBaby/internal/tool/planmode"
 	requestinput "WorkBaby/internal/tool/requestinput"
+	sessionvartool "WorkBaby/internal/tool/sessionvar"
 	skillrun "WorkBaby/internal/tool/skillrun"
 	todotool "WorkBaby/internal/tool/todo"
 	webfetchtool "WorkBaby/internal/tool/webfetch"
@@ -49,50 +52,59 @@ import (
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// keepAwakeAdapter 把 keepawake.Setter 适配成 cron.KeepAwaker 接口。
+// Acquire 仅需 (ctx, reason) → (release, error)；ctx 在 Windows 上无意义（SetThreadExecutionState
+// 不可取消），保留签名以便未来 macOS/Linux 电源管理接入。
+type keepAwakeAdapter struct {
+	setter keepawake.Setter
+}
+
+func (a *keepAwakeAdapter) Acquire(_ context.Context, reason string) (func(), error) {
+	return a.setter.Acquire(reason), nil
+}
+
 // Handler 聚合所有 service，对外导出方法自动成为 Wails 绑定。
 // 本包允许唯一直接 import wails runtime，且仅用于 runtime.EventsEmit；
 // service / repo / domain 严禁导入 wails。
 type Handler struct {
-	ctx          context.Context
-	paths        *runtime.Paths
-	runtimeMgr   *runtime.Manager
-	cfg          *config.Config
-	bus          *event.Bus
-	eventLog     *event.RunEventLog         // run 事件日志（序号 + 断线重放缓冲），与 SSE hub 共享
-	execs        *harness.ExecutionRegistry // 执行平面：全入口统一 run 登记
-	cipher       *pkg.Cipher
-	reg          *registry.Registry
-	sessRepo     *repo.ChatSessionRepo
-	msgRepo      *repo.MessageRepo
-	provRepo     *repo.AiProviderRepo
-	setRepo      *repo.SystemSettingRepo
-	usageRepo    *repo.TokenUsageRepo
-	metaSvc      *service.MetaService
-	provSvc      *service.ProviderService
-	chatSvc      *service.ChatService
-	todoStore    *service.SessionTodoStore // 会话计划存储（todo 工具 + 前端共享）
-	setSvc       *service.SettingsService
-	toolSvc      *service.ToolService
-	dashSvc      *service.DashboardService
-	docsSvc      *service.DocsService
-	approvalSvc  *service.ApprovalService
-	memSvc       *memory.Service
-	memProxy     *service.MemoryService
-	skillSvc     *service.SkillService
-	mcpSvc       *service.McpService
-	knowledgeSvc *service.KnowledgeService
-	workflowSvc  *service.WorkflowService
-	channelSvc   *channel.Service
-	cronSvc      *cronjob.Scheduler
-	petSvc       *pet.Service
-	petCtrl      *pet.Controller
-	folderSvc    *service.FolderService
-	fileSvc      *service.FileService
-	workspaceSvc *service.WorkspaceService
-	changeSvc    *service.FileChangeService // 文件变更追踪（快照 + diff + 回滚）
-	artifactSvc  *service.ArtifactService   // 会话产出物登记
-	taskSvc      *service.TaskService       // 后台任务队列
-	trustSvc     *service.TrustService      // 工作目录信任
+	ctx           context.Context
+	paths         *runtime.Paths
+	runtimeMgr    *runtime.Manager
+	cfg           *config.Config
+	bus           *event.Bus
+	eventLog      *event.RunEventLog         // run 事件日志（序号 + 断线重放缓冲），与 SSE hub 共享
+	execs         *harness.ExecutionRegistry // 执行平面：全入口统一 run 登记
+	app           *bootstrap.App             // 组合根：repo 装配唯一入口（api 层不 import repo）
+	cipher        *pkg.Cipher
+	reg           *registry.Registry
+	metaSvc       *service.MetaService
+	provSvc       *service.ProviderService
+	chatSvc       *service.ChatService
+	todoStore     *service.SessionTodoStore  // 会话计划存储（todo 工具 + 前端共享）
+	sessionVarSvc *service.SessionVarService // 会话变量（工具 + 能力注入 + API 共享）
+	setSvc        *service.SettingsService
+	toolSvc       *service.ToolService
+	dashSvc       *service.DashboardService
+	docsSvc       *service.DocsService
+	approvalSvc   *service.ApprovalService
+	memSvc        *memory.Service
+	memProxy      *service.MemoryService
+	inboxSvc      *service.InboxService      // 回写收件箱（run 终局候选 → 人审 → 合入）
+	skillSvc      *service.SkillService
+	mcpSvc        *service.McpService
+	knowledgeSvc  *service.KnowledgeService
+	workflowSvc   *service.WorkflowService
+	channelSvc    *channel.Service
+	cronSvc       *cronjob.Scheduler
+	petSvc        *pet.Service
+	petCtrl       *pet.Controller
+	folderSvc     *service.FolderService
+	fileSvc       *service.FileService
+	workspaceSvc  *service.WorkspaceService
+	changeSvc     *service.FileChangeService // 文件变更追踪（快照 + diff + 回滚）
+	artifactSvc   *service.ArtifactService   // 会话产出物登记
+	taskSvc       *service.TaskService       // 后台任务队列
+	trustSvc      *service.TrustService      // 工作目录信任
 	// Files 服务本地受管文件（main.go AssetServer 转发 /files/**）。
 	// 独立类型而非 Handler 方法：避免 net/http 类型泄漏进 Wails 绑定（见 fileserver.go）。
 	Files        *FileServer
@@ -193,14 +205,10 @@ func (h *Handler) Startup(ctx context.Context) error {
 		return err
 	}
 
-	h.sessRepo = repo.NewChatSessionRepo(gdb)
-	h.msgRepo = repo.NewMessageRepo(gdb)
-	h.provRepo = repo.NewAiProviderRepo(gdb)
-	h.setRepo = repo.NewSystemSettingRepo(gdb)
-	h.usageRepo = repo.NewTokenUsageRepo(gdb)
+	h.app = bootstrap.New(gdb)
 	h.metaSvc = service.NewMetaService(cfg)
-	h.provSvc = service.NewProviderService(h.provRepo, h.cipher)
-	h.setSvc = service.NewSettingsService(h.setRepo, h.cipher)
+	h.provSvc = service.NewProviderService(h.app.ProvRepo, h.cipher)
+	h.setSvc = service.NewSettingsService(h.app.SetRepo, h.cipher)
 
 	// 配置文件为源：model.json 存在则同步进 ai_providers 表
 	// （文件缺失/解析失败仅告警，保留 DB 存量）
@@ -214,7 +222,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 
 	// LLM Registry：解密已落盘 apiKey 后构建；失败单条降级（unready）
 	h.reg = registry.New()
-	if pwds, perr := h.provRepo.List(ctx); perr == nil {
+	if pwds, perr := h.app.ProvRepo.List(ctx); perr == nil {
 		_ = h.reg.Build(pwds, func(encrypted string) (string, error) {
 			return h.cipher.Decrypt(encrypted)
 		})
@@ -246,7 +254,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 	// 文件变更追踪：file_write 写前落快照 + diff，前端可预览/回滚
 	// 快照目录跟随会话工作区：绑定本地目录 → {dir}/.workbaby/snapshots/；默认 → {home}/snapshots/
 	h.changeSvc = service.NewFileChangeService(
-		repo.NewFileChangeRepo(gdb), h.bus, filepath.Join(paths.Home, "snapshots"), workspace,
+		h.app.FileChangeRepo, h.bus, filepath.Join(paths.Home, "snapshots"), workspace,
 	).WithSnapshotRoot(func(sessionID string) string {
 		if h.chatSvc != nil {
 			if _, sd := h.chatSvc.SessionDataDirs(h.ctx, sessionID); sd != "" {
@@ -257,11 +265,11 @@ func (h *Handler) Startup(ctx context.Context) error {
 	}).WithEventLog(h.eventLog)
 	// 工件登记：产出文件只记引用，前端经 /files 预览
 	h.artifactSvc = service.NewArtifactService(
-		repo.NewArtifactRepo(gdb), h.bus, workspace,
+		h.app.ArtifactRepo, h.bus, workspace,
 	).WithEventLog(h.eventLog)
 	toolReg := tool.NewRegistry()
 	// 审批门：白名单外/危险命令 → 前端 chat:approval 事件确认后放行；暂停态持久化
-	h.approvalSvc = service.NewApprovalService(h.bus).WithEventLog(h.eventLog).WithRecords(repo.NewApprovalRecordRepo(gdb))
+	h.approvalSvc = service.NewApprovalService(h.bus).WithEventLog(h.eventLog).WithRecords(h.app.ApprovalRecRepo).WithGrants(h.app.ApprovalGrantRepo)
 	// exec 工具：白名单运行时动态读取（settings/exec/agent 设置页）；
 	// cwd 缺省跟随会话工作区（绑定了外部目录时），命令与文件工具同一落点
 	if err := toolReg.Register(exectool.New(tool.DefaultExecPolicy()).
@@ -278,7 +286,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 		}).
 		WithPathDirs(rt.BinDirs).
 		WithWhitelist(func() []string {
-			rows, err := h.setRepo.ListAll(h.ctx)
+			rows, err := h.app.SetRepo.ListAll(h.ctx)
 			if err != nil {
 				return []string{}
 			}
@@ -362,9 +370,19 @@ func (h *Handler) Startup(ctx context.Context) error {
 	}
 
 	// Todo 计划工具：会话内待办（长任务先列计划再逐步勾选）
-	h.todoStore = service.NewSessionTodoStore()
+	h.todoStore = service.NewSessionTodoStore(h.app.TodoRepo)
 	if err := toolReg.Register(todotool.New(h.todoStore, func(ctx context.Context) string {
 		return harness.SessionIDFromCtx(ctx)
+	})); err != nil {
+		return err
+	}
+
+	// 会话变量工具：三层结构化状态（user/session/temp；与 capability 注入、API 共享同一 service）
+	h.sessionVarSvc = service.NewSessionVarService(h.app.SessionVarRepo)
+	if err := toolReg.Register(sessionvartool.New(h.sessionVarSvc, func(ctx context.Context) string {
+		return harness.SessionIDFromCtx(ctx)
+	}, func(ctx context.Context) string {
+		return harness.RunIDFromCtx(ctx)
 	})); err != nil {
 		return err
 	}
@@ -387,7 +405,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 
 	// 知识库 RAG：FTS5 检索 + 索引；本地导入文件复制到 {home}/knowledge 受管目录。
 	// knowledge_search 工具由知识库能力统一暴露（见下方能力注册表）
-	knowledgeRepo := repo.NewKnowledgeDocRepo(gdb)
+	knowledgeRepo := h.app.KnowledgeDocRepo
 	retriever := rag.NewFTS5Retriever(gdb)
 	h.knowledgeSvc = service.NewKnowledgeService(
 		knowledgeRepo,
@@ -399,13 +417,13 @@ func (h *Handler) Startup(ctx context.Context) error {
 	if err := toolReg.SelfCheckSchema(); err != nil {
 		return err
 	}
-	h.toolSvc = service.NewToolService(toolReg, h.setRepo)
-	h.dashSvc = service.NewDashboardService(repo.NewDashboardRepo(gdb), h.usageRepo, h.toolSvc)
+	h.toolSvc = service.NewToolService(toolReg, h.app.SetRepo)
+	h.dashSvc = service.NewDashboardService(h.app.DashboardRepo, h.app.UsageRepo, h.toolSvc)
 	h.docsSvc = service.NewDocsService()
 
 	// 记忆系统：短期(chat_messages 窗口) + 长期(MEMORY.md) + 情景(episodes + FTS5)
-	memRepo := repo.NewMemoryEpisodeRepo(gdb)
-	h.memSvc = memory.NewService(memRepo, repo.NewMemoryFactRepo(gdb), repo.NewMemoryProcedureRepo(gdb), paths.Home)
+	memRepo := h.app.MemoryEpisodeRepo
+	h.memSvc = memory.NewService(memRepo, h.app.MemoryFactRepo, h.app.MemoryProcedureRepo, paths.Home)
 	// 长期记忆落点跟随会话工作区：绑定本地目录 → {dir}/.workbaby/memory/；默认 → {home}/memory/
 	h.memSvc.WithMemoryPath(func(sessionID string) string {
 		if h.chatSvc != nil {
@@ -422,7 +440,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 	if err := os.MkdirAll(globalSkillDir, 0o755); err != nil {
 		pkg.L.Warn("mkdir global skills dir failed", "dir", globalSkillDir, "err", err)
 	}
-	skillRepo := repo.NewSkillRepo(gdb)
+	skillRepo := h.app.SkillRepo
 	h.skillSvc = service.NewSkillService(skillRepo, skill.NewRegistry()).
 		WithGlobalDir(globalSkillDir)
 	if err := h.skillSvc.SyncBuiltin(ctx); err != nil {
@@ -434,7 +452,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 	}
 
 	// MCP：外部工具源；启动失败只标记 unready，不阻断
-	mcpRepo := repo.NewMcpServerRepo(gdb)
+	mcpRepo := h.app.McpRepo
 	h.mcpSvc = service.NewMcpService(mcpRepo, mcp.NewManager(toolReg).WithPathDirs(rt.BinDirs), h.cipher).
 		WithConfigPath(service.McpRawPath(paths.Home))
 	// mcp.json 文件为源：存在则同步进 mcp_servers 表后再对齐子进程
@@ -449,17 +467,25 @@ func (h *Handler) Startup(ctx context.Context) error {
 		return err
 	}
 
-	h.chatSvc = service.NewChatService(h.sessRepo, h.msgRepo, h.provRepo, h.setRepo, h.usageRepo, h.bus, h.reg, h.toolSvc, h.memSvc).
+	h.chatSvc = service.NewChatService(h.app.SessRepo, h.app.MsgRepo, h.app.ProvRepo, h.app.SetRepo, h.app.UsageRepo, h.bus, h.reg, h.toolSvc, h.memSvc).
 		WithDataHome(paths.Home).
-		WithCheckpointStore(service.NewSQLCheckpointStore(repo.NewAgentCheckpointRepo(gdb))).
+		WithCheckpointStore(service.NewSQLCheckpointStore(h.app.CheckpointRepo)).
 		WithEventLog(h.eventLog).
-		WithMessageBlocks(repo.NewMessageBlockRepo(gdb)).
-		WithRunRecords(repo.NewRunRecordRepo(gdb)).
+		WithMessageBlocks(h.app.BlocksRepo).
+		WithRunRecords(h.app.RunRecRepo).
 		WithExecutionRegistry(h.execs).
 		WithApprovalService(h.approvalSvc).
+		WithChangeService(h.changeSvc).
 		WithSkillSync(func(ctx context.Context, wsPath string) error {
 			return h.skillSvc.SyncWorkspace(ctx, wsPath)
-		})
+		}).
+		// 三层 State：run 结束清理 temp 作用域，避免 run 级临时态泄漏
+		WithTempStateClearer(h.sessionVarSvc.ClearTemp)
+	// durable pause：审批跨重启决策后，经此钩子从检查点续跑原 run
+	h.approvalSvc.WithResumeHook(func(ctx context.Context, runID string) error {
+		_, err := h.chatSvc.ResumeRun(ctx, runID)
+		return err
+	})
 
 	// 目录信任：恒信任根 = 全局工作区 + 会话工作区根 + 数据目录本身；
 	// exec 的 cwd 不在根内时走 ask → 走审批门 → 批准后落盘 allow。
@@ -472,7 +498,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 		filepath.Join(paths.Home, "knowledge"),
 		filepath.Join(paths.Home, "files"),
 	}
-	h.trustSvc = service.NewTrustService(repo.NewWorkspaceTrustRepo(gdb), trustRoots...).
+	h.trustSvc = service.NewTrustService(h.app.TrustRepo, trustRoots...).
 		WithApprover(func(ctx context.Context, description string) bool {
 			if h.approvalSvc == nil {
 				return false
@@ -509,13 +535,13 @@ func (h *Handler) Startup(ctx context.Context) error {
 	}))
 	_ = chanReg.Register(webhook.New())
 	_ = chanReg.Register(channel.ConsoleChannel{})
-	h.channelSvc = channel.NewService(repo.NewChannelConfigRepo(gdb), repo.NewChannelMessageLogRepo(gdb), chanReg)
+	h.channelSvc = channel.NewService(h.app.ChannelRepo, h.app.ChannelLogRepo, chanReg)
 
 	// 工作流引擎：DAG 执行 + 7 节点 + HumanInput resolver。
 	// ChannelSender 由 channel.Service 提供。
-	wfRepo := repo.NewWorkflowRepo(gdb)
-	wfExecRepo := repo.NewWorkflowExecutionRepo(gdb)
-	wfNodeRepo := repo.NewWorkflowNodeExecutionRepo(gdb)
+	wfRepo := h.app.WorkflowRepo
+	wfExecRepo := h.app.WorkflowExecRepo
+	wfNodeRepo := h.app.WorkflowNodeExecRepo
 	wiResolver := workflow.NewDefaultHumanInputResolver(h.bus)
 	wfExecutor := workflow.New(workflow.ExecutorConfig{
 		DB:       gdb,
@@ -530,8 +556,9 @@ func (h *Handler) Startup(ctx context.Context) error {
 			// 计量：ReAct 与补全两条路径统一落 token_usages（Source=workflow）。
 			wnodes.NewLLMNode(h.reg).
 				WithReactor(service.NewWorkflowReactor(h.reg, h.toolSvc).
-					WithUsageSink(service.WorkflowUsageSink(h.usageRepo)).React).
-				WithUsageSink(service.WorkflowUsageSink(h.usageRepo)),
+					WithGuards(h.chatSvc.WorkflowGate, h.approvalSvc.Approve, h.chatSvc.WorkflowPathTrust()).
+					WithUsageSink(service.WorkflowUsageSink(h.app.UsageRepo)).React).
+				WithUsageSink(service.WorkflowUsageSink(h.app.UsageRepo)),
 			wnodes.NewToolNode(toolReg),
 			wnodes.NewCodeNode(),
 			wnodes.NewConditionNode(),
@@ -541,6 +568,52 @@ func (h *Handler) Startup(ctx context.Context) error {
 		},
 	})
 	h.workflowSvc = service.NewWorkflowService(wfRepo, wfExecRepo, wfNodeRepo, wfExecutor, wiResolver)
+
+	// 启动排空：上次进程遗留的 running 执行已无 goroutine 在跑，标 paused 供断点续跑
+	if n, rerr := wfExecRepo.ReapRunning(h.ctx); rerr != nil {
+		pkg.L.Warn("reap running workflow executions failed", "err", rerr.Error())
+	} else if n > 0 {
+		pkg.L.Info("workflow executions marked paused after restart", "count", n)
+	}
+
+	// 回写收件箱：run 终局模型抽取的候选先落待审，人工批准后合入语义记忆 / 技能库。
+	// 与确定性记忆形成分工：形成策略（免审）管规则可判的部分，收件箱（人审）管模型抽取的高价值候选。
+	h.inboxSvc = service.NewInboxService(h.app.InboxRepo).
+		WithApplier(domain.InboxKindFact, func(ctx context.Context, it domain.InboxItemDO) error {
+			var p domain.InboxFactPayload
+			if err := json.Unmarshal([]byte(it.Payload), &p); err != nil {
+				return pkg.Wrap(6001, "解析事实候选失败", err)
+			}
+			_, err := h.memSvc.WriteFact(ctx, memory.FactProposal{
+				Subject: p.Subject, Key: p.Key, Value: p.Value, Confidence: p.Confidence, SessionID: it.SessionID,
+			})
+			return err
+		}).
+		WithApplier(domain.InboxKindProcedure, func(ctx context.Context, it domain.InboxItemDO) error {
+			var p domain.InboxProcedurePayload
+			if err := json.Unmarshal([]byte(it.Payload), &p); err != nil {
+				return pkg.Wrap(6001, "解析程序候选失败", err)
+			}
+			_, err := h.memSvc.WriteProcedure(ctx, memory.ProcedureProposal{Name: p.Name, Steps: p.Steps})
+			return err
+		}).
+		WithApplier(domain.InboxKindSkill, func(ctx context.Context, it domain.InboxItemDO) error {
+			var p domain.InboxSkillPayload
+			if err := json.Unmarshal([]byte(it.Payload), &p); err != nil {
+				return pkg.Wrap(8002, "解析技能候选失败", err)
+			}
+			if rows, err := h.skillSvc.List(ctx); err == nil {
+				for _, r := range rows {
+					if r.Name == p.Name && r.SourceKind == domain.SkillSourceKindBuiltin {
+						return pkg.New(8003, "同名内置技能不可覆盖", p.Name)
+					}
+				}
+			}
+			_, err := h.skillSvc.ImportCustom(ctx, &domain.SkillREQ{
+				Name: p.Name, Description: p.Description, WhenToUse: p.WhenToUse, Body: p.Body, AllowedTools: p.AllowedTools,
+			})
+			return err
+		})
 
 	// 能力注册表：上下文装配（人格/工作区/记忆/知识库/Skill/工作流）、工具暴露与
 	// run 后沉淀统一接入；新增能力实现 Capability 并在此注册一行，chat 侧不再改动
@@ -554,6 +627,7 @@ func (h *Handler) Startup(ctx context.Context) error {
 	registerCap(capability.NewEnvironment(), capability.OrderEnvironment)
 	registerCap(capability.NewWorkspace(), capability.OrderWorkspace)
 	registerCap(capability.NewTodo(h.todoStore), capability.OrderTodo)
+	registerCap(capability.NewSessionVar(h.sessionVarSvc), capability.OrderSessionVar)
 	registerCap(capability.NewMemory(h.memSvc, h.chatSvc.MemoryEnabled), capability.OrderMemory)
 	registerCap(capability.NewKnowledge(retriever), capability.OrderKnowledge)
 	registerCap(capability.NewSkill(capability.NewSkillSource(
@@ -575,6 +649,8 @@ func (h *Handler) Startup(ctx context.Context) error {
 		h.skillSvc.Summaries,
 	)), capability.OrderSkill)
 	registerCap(capability.NewWorkflow(h.workflowSvc), capability.OrderWorkflow)
+	// 回写收件箱兜底：run 终局抽取候选（与确定性记忆形成互补，需人审合入）
+	registerCap(capability.NewInbox(h.inboxSvc, service.NewInboxExtractor(h.reg), h.chatSvc.MemoryEnabled), capability.OrderInbox)
 	// 能力暴露的工具统一注册（knowledge_search / memory_write / run_workflow）
 	for _, t := range caps.Tools() {
 		if err := toolReg.Register(t); err != nil {
@@ -587,7 +663,12 @@ func (h *Handler) Startup(ctx context.Context) error {
 	h.chatSvc.WithCapabilities(caps)
 
 	// 定时任务：run_workflow 动作 → workflow service；启动失败不阻断
-	cronSvc := cronjob.NewScheduler(repo.NewCronJobRepo(gdb))
+	// cron 执行全程防系统空闲休眠：SetThreadExecutionState(ES_SYSTEM_REQUIRED|ES_DISPLAY_REQUIRED)
+	// 引用计数随 Acquire/Release 配对，cron/workflow 任务并发安全
+	keepAwakeSetter := keepawake.NewSetter()
+	cronSvc := cronjob.NewScheduler(h.app.CronRepo, h.app.CronRunLogRepo).WithKeepAwaker(&keepAwakeAdapter{
+		setter: keepAwakeSetter,
+	})
 	cronSvc.RegisterHandler(domain.ActionRunWorkflow, func(ctx context.Context, args json.RawMessage) error {
 		var a domain.RunWorkflowArgs
 		if err := json.Unmarshal(args, &a); err != nil {
@@ -605,8 +686,8 @@ func (h *Handler) Startup(ctx context.Context) error {
 	}
 
 	// 文件系统：文件夹树 + 文件托管 + 会话工作区面板（面板与工具链共用会话目录解析）
-	h.folderSvc = service.NewFolderService(repo.NewFolderRepo(gdb))
-	h.fileSvc = service.NewFileService(repo.NewFileRepo(gdb), filepath.Join(paths.Home, "files"))
+	h.folderSvc = service.NewFolderService(h.app.FolderRepo)
+	h.fileSvc = service.NewFileService(h.app.FileRepo, filepath.Join(paths.Home, "files"))
 	// 附件读取能力：聊天消息的图片附件经此转 data URI 发给多模态模型
 	h.chatSvc.WithFileStore(h.fileSvc)
 	h.workspaceSvc = service.NewWorkspaceService(filepath.Join(paths.Home, "workspaces"), func(sessionID string) string {
@@ -614,10 +695,12 @@ func (h *Handler) Startup(ctx context.Context) error {
 	})
 
 	// 桌宠：配置单行 + sprite 资产 + 状态机（chat run 事件驱动）
-	h.petSvc = pet.NewService(repo.NewPetConfigRepo(gdb), repo.NewPetSpriteRepo(gdb), filepath.Join(paths.Home, "sprites"))
+	h.petSvc = pet.NewService(h.app.PetCfgRepo, h.app.PetSpriteRepo, filepath.Join(paths.Home, "sprites"))
 	h.petSvc.SeedBuiltin(ctx)
-	// 启动排空：上进程遗留的未决审批标 cancelled；崩溃时卡在 streaming 的消息标 interrupted（可经 Resume 续跑）
-	h.approvalSvc.DrainStale(ctx)
+	// 启动恢复：遗留未决审批重武装决策窗口（决策即续跑，durable pause）；
+	// 崩溃时卡在 streaming 的消息标 interrupted（可经 Resume 续跑）
+	h.approvalSvc.RearmPending(ctx)
+	h.approvalSvc.LoadGrants(ctx)
 	h.chatSvc.ReapInterrupted(ctx)
 	h.petCtrl = pet.NewController(func(s pet.State) {
 		if h.ctx != nil {

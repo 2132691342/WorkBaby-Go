@@ -1,12 +1,6 @@
 /**
- * 错误消费层（Wails AppError ↔ JS Error）。
- *
- * <p>Wails 把 Go *pkg.AppError 序列化为 JS Error 时：
- *   message = `${code} ${humanMessage}`
- *   真正结构化字段前端拿不到（Go struct → JS Error 仅 message 字符串）。
- * 因此本层把 message 按 "[code] human: details" 解析；解析失败回退统一文案。
- *
- * <p>doc/15 §7 与后端 pkg/apperror.go 一一对应。
+ * 错误消费层：Wails 把 Go AppError 序列化成 JS Error 时只保留 message 字符串，
+ * 本层按 "[code] human: details" 解析出错误码与详情，解析失败回退统一文案。
  */
 
 import { t } from '@/i18n'

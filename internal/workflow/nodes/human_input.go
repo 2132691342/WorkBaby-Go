@@ -43,6 +43,9 @@ func (n *HumanInputNode) Schema() Schema {
 }
 
 // Execute：渲染后的 prompt → resolver.Resolve；超时返回 9106。
+//
+// 断点续跑：若执行器已注入 `__userInput__`（进程重启后由前端提交并落库的输入），
+// 直接采用不再阻塞——原等待 goroutine 已随进程消失，重新等待会永久卡住。
 func (n *HumanInputNode) Execute(ctx context.Context, inputs map[string]any, cfg map[string]any, upstream map[string]any) (map[string]any, error) {
 	if n.resolver == nil {
 		return nil, pkg.New(9105, "HumanInput 节点未配置 resolver", "")
@@ -50,6 +53,9 @@ func (n *HumanInputNode) Execute(ctx context.Context, inputs map[string]any, cfg
 	prompt, _ := cfg["prompt"].(string)
 	if prompt == "" {
 		return nil, pkg.New(9104, "HumanInput 节点缺少 cfg.prompt", "")
+	}
+	if v, ok := inputs["__userInput__"].(string); ok {
+		return map[string]any{"value": v}, nil
 	}
 	ttl := 86400
 	if t, ok := cfg["ttlSeconds"].(float64); ok && t > 0 {

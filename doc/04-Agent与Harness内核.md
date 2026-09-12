@@ -33,10 +33,12 @@ Persona = 各自定位 + 共享方法论段（先探查、先计划、最小改�
 
 每个能力暴露三条通道：Preload（每轮自动注入上下文）/ Tools（模型主动调用）/ Capture（run 结束后自动沉淀）。
 
-- Registry 按 order 串联 Preload：persona 10 → environment 15 → workspace 20 → todo 25 → memory 30 → knowledge 40 → skill 50 → workflow 60。
+- Registry 按 order 串联 Preload：persona 10 → environment 15 → workspace 20 → todo 25 → session_var 28 → memory 30 → knowledge 40 → skill 50 → workflow 60 → inbox 70。
 - Preload 单能力失败/panic 仅告警跳过，不阻断 run；Capture 脱离 run ctx、异步执行、每能力独立超时（默认 30s）。
 - 能力间经 RunState 交换结果（技能命中写回工具白名单与命中详情，供时间线回放）。
-- 常驻段：人格、环境（OS/时间/exec 调用形态）、工作区（绑定目录与落点纪律）；记忆注入长期记忆尾部（≤4000 rune）+ 跨会话召回；知识库输入 ≥2 rune 自动召回 topK=3（≤3000 字符）并暴露 knowledge_search；技能命中注入正文（≤6000 rune，Low）并约束工具白名单，未命中注入轻量索引（≤800 rune，Lowest）；Todo 计划每轮回显（Low）；工作流注入可用清单（Lowest）。
+- 常驻段：人格、环境（OS/时间/exec 调用形态）、工作区（绑定目录与落点纪律）；记忆注入长期记忆尾部（≤4000 rune）；知识库输入 ≥2 rune 自动召回 topK=3（≤3000 字符）并暴露 knowledge_search；技能命中注入正文（≤6000 rune，Low）并约束工具白名单，未命中注入轻量索引（≤800 rune，Lowest）；Todo 计划每轮回显（Low）；工作流注入可用清单（Lowest）；结构化状态按 user/session/temp 分节注入（Low）。
+- **重型段门控（RelevanceGate）**：跨会话召回与知识库自动召回默认关闭，只有显式 `@引用` 或会话关键词命中才放行（判定顺序：opt-in > keyword > off，见 `capability/gate.go`）。目的不是省事，而是让「空闲会话上下文精简」成为结构性默认，而不是靠 Priority 裁剪在预算溢出时兜底——那时 token 代价已经付过了。
+- **收件箱能力（inbox 70）**：无 Preload / 无工具，只在 Capture 通道工作——用本 run 的 provider/model 抽取记忆与技能候选，落待审收件箱（人审合入），细节见 doc/08。
 
 ## 4. 历史重建（toLLMMessages）
 
@@ -69,9 +71,9 @@ DB 历史 → `[]*llm.Message`：跳过 streaming 占位与 archived 消息（�
 | 目录信任 | 信任三态（allow/ask/deny）+ 计划模式硬拦 → 拒绝（path_trust） |
 | 策略门 | 显式规则 glob > 会话模式 × 风险默认；按 per-call 命令级风险裁决；deny → policy，ask 经审批 → approval |
 | 停滞 | 同名同参连续 ≥ StagnationLimit（默认 5）置熔断信号 |
-| 循环/预算 | 全 run 同名同参计数 ≥ LoopLimit（默认 3）→ loop_guard；执行次数超上限 → tool_budget |
+| 循环/预算 | 全 run 同名同参计数 ≥ LoopLimit（默认 3）→ loop_guard；执行次数超上限 → tool_budget；签名键序归一化（JSON 规范化），同参异序仍判重复，计数在锁内并行安全 |
 | 幂等恢复 | Resume 命中已完成成功调用 → 复用，不重放副作用 |
-| 执行 | 施加超时（工具级覆盖全局默认 5min）、panic 隔离为错误结果、结果截断、成功且未拒绝时写幂等记忆 |
+| 执行 | 施加超时（工具级覆盖全局默认 5min）、panic 隔离为错误结果、后处理钩子链（多槽，按注册序逐字段覆盖）、结果截断、成功且未拒绝时写幂等记忆 |
 
 - 并发：整轮全只读且并发数 > 1 → 并行执行（结果按序回填）；否则严格串行（写工具无并发）。
 - 拒绝回执为结构化 JSON（refused + reason_code + hint）。原因码：not_exposed / prompt_injection / path_trust / policy / approval / loop_guard / tool_budget。
@@ -123,7 +125,7 @@ DB 历史 → `[]*llm.Message`：跳过 streaming 占位与 archived 消息（�
 
 - Event：Kind / RunID / ParentRunID / SessionID / Turn / Agent / Payload。
 - EventKind：run.start、turn.start、turn.delta、turn.thinking、turn.end、tool.call、tool.start、tool.result、checkpoint、compressed、run.done、error、retry。
-- Sink 接口（FuncSink / NopSink）；Runner 经 Sink 推事件，service 桥接为 `chat:*`。
+- Sink 接口（FuncSink / NopSink）；Runner 经 Sink 推事件，service 侧由 `runEventMapper`（chat_eventmap.go）统一映射为 `chat:*` 并收口落块 / 落 tool 消息——Runner 不感知持久化与前端协议，子 run 仅工具层与生命周期事件转发父 sink。
 - 用量口径：input / output / cache_read / cache_write / total；CacheRead 与 CacheWrite 是 Input 的拆解维度，不叠加。
 - service 桥接事件：`chat:stream(.start)` / `thinking` / `stats` / `tool(-start/-result)` / `skill` / `todo` / `compressed` / `warn` / `retry` / `error` / `done`；子 run：`chat:subagent-start` / `-error` / `-done`。
 - seq：run 内单调；SSE 断线按 Last-Event-ID 重放，缓冲被覆盖则发 gap 让前端转全量快照。

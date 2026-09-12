@@ -2,13 +2,8 @@
 import { computed } from 'vue'
 
 /**
- * 加载动画组件（阶段 3-2 · 加载动画）。
- *
- * <p>提供多种可爱 CSS 加载动画替代简单 loading 文字。
- * 使用方式：
- * <pre>
- * &lt;LoadingAnimation variant="pet" size="md" /&gt;
- * </pre>
+ * 加载动画组件：多种 CSS 动画替代 loading 文字。
+ * 用法：`<LoadingAnimation variant="pet" size="md" />`
  */
 
 export type LoadingVariant = 'dots' | 'pet' | 'flower' | 'bounce' | 'wave'

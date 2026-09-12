@@ -11,13 +11,9 @@ import (
 )
 
 // FileServer 服务本地受管文件（main.go AssetServer 转发 /files/**）：
-// /files/sprites/{id} → 桌宠 sprite；/files/files/{id} → 托管文件（files 表）；
-// /files/workspace/{sessionId}?path= → 会话工作区文件。
-// 均按 id/sessionId+path 查表或沙箱校验，不暴露任意路径。
-//
-// 刻意不挂在 Handler 上：Handler 是 Wails 绑定类型，http.ResponseWriter / http.Request
-// 一旦出现在绑定方法签名里，Wails 会把 net/http 类型闭包（含 multipart）生成进 models.ts，
-// 产出 `FileHeader[]` 这类非法 TS 表达式，导致前端类型检查失败。
+// /files/sprites/{id} 桌宠 sprite、/files/files/{id} 托管文件、/files/workspace/{sessionId}?path= 工作区文件。
+// 均按 id 或 sessionId+path 校验，不暴露任意路径。
+// 不挂在 Handler 上：http 类型出现在 Wails 绑定签名里会污染生成的 TS 模型。
 type FileServer struct {
 	ctx          context.Context
 	fileSvc      *service.FileService

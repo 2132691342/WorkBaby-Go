@@ -1,11 +1,18 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { apiGet, apiPost } from '@/api/client'
 import { getApiBase } from '@/api/http'
 import { t } from '@/i18n'
 import { useDialog } from '@/composables/useDialog'
 import { useToast } from '@/composables/useToast'
-import type { Workflow, WorkflowReq, WorkflowExecution, ExecutionDetail, WorkflowNodeExecution } from '@/types/api'
+import type {
+  Workflow,
+  WorkflowReq,
+  WorkflowExecution,
+  ExecutionDetail,
+  WorkflowNodeExecution,
+  WorkflowPendingInput
+} from '@/types/api'
 
 /**
  * Workflows store：工作流列表 / JSON 定义编辑与校验 / 可视化开关 / 运行编排（run、暂停/恢复/取消、详情轮询、人工输入）。
@@ -49,7 +56,20 @@ export const useWorkflowsStore = defineStore('workflows', () => {
   const newName = ref('')
   const newDesc = ref('')
 
-  /** workflow SSE 连接：监听当前执行的实时事件（started / node-* / input-required / completed / failed）。 */
+  /** 当前执行里等待人工输入的节点上下文（由 workflow:input-required 事件填充）。 */
+  const inputEvent = ref<WorkflowPendingInput | null>(null)
+
+  /**
+   * 待人工输入：事件载荷优先（带提问文案与 TTL）；页面刷新后事件已错过，回退到节点执行状态。
+   */
+  const pendingInput = computed<WorkflowPendingInput | null>(() => {
+    if (inputEvent.value) return inputEvent.value
+    const node = currentExecNodes.value.find((n) => n.status === 'waiting_input')
+    if (!node || !currentExecID.value) return null
+    return { executionID: currentExecID.value, nodeID: node.node_id, prompt: '', ttlSeconds: 0 }
+  })
+
+  /** workflow SSE 连接：监听当前执行的实时事件（started / node-* / input-required / paused / resumed / 终态）。 */
   let workflowES: EventSource | null = null
 
   function stopWatchWorkflow(): void {
@@ -72,21 +92,55 @@ export const useWorkflowsStore = defineStore('workflows', () => {
       // 节点级事件直接刷新详情（拿到最新 outputs / status）
       void fetchExecutionDetail()
     }
+    // 人工输入：prompt 与 TTL 只在事件载荷里（详情接口不返回），必须在此捕获
+    es.addEventListener('workflow:input-required', (ev: MessageEvent) => {
+      inputEvent.value = parseInputRequired(String(ev.data), executionID)
+      void fetchExecutionDetail()
+    })
     es.addEventListener('workflow:started', onProgress)
     es.addEventListener('workflow:node-start', onProgress)
     es.addEventListener('workflow:node-done', onProgress)
-    es.addEventListener('workflow:input-required', onProgress)
+    // 暂停 / 恢复：同一执行仍在推进，刷新详情而非关流
+    es.addEventListener('workflow:paused', onProgress)
+    es.addEventListener('workflow:resumed', onProgress)
     es.addEventListener('workflow:completed', () => {
+      inputEvent.value = null
       void fetchExecutionDetail()
       stopWatchWorkflow()
     })
     es.addEventListener('workflow:failed', () => {
+      inputEvent.value = null
+      void fetchExecutionDetail()
+      stopWatchWorkflow()
+    })
+    es.addEventListener('workflow:cancelled', () => {
+      inputEvent.value = null
       void fetchExecutionDetail()
       stopWatchWorkflow()
     })
     es.onerror = (): void => {
       // watch 关闭 / 网络抖动由后端心跳 + 浏览器重连兜底；这里只防泄漏
       if (workflowES !== es) return
+    }
+  }
+
+  /**
+   * 解析 workflow:input-required 载荷。字段名沿用后端 camelCase（executionID / nodeID），
+   * 不做归一化——sse.go 的订阅过滤同样按 executionID 取值，改名会让事件投递不到订阅者。
+   */
+  function parseInputRequired(raw: string, executionID: string): WorkflowPendingInput | null {
+    try {
+      const m = JSON.parse(raw) as Record<string, unknown>
+      const nodeID = typeof m.nodeID === 'string' ? m.nodeID : ''
+      if (!nodeID) return null
+      return {
+        executionID: typeof m.executionID === 'string' ? m.executionID : executionID,
+        nodeID,
+        prompt: typeof m.prompt === 'string' ? m.prompt : '',
+        ttlSeconds: typeof m.ttlSeconds === 'number' ? m.ttlSeconds : 0
+      }
+    } catch {
+      return null
     }
   }
 
@@ -212,7 +266,7 @@ export const useWorkflowsStore = defineStore('workflows', () => {
       currentExecNodes.value = []
       watchWorkflowEvents(exec.execution_id)
       await pollExecution()
-      stopWatchWorkflow()
+      // 不在此关流：终态由事件监听自行关闭，挂起态（等待人工输入 / 暂停）需要保留连接
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       error.value = msg
@@ -242,6 +296,10 @@ export const useWorkflowsStore = defineStore('workflows', () => {
       const st = currentExec.value?.status
       // 后端实际值是小写；前后端契约对齐后此处只比较小写
       if (st === 'completed' || st === 'failed' || st === 'cancelled') {
+        break
+      }
+      // 挂起态交给 SSE 事件驱动：继续空轮询只会白等满 30s，且用户提交后拿不到实时进度
+      if (st === 'paused' || pendingInput.value) {
         break
       }
       await new Promise((r) => setTimeout(r, 500))
@@ -297,6 +355,7 @@ export const useWorkflowsStore = defineStore('workflows', () => {
   async function submitInput(executionID: string, nodeID: string, input: string): Promise<boolean> {
     try {
       await apiPost(`/api/v1/executions/${executionID}/input`, { node_id: nodeID, value: input })
+      inputEvent.value = null
       toast.success(t('workflows.inputSubmitted'))
       return true
     } catch (e) {
@@ -315,6 +374,7 @@ export const useWorkflowsStore = defineStore('workflows', () => {
     currentExecID,
     currentExec,
     currentExecNodes,
+    pendingInput,
     showCreate,
     showGraph,
     newName,

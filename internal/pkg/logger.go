@@ -17,20 +17,12 @@ const LogFileSize = 10 * 1024 * 1024
 // LogKeepCount 保留的旧日志份数（含当前）。
 const LogKeepCount = 5
 
-// L 全局日志入口。仅使用 Info / Warn / Error 三个等级：
-//   - Info：生命周期与关键链路节点；
-//   - Warn：可自愈的异常（降级、重试、参数兜底）；
-//   - Error：需要人介入的失败。
-//
-// 初始化前调用会退化为 stderr（见 fallback）。
+// L 全局日志入口，只用 Info / Warn / Error 三个等级：Info 生命周期、Warn 可自愈异常、
+// Error 需人介入的失败。Init 之前调用退化为 stderr。
 var L *slog.Logger = fallback()
 
-// Init 初始化日志三通道（目录不存在则创建）：
-//   - workbaby.log       全量（info + warn + error）
-//   - workbaby-warn.log  仅 warn
-//   - workbaby-error.log 仅 error
-//
-// 控制台（stderr）只输出 warn 及以上，避免 GUI 场景下信息噪音。
+// Init 初始化日志：workbaby.log 全量、workbaby-warn.log 仅 warn、workbaby-error.log 仅 error；
+// 控制台只输出 warn 及以上。
 func Init(logDir string) error {
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return Wrap(1011, "create log dir failed", err)

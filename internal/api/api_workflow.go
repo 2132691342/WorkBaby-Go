@@ -62,7 +62,7 @@ func (h *Handler) GetWorkflowExecution(executionID string) (domain.ExecutionDeta
 
 // ResolveHumanInput 前端回填工作流 HumanInput 节点的等待。
 func (h *Handler) ResolveHumanInput(executionID string, req domain.ResolveHumanInputREQ) error {
-	return h.workflowSvc.ResolveHumanInput(executionID, req.NodeID, req.Value)
+	return h.workflowSvc.ResolveHumanInput(h.ctx, executionID, req.NodeID, req.Value)
 }
 
 // CancelWorkflowExecution 取消正在跑的工作流。

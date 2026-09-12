@@ -16,7 +16,8 @@ type Provider interface {
 ```
 
 - `ChatRequest`：Model / Messages（system 在首）/ Tools / Temperature / TopP / MaxTokens / Stop / Thinking / ExtraBody / User / SessionID。
-- `StreamChunk`：正文增量、思维增量（独立通道，永不混入正文）、工具调用（某调用闭合时发一次）、结束原因、末帧用量、错误；channel 由实现负责 close。
+- `StreamChunk`：正文增量、思维增量（独立通道，永不混入正文）、工具调用（某调用闭合时发一次）、结束原因、末帧用量、错误。
+- 流式原语：三类协议统一经 `llm.NewChunkStream(ctx, buf)` 建通道，发送在 ctx 取消时返回 false 由生产者退出；生产者负责 close，**消费者必须读到 channel 关闭**（提前放弃会把生产者挂死在满缓冲的 send 上，泄漏 goroutine 与上游连接）。
 - `ChatResponse`：Message / ToolCalls / Usage / StopReason（end_turn / tool_use / max_tokens / length / stop）。
 - `Message`：Content（模型可见正文）、Thinking（推理文本，独立字段）、ToolCalls、ToolCallID/ToolName（role=tool 回填）、Name。
 - `NormalizedToolCall{ID, Name, Arguments}`：各协议经 `toolcall` 子包归一到此。
@@ -91,13 +92,20 @@ type Provider interface {
 - 单价：`pricing.<model>` 存 `input_per_m` / `output_per_m` / `cache_read_per_m`；非缓存输入按 input 单价、缓存读按 cache_read（未配则按 input 全价）、输出按 output 估算；未配单价不计费。
 - 落库：每次上游调用落一行 `token_usages`（run / message / turn / provider / model / latency / cost），`source` 区分 chat / workflow / cron / memory / delegate（委派单独记账）。
 
-## 能力声明
+## 能力声明与模型元数据
 
 - `context_window`（0 = 全局默认，驱动压缩预算）、`max_output_tokens`（0 = 不限）。
 - 三态能力：`supports_tool_call` / `supports_vision` / `supports_reasoning` 为三态值——未声明按 kind 或模型名推断，显式值优先。
   - tool_call：openai / anthropic 默认支持，ollama 默认不支持。
   - vision / reasoning：按模型名关键词推断。
 - 出参同时给三态原值与解算后布尔值，前端不必自行推断。
+- 内置模型目录（`internal/llm/modelmeta/catalog.json`，嵌入）：provider 行未声明 `context_window` 或未配单价时按模型名兜底——子串匹配、最长 match 优先；目录未收录回退全局缺省/不计费。上下文窗口三级回退：provider 声明 → 模型目录 → 全局缺省。
+
+## 两层模型与预设
+
+- 协议实现 ≠ provider 配置：三家 client 是唯一的协议实现层，`ai_providers` 表行只是配置数据（kind 选协议 + baseURL/模型/参数）。新增一个 OpenAI 兼容 provider 零代码。
+- 内置预设（`GET /ai-provider/presets`）：常见模型服务（OpenAI / Anthropic / DeepSeek / Kimi / GLM / Qwen / OpenRouter / SiliconFlow / 本机 Ollama / LM Studio）的 kind + base_url + 首选模型清单，前端「新增模型」一键预填。
+- 三家协议 client 的线协议测试（`internal/llm/<kind>/client_test.go`）经 `internal/llmtest` 假上游回放 SSE/ndjson 帧，锁定解析契约：字段漂移在测试层暴露，不进用户对话。
 
 ## 配置源与不变量
 

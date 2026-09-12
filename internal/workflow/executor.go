@@ -70,6 +70,14 @@ func New(cfg ExecutorConfig) *Executor {
 	}
 }
 
+// resumeState 断点续跑时从数据库恢复的执行现场。
+type resumeState struct {
+	completed  map[string]map[string]any // 已完成节点的 outputs
+	branches   map[string]string         // condition 节点已选分支
+	skipped    map[string]bool           // 上次已跳过的节点
+	userInputs map[string]string         // 已提交但未被消费的人工输入（nodeID → value）
+}
+
 // Run 启动一次工作流执行（同步等待全部完成）；返回 executionID（出错也返回，便于查询）。
 //
 // 事件流：workflow:started → workflow:node-start/node-done × N → workflow:completed / workflow:failed。
@@ -91,7 +99,6 @@ func (e *Executor) Run(ctx context.Context, workflowID string, inputs map[string
 	execID := pkg.NewID(domain.IDWorkflowExec)
 	now := time.Now().UnixMilli()
 	pkg.L.Info("workflow run start", "executionID", execID, "workflowID", workflowID, "nodes", len(g.Nodes))
-	startedAt := time.Now()
 	if err := e.execRepo.Create(ctx, &domain.WorkflowExecutionDO{
 		ID:         execID,
 		WorkflowID: workflowID,
@@ -108,15 +115,123 @@ func (e *Executor) Run(ctx context.Context, workflowID string, inputs map[string
 		"inputs":      inputs,
 	})
 
-	// 可取消的 runCtx：终态唯一所有者是本 Run 流程（Cancel 只发取消信号，不写状态）
+	return e.drive(ctx, execID, workflowID, g, inputs, nil)
+}
+
+// ResumeFrom 从已中断的执行继续（跨进程重启后仍可用）。
+//
+// 复用语义：已 completed 的节点取回 outputs 不重跑（避免副作用重复），
+// 已 skipped 的节点维持跳过，waiting_input 节点取已提交的人工输入。
+func (e *Executor) ResumeFrom(ctx context.Context, executionID string) error {
+	row, err := e.execRepo.GetByID(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	if row.Status == domain.WorkflowStatusCompleted {
+		return nil // 已完成：无待续跑的工作
+	}
+	wf, err := e.wfRepo.GetByID(ctx, row.WorkflowID)
+	if err != nil {
+		return err
+	}
+	g, err := ParseGraph(wf.Graph)
+	if err != nil {
+		return err
+	}
+	if err := Validate(g); err != nil {
+		return err
+	}
+	inputs := map[string]any{}
+	if row.Inputs != "" {
+		_ = json.Unmarshal([]byte(row.Inputs), &inputs)
+	}
+	st, err := e.snapshot(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	pkg.L.Info("workflow resume", "executionID", executionID, "workflowID", row.WorkflowID,
+		"completed", len(st.completed), "skipped", len(st.skipped), "pendingInput", len(st.userInputs))
+	_, err = e.drive(ctx, executionID, row.WorkflowID, g, inputs, st)
+	return err
+}
+
+// snapshot 读回指定执行的现场（已完成 / 已跳过 / 已提交人工输入）。
+func (e *Executor) snapshot(ctx context.Context, executionID string) (*resumeState, error) {
+	rows, err := e.nodeRepo.ListByExecution(ctx, executionID)
+	if err != nil {
+		return nil, err
+	}
+	st := &resumeState{
+		completed:  map[string]map[string]any{},
+		branches:   map[string]string{},
+		skipped:    map[string]bool{},
+		userInputs: map[string]string{},
+	}
+	for i := range rows {
+		r := &rows[i]
+		var out map[string]any
+		if r.Outputs != "" {
+			_ = json.Unmarshal([]byte(r.Outputs), &out)
+		}
+		switch r.Status {
+		case domain.NodeStatusCompleted:
+			st.completed[r.NodeID] = out
+			if r.NodeType == domain.WorkflowNodeCondition {
+				if b, ok := out["branch"].(string); ok {
+					st.branches[r.NodeID] = b
+				}
+			}
+		case domain.NodeStatusSkipped:
+			st.skipped[r.NodeID] = true
+		case domain.NodeStatusWaiting:
+			if v, ok := out["user_input"].(string); ok && v != "" {
+				st.userInputs[r.NodeID] = v
+			}
+		}
+	}
+	return st, nil
+}
+
+// drive 执行主流程：首次运行与断点续跑共用同一套分层调度。
+//
+// 终态唯一所有者：只有本函数写终态（Cancel/Pause/Resume 只发信号）。
+func (e *Executor) drive(ctx context.Context, execID, workflowID string, g *Graph, inputs map[string]any, st *resumeState) (string, error) {
+	// 可取消的 runCtx；同一执行不允许并发续跑（重复触发只保留先到的那个）
 	runCtx, cancel := context.WithCancel(ctx)
-	e.runs.Store(execID, cancel)
+	if _, loaded := e.runs.LoadOrStore(execID, cancel); loaded {
+		cancel()
+		return execID, pkg.New(9109, "该执行已在运行中", execID)
+	}
 	defer func() { cancel(); e.runs.Delete(execID) }()
 
-	outputs := map[string]map[string]any{}  // nodeID → 输出
-	conditionOutputs := map[string]string{} // condition 节点 ID → branch 标签
-	skipped := map[string]bool{}            // nodeID → 已跳过（分支跳过传播依据）
+	if st != nil {
+		_ = e.execRepo.UpdateStatus(ctx, execID, domain.WorkflowStatusRunning)
+		e.bus.Publish("workflow:resumed", map[string]any{"executionID": execID})
+	}
 
+	outputs := map[string]map[string]any{}   // nodeID → 输出
+	conditionOutputs := map[string]string{}  // condition 节点 ID → branch 标签
+	skipped := map[string]bool{}             // nodeID → 已跳过（分支跳过传播依据）
+	done := map[string]bool{}                // nodeID → 已完成/已处理（续跑时跳过重跑）
+	userInputs := map[string]string{}        // nodeID → 已提交人工输入
+	if st != nil {
+		for id, out := range st.completed {
+			outputs[id] = out
+			done[id] = true
+		}
+		for id, b := range st.branches {
+			conditionOutputs[id] = b
+		}
+		for id := range st.skipped {
+			skipped[id] = true
+			done[id] = true
+		}
+		for id, v := range st.userInputs {
+			userInputs[id] = v
+		}
+	}
+
+	startedAt := time.Now()
 	layers, err := TopologicalLayers(g)
 	if err != nil {
 		e.failExec(ctx, execID, err)
@@ -128,7 +243,7 @@ func (e *Executor) Run(ctx context.Context, workflowID string, inputs map[string
 			e.abortExec(ctx, execID, err, true)
 			return execID, err
 		}
-		if err := e.runLayer(runCtx, g, execID, layer, inputs, outputs, conditionOutputs, skipped); err != nil {
+		if err := e.runLayer(runCtx, g, execID, layer, inputs, outputs, conditionOutputs, skipped, done, userInputs); err != nil {
 			e.abortExec(ctx, execID, err, runCtx.Err() != nil)
 			return execID, err
 		}
@@ -165,6 +280,8 @@ func (e *Executor) runLayer(
 	outputs map[string]map[string]any,
 	conditionOutputs map[string]string,
 	skipped map[string]bool,
+	done map[string]bool,
+	userInputs map[string]string,
 ) error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -173,6 +290,10 @@ func (e *Executor) runLayer(
 	for _, nodeID := range layer {
 		nd := FindNode(g, nodeID)
 		if nd == nil {
+			continue
+		}
+		// 断点续跑：该节点此前已完成或已跳过，outputs 已在 drive 初始化时恢复
+		if done[nd.ID] {
 			continue
 		}
 		// 分支跳过判定也读 conditionOutputs / skipped，与兄弟 goroutine 写同一组 map——持锁。
@@ -206,8 +327,19 @@ func (e *Executor) runLayer(
 			for k, v := range upstream {
 				ctxInputs[k] = v
 			}
+			// 断点续跑：该节点等待期间用户已提交输入 → 直接注入，不再阻塞
+			if v, ok := userInputs[nodeDef.ID]; ok {
+				ctxInputs["__userInput__"] = v
+			}
 
 			nodeExecID := e.startNodeExec(ctx, execID, nodeDef, upstream)
+
+			// 人工输入节点在阻塞等待前先落 waiting_input + 提问文案：
+			// 进程重启后 UI 仍能显示「等待输入」，并据此触发断点续跑。
+			if nodeDef.Type == domain.WorkflowNodeHumanInput {
+				prompt, _ := renderedCfg["prompt"].(string)
+				_ = e.nodeRepo.SetWaitingInput(ctx, nodeExecID, prompt)
+			}
 
 			impl, ok := e.nodes[nodeDef.Type]
 			if !ok {
@@ -376,10 +508,19 @@ func (e *Executor) Pause(ctx context.Context, executionID string) error {
 }
 
 // Resume 恢复已暂停的 workflow。
+//
+// 两条路径：进程内暂停信号存在则直接唤醒；否则（进程重启后 pause channel 已消失）
+// 走断点续跑——复用已完成节点，waiting_input 节点取已提交的人工输入。
 func (e *Executor) Resume(ctx context.Context, executionID string) error {
 	v, ok := e.pauses.Load(executionID)
 	if !ok {
-		return pkg.New(9110, "workflow execution not paused", "")
+		go func() {
+			if err := e.ResumeFrom(context.Background(), executionID); err != nil {
+				pkg.L.Warn("resume workflow without pause signal failed",
+					"executionID", executionID, "err", err.Error())
+			}
+		}()
+		return nil
 	}
 	ch := v.(chan struct{})
 	e.pauses.Delete(executionID)

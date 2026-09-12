@@ -120,25 +120,29 @@ func (s *FileCheckpointStore) Cleanup(sessionID string, keep int) error {
 	if err != nil {
 		return nil // 目录不存在 = 无检查点，非错误
 	}
-	var runs []string
+	// 先一次性取回 (文件名, mtime) 再排序：比较函数里逐次 os.Stat 会放大成
+	// O(n log n) 次系统调用，ReadDir 的 DirEntry 已带元信息，取一次即可。
+	type runFile struct {
+		name string
+		mod  time.Time
+	}
+	runs := make([]runFile, 0, len(entries))
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".jsonl") {
-			runs = append(runs, e.Name())
+		if !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
 		}
+		info, err := e.Info()
+		if err != nil {
+			continue // 竞态删除：跳过而非中断清理
+		}
+		runs = append(runs, runFile{name: e.Name(), mod: info.ModTime()})
 	}
 	if len(runs) <= keep {
 		return nil
 	}
-	sort.Slice(runs, func(i, j int) bool {
-		ai, ei := os.Stat(filepath.Join(dir, runs[i]))
-		aj, ej := os.Stat(filepath.Join(dir, runs[j]))
-		if ei != nil || ej != nil {
-			return false
-		}
-		return ai.ModTime().After(aj.ModTime())
-	})
-	for _, name := range runs[keep:] {
-		_ = os.Remove(filepath.Join(dir, name))
+	sort.Slice(runs, func(i, j int) bool { return runs[i].mod.After(runs[j].mod) })
+	for _, r := range runs[keep:] {
+		_ = os.Remove(filepath.Join(dir, r.name))
 	}
 	return nil
 }

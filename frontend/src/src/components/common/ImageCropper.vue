@@ -1,13 +1,7 @@
 <script setup lang="ts">
 /**
- * 图片编辑器（Canvas 实现，零依赖）：裁剪 + 任意角度旋转 + 翻转 + 缩放 + 自动抠图。
- *
- * <p>输入是 data URL（本地图由后端 ReadLocalImage 代读，WebView 不让前端碰 file://），
- * 输出也是 PNG data URL（保留 alpha，抠出来的透明背景能带走）——桌宠形象、
- * 聊天头像、悬浮 companion 共用同一份成品。
- *
- * <p>自动抠图：取四角像素均值当背景色，按容差把接近的像素 alpha 归零，
- * 容差边界做一圈软过渡，避免硬边锯齿。只做位图变换，不动原文件。
+ * 图片编辑器（Canvas，零依赖）：裁剪 / 旋转 / 翻转 / 缩放 / 自动抠图。
+ * 输入输出均为 data URL（输出 PNG 保留 alpha）；自动抠图以四角像素均值为背景色按容差归零 alpha。
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '@/i18n'

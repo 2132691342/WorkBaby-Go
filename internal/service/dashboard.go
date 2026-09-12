@@ -93,13 +93,7 @@ func (s *DashboardService) Trend(ctx context.Context, days int) (*domain.Dashboa
 // maxTrendSpanDays 自定义范围最大跨度（防止前端误传导致内存爆掉）。
 const maxTrendSpanDays = 366
 
-// TokenTrend token 消耗趋势：今日按 24 小时，其余按自然日递增。
-//
-// 时间窗语义：
-//   - today：今日 00:00 → +24h（固定 24 个桶，未来时段为 0）
-//   - week：今日往前 6 天 00:00 → 现在（7 个日桶）
-//   - month：本月 1 号 00:00 → 现在
-//   - custom：起始日 00:00 → 结束日次日 00:00
+// TokenTrend token 消耗趋势：today 按 24 小时桶（未来时段为 0），week/month/custom 按自然日桶。
 func (s *DashboardService) TokenTrend(ctx context.Context, req domain.TokenTrendREQ) (*domain.TokenTrendRESP, error) {
 	scope := req.Scope
 	if scope == "" {

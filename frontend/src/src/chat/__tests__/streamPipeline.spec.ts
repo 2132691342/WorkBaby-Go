@@ -80,6 +80,11 @@ describe('解码器', () => {
     expect(decodeStreamEvent({ type: 'approval_decided', data: null })).toBeNull()
   })
 
+  /** 展示用审批请求 → 未决审批（与生产入队形状一致）。 */
+  function toPending(a: ApprovalRequest): import('@/types/api').PendingApproval {
+    return { id: a.id, command: a.command, reason: a.reason, risk: a.risk ?? 'needs_approval', can_remember: a.canRemember }
+  }
+
   /** 最小 ref state（满足 applyStreamUpdate 签名）。 */
   function makeState(pending: ApprovalRequest | null = null) {
     return {
@@ -89,28 +94,33 @@ describe('解码器', () => {
       streamingStats: { value: null },
       streamingArtifacts: { value: null },
       streamingGenUi: { value: null },
-      pendingApproval: { value: pending },
+      pendingApprovals: { value: pending ? [toPending(pending)] : [] },
       error: { value: null as string | null },
       stopReason: { value: null as string | null }
     }
   }
   const sample = (id: string): ApprovalRequest => ({ id, command: 'go test', reason: '需确认' })
 
-  it('clearApproval 仅 id 匹配才清（防误清并发新请求），set→clear 全链路回到 null', () => {
+  it('审批队列：clearApproval 仅按 id 移除（防误清并发新请求），多请求按到达顺序排队', () => {
     const matched = makeState(sample('APR_1'))
     applyStreamUpdate({ clearApproval: { id: 'APR_1', decision: 'approved' } }, matched)
-    expect(matched.pendingApproval.value).toBeNull()
+    expect(matched.pendingApprovals.value).toHaveLength(0)
 
-    // id 不匹配：保留当前请求
+    // id 不匹配：保留队列中的请求
     const mismatched = makeState(sample('APR_2'))
     applyStreamUpdate({ clearApproval: { id: 'APR_1', decision: 'approved' } }, mismatched)
-    expect(mismatched.pendingApproval.value).toEqual(sample('APR_2'))
+    expect(mismatched.pendingApprovals.value).toEqual([toPending(sample('APR_2'))])
 
     const chain = makeState(null)
     applyStreamUpdate({ setApproval: sample('APR_1') }, chain)
-    expect(chain.pendingApproval.value).toEqual(sample('APR_1'))
+    expect(chain.pendingApprovals.value).toEqual([toPending(sample('APR_1'))])
+
+    // 并发第二个请求：入队而不是覆盖（此前单值 ref 会让 APR_1 永久看不到）
+    applyStreamUpdate({ setApproval: sample('APR_2') }, chain)
+    expect(chain.pendingApprovals.value.map((p) => p.id)).toEqual(['APR_1', 'APR_2'])
+
     applyStreamUpdate({ clearApproval: { id: 'APR_1', decision: 'denied' } }, chain)
-    expect(chain.pendingApproval.value).toBeNull()
+    expect(chain.pendingApprovals.value.map((p) => p.id)).toEqual(['APR_2'])
   })
 
   it('子 Agent 生命周期：start 建 running 任务，done 合并终态，未 start 的 id 不产生悬空任务', () => {

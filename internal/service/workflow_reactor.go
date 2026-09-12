@@ -10,25 +10,41 @@ import (
 	"WorkBaby/internal/llm"
 	"WorkBaby/internal/llm/registry"
 	"WorkBaby/internal/pkg"
+	"WorkBaby/internal/tool"
 	wnodes "WorkBaby/internal/workflow/nodes"
 )
 
-// WorkflowReactor 把 harness 的 ReAct 主循环接给工作流 LLM 节点。
-//
-// 依赖倒置：nodes 包不依赖 harness，由 service 层（可同时依赖两者）装配实现，
-// 保持 workflow 为叶子包、不破坏分层门禁。
-//
-// 语义与聊天 run 一致（多轮工具执行、上下文装配与压缩、预算与停滞熔断），
-// 但会话无关：不落 chat_messages、不发 SSE。
+// WorkflowReactor 把 harness 的 ReAct 主循环接给工作流 LLM 节点（依赖倒置，nodes 包不依赖 harness）。
+// 语义与聊天 run 一致（多轮工具、压缩、预算与停滞熔断），但会话无关：不落消息、不发 SSE。
 type WorkflowReactor struct {
 	providers *registry.Registry
 	tools     *ToolService
 	usageSink wnodes.UsageSink // 计量回调；nil = 不落 token_usages
+
+	gateFn    func(ctx context.Context) *tool.Gate
+	approver  func(ctx context.Context, description, risk string) bool
+	pathTrust harness.PathTrust
 }
 
 // NewWorkflowReactor 构造工作流 ReAct 执行器。
 func NewWorkflowReactor(providers *registry.Registry, tools *ToolService) *WorkflowReactor {
 	return &WorkflowReactor{providers: providers, tools: tools}
+}
+
+// WithGuards 注入工作流执行的权限护栏（策略门 + 人工审批 + 目录信任）。
+//
+// gateFn 每次执行时调用，使设置页改动的会话模式立即生效。
+// 不注入时工具调用退化为「无策略门」——安全性依赖工具自身的审批兜底（fail-closed），
+// 但这会让靠策略门裁决的工具（如 file_write）在工作流里静默放行。
+func (w *WorkflowReactor) WithGuards(
+	gateFn func(ctx context.Context) *tool.Gate,
+	approver func(ctx context.Context, description, risk string) bool,
+	trust harness.PathTrust,
+) *WorkflowReactor {
+	w.gateFn = gateFn
+	w.approver = approver
+	w.pathTrust = trust
+	return w
 }
 
 // WithUsageSink 注入计量回调：每轮 turn 明细落 token_usages（Source=workflow）。
@@ -66,6 +82,11 @@ func (w *WorkflowReactor) React(ctx context.Context, req wnodes.ReactRequest) (w
 	if req.MaxTurns > 0 {
 		cfg.MaxTurns = req.MaxTurns
 	}
+	// 策略门每次执行重建：设置页改动的会话模式对工作流立即生效
+	var gate *tool.Gate
+	if w.gateFn != nil {
+		gate = w.gateFn(ctx)
+	}
 	res := harness.RunOnce(ctx, harness.OneShot{
 		Provider:      prov,
 		Model:         req.Model,
@@ -74,6 +95,9 @@ func (w *WorkflowReactor) React(ctx context.Context, req wnodes.ReactRequest) (w
 		ToolDefs:      defs,
 		Config:        cfg,
 		RequestParams: harness.RequestParams{Temperature: req.Temperature},
+		ToolGate:      gate,
+		Approver:      w.approver,
+		PathTrust:     w.pathTrust,
 	})
 	if res.Err != nil {
 		return wnodes.ReactResult{}, pkg.Wrap(9105, "ReAct 执行失败", res.Err)

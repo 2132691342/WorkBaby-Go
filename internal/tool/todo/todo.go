@@ -1,6 +1,6 @@
 // Package todo 提供「计划」工具：Agent 显式维护会话内待办清单。
 // 先列计划、逐步勾选，长任务不跑偏；工具结果回填模型，前端进度卡消费同一状态快照。
-// 状态按会话存内存（经 Store 接口注入，service 可替换持久化实现）。
+// 状态存取经 Store 接口注入（service 侧为持久化实现，跨重启可回放）。
 package todo
 
 import (
@@ -16,8 +16,8 @@ import (
 
 // Store 会话计划存取（由装配方注入）。
 type Store interface {
-	Load(sessionID string) ([]domain.TodoItem, error)
-	Save(sessionID string, items []domain.TodoItem) error
+	Load(ctx context.Context, sessionID string) ([]domain.TodoItem, error)
+	Save(ctx context.Context, sessionID string, items []domain.TodoItem) error
 }
 
 // Tool LLM 可调用的计划工具（readonly 风险级：不触碰本地文件/网络）。
@@ -74,7 +74,7 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage) tool.ToolResul
 		return fail("invalid args: "+err.Error(), err)
 	}
 
-	items, err := t.store.Load(sessionID)
+	items, err := t.store.Load(ctx, sessionID)
 	if err != nil {
 		return fail("load failed", err)
 	}
@@ -87,7 +87,7 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage) tool.ToolResul
 			if title == "" {
 				continue
 			}
-			items = append(items, domain.TodoItem{ID: pkg.NewID("TODO"), Title: title})
+			items = append(items, domain.TodoItem{ID: pkg.NewID(domain.IDTodo), Title: title})
 		}
 	case "mark_done", "mark_undone":
 		if req.ID == "" {
@@ -112,7 +112,7 @@ func (t *Tool) Execute(ctx context.Context, args json.RawMessage) tool.ToolResul
 		return fail("unknown action "+req.Action, fmt.Errorf("todo: unknown action"))
 	}
 
-	if err := t.store.Save(sessionID, items); err != nil {
+	if err := t.store.Save(ctx, sessionID, items); err != nil {
 		return fail("save failed", err)
 	}
 	return render(items)

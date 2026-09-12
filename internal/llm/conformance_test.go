@@ -1,9 +1,6 @@
 package llm
 
-// 跨 Provider 一致性（conformance）：openai / anthropic / ollama 三家共用的归一化契约。
-//
-// 归一化层是「换 Provider 不改 harness」的前提——它一漂移，表现是同一份配置
-// 在 A 家能跑、在 B 家不重试或直接 400。故按契约断言，而不是按单个 Provider。
+// 跨 Provider 归一化契约：错误分类 / 重试退避 / 参数合并优先级。
 
 import (
 	"context"
@@ -24,7 +21,7 @@ func TestErrorClassConformance(t *testing.T) {
 		err  error
 		want ErrorClass
 	}{
-		{"rate_limit", pkg.New(3003, "429 rate limited", "retry_after=2s"), ClassTransient},
+		{"rate_limit", pkg.New(3003, "429 rate limited", ""), ClassTransient},
 		{"upstream_5xx", pkg.New(3004, "502 bad gateway", ""), ClassTransient},
 		{"timeout", pkg.New(3005, "upstream timeout", ""), ClassTransient},
 		{"invalid_key", pkg.New(3001, "401 unauthorized", ""), ClassAuth},
@@ -53,9 +50,9 @@ func TestRetryPolicyConformance(t *testing.T) {
 		assert.GreaterOrEqual(t, d, p.BaseDelay, "attempt %d 退避不得短于基准", attempt)
 		assert.LessOrEqual(t, d, p.MaxDelay, "attempt %d 退避不得超封顶", attempt)
 	}
-	// 提取：合法值取到，越界（>120s）与非 429 一律忽略
-	assert.Equal(t, 5*time.Second, RetryAfter(pkg.New(3003, "429", " retry_after=5s")))
-	assert.Zero(t, RetryAfter(pkg.New(3003, "429", " retry_after=600s")))
+	// 提取：结构化挂载的合法值取到，越界（>120s）与非挂载错误一律忽略
+	assert.Equal(t, 5*time.Second, RetryAfter(WithRetryAfter(pkg.New(3003, "429", ""), 5*time.Second)))
+	assert.Zero(t, RetryAfter(WithRetryAfter(pkg.New(3003, "429", ""), 600*time.Second)))
 	assert.Zero(t, RetryAfter(errors.New("boom")))
 }
 

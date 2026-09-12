@@ -31,6 +31,8 @@ const (
 	SettingKeyChatDefaultThinking    = "chat.defaultThinking"
 	SettingKeyChatCompressionRatio   = "chat.compressionRatio"
 	SettingKeyChatMaxInputChars      = "chat.maxInputChars"
+	// SettingKeyChatMaxRunTokens 单次 run 的 token 花费上限（0/缺省 = 不限）。
+	SettingKeyChatMaxRunTokens = "chat.maxRunTokens"
 	// SettingKeyMemoryEnabled 全局记忆开关（true/false；缺省开启）。
 	SettingKeyMemoryEnabled = "memory.enabled"
 )
@@ -60,6 +62,10 @@ const SettingKeyChatFallbackModel = "chat.fallback_model"
 
 // SettingKeyTrayCloseToTray 关闭主窗口行为（"true" = 隐藏到托盘常驻，"false"/缺省 = 退出应用）。
 const SettingKeyTrayCloseToTray = "tray.close_to_tray"
+
+// SettingKeyTrayKeepAwake 无人值守防系统空闲休眠：cron / workflow 运行中自动置 true，
+// 运行结束归位；只防系统休眠，允许屏幕熄灭。
+const SettingKeyTrayKeepAwake = "tray.keep_awake"
 
 // 通用设置键（settings/general：主题 / 背景 / 字体等前端外观偏好，JSON 值）。
 const SettingKeyGeneral = "settings.general"

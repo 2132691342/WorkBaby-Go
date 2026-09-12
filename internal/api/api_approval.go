@@ -23,3 +23,13 @@ func (h *Handler) SkipApproval(id string) error {
 func (h *Handler) ListPendingApprovals() []domain.ApprovalPendingRESP {
 	return h.approvalSvc.Pending()
 }
+
+// ListApprovalGrants 免审授权列表（设置页查看/撤销「本会话允许」持久化授权）。
+func (h *Handler) ListApprovalGrants() []domain.ApprovalGrantRESP {
+	return h.approvalSvc.ListGrants(h.ctx)
+}
+
+// RevokeApprovalGrant 撤销单条免审授权（库内删除 + 进程内免审表同步摘除）。
+func (h *Handler) RevokeApprovalGrant(id string) error {
+	return h.approvalSvc.RevokeGrant(h.ctx, id)
+}

@@ -15,8 +15,13 @@ type RunRecordDO struct {
 	OutputTokens int    `json:"output_tokens"`
 	CacheRead    int    `json:"cache_read_tokens"`
 	TotalTokens  int    `json:"total_tokens"`
-	StartedAt    int64  `gorm:"index:idx_run_session"          json:"started_at"`
-	EndedAt      int64  `json:"ended_at"`
+	// 分段耗时归因（毫秒）：等模型 / 跑工具 / 压上下文三段互斥且近似穷举，
+	// 剩余差额是本机调度与落库开销（低到不值得单独归因）。
+	LLMMs      int64 `json:"llm_ms"`
+	ToolsMs    int64 `json:"tools_ms"`
+	CompressMs int64 `json:"compress_ms"`
+	StartedAt  int64 `gorm:"index:idx_run_session"          json:"started_at"`
+	EndedAt    int64 `json:"ended_at"`
 }
 
 // TableName 固定表名。
@@ -41,6 +46,9 @@ type RunRecordRESP struct {
 	OutputTokens int    `json:"output_tokens"`
 	CacheRead    int    `json:"cache_read_tokens"`
 	TotalTokens  int    `json:"total_tokens"`
+	LLMMs        int64  `json:"llm_ms"`
+	ToolsMs      int64  `json:"tools_ms"`
+	CompressMs   int64  `json:"compress_ms"`
 	StartedAt    int64  `json:"started_at"`
 	EndedAt      int64  `json:"ended_at"`
 }

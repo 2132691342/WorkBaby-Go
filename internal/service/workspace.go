@@ -110,12 +110,8 @@ var listDirIgnore = map[string]bool{
 // dirListCap 单层目录条目上限：超过即截断并置 Truncated，防一次拉回几千项。
 const dirListCap = 500
 
-// ListDir 懒加载列工作区单层目录（真实磁盘内容，区别于 ListFiles 的托管产物清单）。
-//
-// 路径一律相对工作区根；Within 防穿越，与 ReadFile 同一防线。
-// 文件夹优先、大小写不敏感排序；隐藏目录与依赖目录默认不出现。
-// 出参 root 返回工作区根绝对路径：前端「添加到聊天」据此拼出文件的绝对路径引用
-// （相对路径解析依赖工作区语义，进聊天后易歧义）。
+// ListDir 懒加载列工作区单层真实磁盘目录（区别于 ListFiles 的托管产物清单）。
+// 路径相对工作区根并做穿越校验；出参 root 为工作区根绝对路径，供前端拼「添加到聊天」的绝对引用。
 func (s *WorkspaceService) ListDir(_ context.Context, sessionID, dir string) (domain.WorkspaceListRESP, error) {
 	root := s.Dir(sessionID)
 	full := root

@@ -20,12 +20,16 @@ type knowledgeCap struct {
 	topK     int // 自动召回条数
 	maxChars int // 注入正文上限（控制上下文占用）
 	minQuery int // 触发自动召回的最短输入（rune）
+	gate     *RelevanceGate
 	tools    []tool.Tool
 }
 
 // NewKnowledge 构造知识库能力；rt 为 nil 时整体降级为空。
 func NewKnowledge(rt rag.Retriever) Capability {
-	c := &knowledgeCap{rt: rt, topK: 3, maxChars: 3000, minQuery: 2}
+	c := &knowledgeCap{
+		rt: rt, topK: 3, maxChars: 3000, minQuery: 2,
+		gate: NewRelevanceGate(knowledgeGateTokens, knowledgeGateKeywords),
+	}
 	if rt != nil {
 		c.tools = []tool.Tool{knowledge.New(rt)}
 	}
@@ -37,12 +41,15 @@ func (c *knowledgeCap) ID() string { return "knowledge" }
 func (c *knowledgeCap) Tools() []tool.Tool { return c.tools }
 
 // Preload 按本轮输入自动检索知识库并注入命中片段。
-// 纯本地 FTS5 检索，无命中或输入过短时不注入。
+// 纯本地 FTS5 检索；RelevanceGate 未放行（未指资料）、无命中或输入过短时不注入。
 func (c *knowledgeCap) Preload(ctx context.Context, p *PreloadCtx) ([]harness.ContextPiece, error) {
 	if c.rt == nil {
 		return nil, nil
 	}
-	q := strings.TrimSpace(p.UserInput)
+	if !c.gate.Evaluate(p.UserInput).Open {
+		return nil, nil
+	}
+	q := strings.TrimSpace(c.gate.Clean(p.UserInput))
 	if len([]rune(q)) < c.minQuery {
 		return nil, nil
 	}

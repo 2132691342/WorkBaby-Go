@@ -46,12 +46,7 @@ var AllProviderKindMetas = []ProviderKindMeta{
 	{Kind: ProviderKindOllama, Label: "Ollama（本地）", BaseURLDefault: "http://localhost:11434", ModelPlaceholder: "llama3"},
 }
 
-// ProviderTier 模型档位——**仅用于排序，不做故障转移**。
-//
-// 语义边界（避免误读成容灾能力）：
-//   - 它只决定两件事：默认 Provider 的选择顺序、同名模型命中时取哪一个；
-//   - 不会在主用报错/限流/熔断时自动切换到备用（无 failover 逻辑）；
-//   - 真正的主备切换由 Provider 熔断 + 用户在模型选择器手动切换承担。
+// ProviderTier 模型档位：决定默认 Provider 选择顺序与同名模型取哪一个，不做故障转移。
 type ProviderTier string
 
 const (
@@ -79,13 +74,8 @@ func (p AiProviderDO) TierRank() int {
 }
 
 // AiProviderDO LLM Provider 持久化实体；apiKey 用 AES-GCM 加密落库（pkg/crypto.go）。
-//
-// 能力三态约定：SupportsToolCall / SupportsVision / SupportsReasoning 为 *bool，
-//   - nil  → 未声明，按 kind 推断（openai/anthropic 默认可工具调用，ollama 默认不可）
-//   - true / false → 用户显式声明，覆盖推断
-//
-// 显式声明优先是因为同一家上游不同模型能力差异极大（如 GPT-4o 支持视觉、
-// 同厂的 o1-mini 不支持），自动探测无法覆盖，必须留人工纠偏口。
+// 能力字段 SupportsToolCall / SupportsVision / SupportsReasoning 为 *bool：
+// nil = 按 kind 推断，true/false = 用户显式声明覆盖推断（同厂不同模型能力差异大，需人工纠偏口）。
 type AiProviderDO struct {
 	ID              string       `gorm:"primaryKey;size:64" json:"id"`
 	Name            string       `gorm:"size:128"           json:"name"`

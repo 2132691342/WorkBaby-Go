@@ -26,6 +26,7 @@ const {
   editing,
   error,
   currentExec,
+  pendingInput,
   showCreate,
   showGraph,
   newName,
@@ -39,10 +40,22 @@ const {
   doDelete,
   doResume,
   doPause,
-  doCancel
+  doCancel,
+  submitInput
 } = store
 
 const running = useAsyncAction(() => store.runWorkflow())
+
+/** 人工输入草稿；提交成功后清空。 */
+const inputDraft = ref('')
+
+/** 提交人工输入：放行阻塞在 HumanInput 节点上的执行。 */
+async function sendInput(): Promise<void> {
+  const p = pendingInput.value
+  if (!p) return
+  const ok = await submitInput(p.executionID, p.nodeID, inputDraft.value.trim())
+  if (ok) inputDraft.value = ''
+}
 
 // （用户原话：「没必要为我是展示执行框，编辑区域太小」）：
 // 执行面板从与编辑器对半分的 grid 改为右侧可折叠抽屉，编辑器默认全宽；运行时自动弹出。
@@ -314,8 +327,32 @@ onMounted(loadList)
                   <div v-else-if="currentExec.status === 'completed'" class="text-wb-muted">
                     {{ t('workflow.noOutput') }}
                   </div>
+                  <!-- 人工输入：HumanInput 节点等待时，阻塞的执行必须由这里放行 -->
+                  <div
+                    v-if="pendingInput"
+                    class="mb-3 rounded-lg border border-wb-primary/40 bg-wb-primary/5 p-2"
+                  >
+                    <div class="mb-1.5 text-[11px] font-medium text-wb-primary-strong">
+                      {{ t('workflow.inputRequiredTitle') }}
+                    </div>
+                    <div v-if="pendingInput.prompt" class="mb-2 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-wb-ink">
+                      {{ pendingInput.prompt }}
+                    </div>
+                    <el-input
+                      v-model="inputDraft"
+                      type="textarea"
+                      :rows="3"
+                      resize="none"
+                      :placeholder="t('workflow.inputPlaceholder')"
+                    />
+                    <div class="mt-2 flex justify-end">
+                      <el-button type="primary" size="small" :disabled="!inputDraft.trim()" @click="sendInput">
+                        {{ t('workflow.inputSubmit') }}
+                      </el-button>
+                    </div>
+                  </div>
                   <div class="mt-3 flex gap-2">
-                    <el-button v-if="currentExec.status === 'PAUSED'" type="primary" size="small" @click="doResume">
+                    <el-button v-if="currentExec.status === 'paused'" type="primary" size="small" @click="doResume">
                       {{ t('workflow.resume') }}
                     </el-button>
                     <el-button v-if="currentExec.status === 'running'" size="small" @click="doPause">

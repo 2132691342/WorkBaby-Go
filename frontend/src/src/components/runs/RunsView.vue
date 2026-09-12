@@ -48,6 +48,20 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
+/** 毫秒 → 秒/毫秒（run 级别跨越秒级，统一用 ms 会把列撑得很难读）。 */
+function fmtMs(ms: number): string {
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`
+  return `${ms}ms`
+}
+
+/**
+ * 分段耗时归因：等模型 / 跑工具。
+ * 回答「这次 run 慢在哪」——工具全算进等模型会把长工具链误判成模型慢。
+ */
+function timingOf(r: RunRecord): string {
+  return `${fmtMs(r.llm_ms ?? 0)} / ${fmtMs(r.tools_ms ?? 0)}`
+}
+
 // ===== 事件回放 =====
 const replayOpen = ref(false)
 const replayRunID = ref('')
@@ -111,6 +125,7 @@ async function openReplay(runID: string): Promise<void> {
               <th>{{ t('runs.colReason') }}</th>
               <th class="ta-r">{{ t('runs.colTurns') }}</th>
               <th class="ta-r">{{ t('runs.colTokens') }}</th>
+              <th class="ta-r">{{ t('runs.colTimings') }}</th>
               <th />
             </tr>
           </thead>
@@ -124,6 +139,7 @@ async function openReplay(runID: string): Promise<void> {
               <td class="ta-r mono">
                 ↑{{ fmtTokens(r.input_tokens) }} ↓{{ fmtTokens(r.output_tokens) }}
               </td>
+              <td class="ta-r mono muted" :title="t('runs.timingsHint')">{{ timingOf(r) }}</td>
               <td>
                 <div class="tbl-actions">
                   <button class="btn" style="height: 24px; padding: 0 8px" @click="openReplay(r.run_id)">

@@ -68,15 +68,8 @@ func (t *ExecTool) WithRootResolver(f func(context.Context) string) *ExecTool { 
 // 防止过程脚本落到用户原有目录、污染项目结构。
 func (t *ExecTool) WithSandbox(f func(context.Context) string) *ExecTool { t.sandbox = f; return t }
 
-// checkCwd 校验 LLM 传入的 cwd。
-//
-// <p>两条硬规则：
-// <ol>
-//   <li>`..` 路径穿越：含 `..` 直接拒绝（含 `\\..\\`、URL 编码绕过等已在本规则范围内）。</li>
-//   <li>越界：cwd 必须落在 workspace 根（含其下子树，含 .workbaby/）内，否则拒绝。</li>
-// </ol>
-//
-// <p>未绑定工作区（默认工作区 / sandbox 为空）放行：保留向后兼容，旧会话与无 workspace 解析场景不受影响。
+// checkCwd 校验 LLM 传入的 cwd：含 `..` 直接拒绝，且必须落在 workspace 根（含 .workbaby/）内。
+// 未绑定工作区（sandbox 为空）放行。
 func (t *ExecTool) checkCwd(cwd string, ctx context.Context) *pkg.AppError {
 	if strings.Contains(cwd, "..") {
 		return pkg.New(4007, "cwd contains '..' path traversal", cwd)
@@ -338,10 +331,9 @@ func (t *ExecTool) Execute(ctx context.Context, args json.RawMessage) tool.ToolR
 	}
 	if t.pathDirs != nil {
 		if dirs := t.pathDirs(); len(dirs) > 0 {
-			cmd.Env = envWithPath(dirs)
+			cmd.Env = envWithPath(dirs) // 子进程 PATH 前置内置运行时目录
 		}
 	}
-	_ = dirs // 已在 resolveWithBuiltin 临时设置；这里只把增强结果传给子进程
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true} // Windows 不弹控制台
 
 	// stdout/stderr 合并限流读取（CombinedOutput 无上限，全量入内存有 OOM 风险）
@@ -391,33 +383,33 @@ func envWithPath(dirs []string) []string {
 	return append(env, "PATH="+pathVal)
 }
 
-// pathWithBuiltin 把 dirs 前置到现有 PATH，返回用于临时查找的 PATH 字符串。
-// LookPath 走 PATH 环境变量，此函数产出的串专供 LookPath 用——只在调用栈临时生效，
-// 不修改全局进程环境（父进程 / 其他 goroutine 不受影响）。
-func pathWithBuiltin(dirs []string) string {
-	if len(dirs) == 0 {
-		return os.Getenv("PATH")
+// lookPathIn 只在内置运行时目录中解析命令，不触碰进程全局 PATH。
+//
+// exec.LookPath 收到含路径分隔符的入参时会直接检查该文件（Windows 下仍按 PATHEXT
+// 尝试扩展名），因此「内置目录优先」无需改写 PATH 即可实现。
+func lookPathIn(name string, dirs []string) (string, error) {
+	var lastErr error
+	for _, d := range dirs {
+		if strings.TrimSpace(d) == "" {
+			continue
+		}
+		lp, err := exec.LookPath(filepath.Join(d, name))
+		if err == nil {
+			return lp, nil
+		}
+		lastErr = err
 	}
-	sep := string(os.PathListSeparator)
-	extra := strings.Join(dirs, sep)
-	cur := os.Getenv("PATH")
-	if cur == "" {
-		return extra
+	if lastErr == nil {
+		lastErr = os.ErrNotExist
 	}
-	return extra + sep + cur
+	return "", lastErr
 }
 
-// resolveWithBuiltin 在内置运行时 bin 目录优先的前提下解析命令名；返回 (abs path, prefix args)。
-// 父进程 PATH 不动，仅临时把 dirs 前置到 PATH 做一次查找：
-//
-//   - 内置 node/python/pwsh 永远命中内置运行时（不让用户系统解释器遮蔽）
-//   - 找不到时 Windows 走 cmd /c（兼容 cmd 内建命令与 .cmd/.bat）
-//   - 命令存在但 .cmd/.bat 必须包 cmd /c（CreateProcess 不能直接加载）
-//
-// 关键边界：调用方在闭包内临时设置 PATH 后必须 defer 复原，避免污染其他并发命令。
+// resolveWithBuiltin 在内置运行时 bin 目录优先的前提下解析命令名，返回 (abs path, prefix args)。
+// 内置目录未命中时回落进程 PATH；解析过程不改动进程全局 PATH（并发 exec 下是数据竞争）。
 func resolveWithBuiltin(name string, dirs []string) (string, []string) {
-	origPath := os.Getenv("PATH")
-	os.Setenv("PATH", pathWithBuiltin(dirs))
-	defer os.Setenv("PATH", origPath)
+	if lp, err := lookPathIn(name, dirs); err == nil {
+		return wrapShell(lp)
+	}
 	return resolveCommand(name)
 }

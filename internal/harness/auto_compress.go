@@ -181,7 +181,7 @@ func serializeForSummary(m *llm.Message) string {
 	case llm.RoleSystem:
 		return "" // system 不参与头部摘要（常驻保留）
 	case llm.RoleTool:
-		return fmt.Sprintf("tool %s => %s", m.ToolName, truncateRunes(m.Content, autoPerMsgRunes/2))
+		return fmt.Sprintf("tool %s => %s", m.ToolName, pkg.TruncateRunes(m.Content, autoPerMsgRunes/2))
 	case llm.RoleAssistant:
 		var sb strings.Builder
 		if len(m.ToolCalls) > 0 {
@@ -191,10 +191,10 @@ func serializeForSummary(m *llm.Message) string {
 			}
 			sb.WriteString("assistant 调用工具[" + strings.Join(names, ",") + "] ")
 		}
-		sb.WriteString(truncateRunes(m.Content, autoPerMsgRunes))
+		sb.WriteString(pkg.TruncateRunes(m.Content, autoPerMsgRunes))
 		return sb.String()
 	default:
-		return string(m.Role) + ": " + truncateRunes(m.Content, autoPerMsgRunes)
+		return string(m.Role) + ": " + pkg.TruncateRunes(m.Content, autoPerMsgRunes)
 	}
 }
 
@@ -220,7 +220,7 @@ func hashMessages(ms []*llm.Message) uint64 {
 			continue
 		}
 		fmt.Fprintf(h, "%d|%s|%d|", i, m.Role, len(m.Content))
-		_, _ = h.Write([]byte(truncateRunes(m.Content, 64)))
+		_, _ = h.Write([]byte(pkg.TruncateRunes(m.Content, 64)))
 	}
 	return h.Sum64()
 }

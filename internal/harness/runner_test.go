@@ -1,10 +1,8 @@
 package harness
 
 // ReAct runner 长链路测试：主循环 / 工具执行 / 闸门审批 / 注入缝 / 护栏 / 会话生命周期。
-// 共享 mock / sink / fixture 在 runner_helpers_test.go。
-//
-// 场景实现为私有函数（testXxx），由文件末尾 6 个按能力域划分的父测试以 t.Run 聚合；
-// 私有函数不被 go test 直接发现，跑一个父测试即可定位整类行为。
+// 场景是私有函数（testXxx），由文件末尾按能力域划分的父测试以 t.Run 聚合；
+// 跑一个父测试即可定位整类行为，共享夹具见 runner_helpers_test.go。
 
 import (
 	"context"
@@ -990,6 +988,36 @@ func testDelegateContextIsolationOnly(t *testing.T) {
 	assert.Equal(t, "独立任务描述", got[1].Content)
 }
 
+// testDelegateInheritsGuardHooks 子 Agent 与父 run 受同一套护栏约束。
+//
+// 子 run 由 Delegate 新建；不继承 ToolGate / 目录信任时会退化为「无策略门」，
+// exec / run_skill_script 这类靠策略门裁决的工具将不再被询问。
+func testDelegateInheritsGuardHooks(t *testing.T) {
+	probe := &guardProbeTool{}
+	reg := tool.NewRegistry()
+	require.NoError(t, reg.Register(probe))
+	defs := []llm.ToolDefinition{{Name: "probe", Description: "probe", Parameters: map[string]any{"type": "object"}}}
+
+	p := &scriptedProvider{calls: [][]llm.StreamChunk{
+		{
+			{ToolCall: &llm.NormalizedToolCall{ID: "d1", Name: "probe", Arguments: json.RawMessage(`{}`)}},
+			{FinishReason: stringPtr("tool_calls")},
+		},
+		{
+			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "子任务完成"}},
+			{FinishReason: stringPtr("stop")},
+		},
+	}}
+	parent := NewRunner(p, &recordingSink{}, DefaultConfig()).
+		WithTools(reg, defs).
+		WithToolGate(tool.NewGate(tool.SessionModeYolo), nil)
+
+	summary, err := parent.Delegate(context.Background(), "writer", "跑一下 probe")
+	require.NoError(t, err)
+	assert.Contains(t, summary, "子任务完成")
+	assert.True(t, probe.guarded, "子 Agent 必须继承父 run 的护栏链（策略门裁决通过后标记）")
+}
+
 // TestRunnerResume 两轮工具调用落检查点 → 新 Runner Resume 续跑拿到终答。
 func testRunnerResume(t *testing.T) {
 	dir := t.TempDir()
@@ -1091,32 +1119,35 @@ func TestRunnerReActLoop(t *testing.T) {
 func TestRunnerToolExecution(t *testing.T) {
 	t.Run("readonly_parallel", testRunnerReadonlyParallel)
 	t.Run("panic_recovered", testRunnerToolPanicRecovered)
+	t.Run("timing_attribution", testRunnerTimingAttribution)
 }
 
-// TestRunnerApprovalGate 闸门与审批：策略拒绝 / 审批拒绝后继续 / 模式差异 / Allow 不越过命令级裁决。
-func TestRunnerApprovalGate(t *testing.T) {
-	t.Run("deny_policy", testRunnerToolGateDeny)
-	t.Run("approval_refused", testRunnerApprovalRefusedDenied)
-	t.Run("per_call_risk", testGateAskUsesPerCallRisk)
-	t.Run("yolo_never_ask", testGateYoloNeverAsks)
-	t.Run("allow_keeps_check", testGateAllowKeepsCommandLevelCheck)
+// testRunnerTimingAttribution 分段耗时归因：跑工具的时间算进 ToolsMs，不被等模型吞并。
+//
+// 归因的意义是回答「这次 run 慢在哪」：工具全都被算进 LLM 耗时的话，
+// 长工具链会被误判成模型慢，优化方向直接跑偏。
+func testRunnerTimingAttribution(t *testing.T) {
+	reg := tool.NewRegistry()
+	require.NoError(t, reg.Register(slowTool{}))
+	defs := []llm.ToolDefinition{{Name: "slow", Description: "slow", Parameters: map[string]any{"type": "object"}}}
+
+	p := &scriptedProvider{calls: [][]llm.StreamChunk{
+		{
+			{ToolCall: &llm.NormalizedToolCall{ID: "s1", Name: "slow", Arguments: json.RawMessage(`{}`)}},
+			{FinishReason: stringPtr("tool_calls")},
+		},
+		{
+			{Delta: llm.Message{Role: llm.RoleAssistant, Content: "done"}},
+			{FinishReason: stringPtr("stop")},
+		},
+	}}
+	cfg := DefaultConfig()
+	cfg.ToolCallTimeout = 80_000_000 // 80ms
+	res := NewRunner(p, &recordingSink{}, cfg).WithTools(reg, defs).
+		RunMessages(context.Background(), "RUN_TM", "SES_TM", "MSG_TM", "mock", []*llm.Message{llm.UserMessage("go")})
+
+	require.NoError(t, res.Err)
+	assert.GreaterOrEqual(t, res.Timings.ToolsMs, int64(50), "工具等待应计入工具耗时")
+	assert.GreaterOrEqual(t, res.Timings.LLMMs, int64(0))
 }
 
-// TestRunnerInjectionSeams 注入缝：steering 中途插话 / follow-up 排队续跑。
-func TestRunnerInjectionSeams(t *testing.T) {
-	t.Run("steering", testRunnerSteeringInjection)
-	t.Run("follow_up", testRunnerFollowUpContinues)
-}
-
-// TestRunnerGuardRails 护栏：工作区信任拒绝 / 伪 tool_call 注入防护。
-func TestRunnerGuardRails(t *testing.T) {
-	t.Run("path_trust_deny", testRunnerPathTrustDeny)
-	t.Run("nested_marker", testHasNestedToolCallMarker)
-}
-
-// TestRunnerSessionLifecycle 会话生命周期：建流失败降级 / 子 Agent 上下文隔离 / 断点续跑。
-func TestRunnerSessionLifecycle(t *testing.T) {
-	t.Run("turn_adjuster_downgrade", testTurnAdjusterDowngradesOnStreamError)
-	t.Run("delegate_isolation", testDelegateContextIsolationOnly)
-	t.Run("resume", testRunnerResume)
-}

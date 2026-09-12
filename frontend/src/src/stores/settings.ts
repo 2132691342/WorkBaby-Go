@@ -5,7 +5,7 @@ import { UploadFile, OpenFileDialog } from '@/wailsjs/go/main/App'
 import { normalizeThemeID, useTheme } from '@/composables/useTheme'
 import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
-import type { AiProvider, AiProviderKind, AiProviderReq, CircuitState, SmtpConfig, WebSearchConfig } from '@/types/api'
+import type { AiProvider, AiProviderKind, AiProviderReq, CircuitState, ProviderPreset, SmtpConfig, WebSearchConfig } from '@/types/api'
 
 /** 可选的代码字体（精简后只保留 3 个内置字体）。 */
 export const CODE_FONTS = [
@@ -29,6 +29,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const providerKinds = ref<AiProviderKind[]>([])
   /** 合法档位取值（primary / backup），从 /api/v1/ai-provider/tiers 拉。 */
   const providerTiers = ref<string[]>(['primary', 'backup'])
+  /** 常见模型服务预设（/ai-provider/presets）：新增 provider 一键预填。 */
+  const providerPresets = ref<ProviderPreset[]>([])
   /** 所有 provider 的熔断状态 Map（id → CircuitState）。 */
   const circuitStates = ref<Map<string, CircuitState>>(new Map())
   const general = ref<Record<string, unknown>>({})
@@ -86,12 +88,15 @@ export const useSettingsStore = defineStore('settings', () => {
     default_thinking: string | null
     compression_ratio: number | null
     max_input_chars: number | null
+    /** 单次 run 的 token 花费上限（0/空 = 不限；与 Agent 内置预算取更严者）。 */
+    max_run_tokens: number | null
   }
   const chatDefaults = ref<ChatDefaults>({
     default_temperature: null,
     default_thinking: null,
     compression_ratio: null,
-    max_input_chars: null
+    max_input_chars: null,
+    max_run_tokens: null
   })
 
   /** 读取聊天默认参数（逐项容错：单 key 失败不影响其余）。 */
@@ -104,11 +109,12 @@ export const useSettingsStore = defineStore('settings', () => {
         return null
       }
     }
-    const [temp, think, ratio, maxChars] = await Promise.all([
+    const [temp, think, ratio, maxChars, maxRun] = await Promise.all([
       read('chat.defaultTemperature'),
       read('chat.defaultThinking'),
       read('chat.compressionRatio'),
-      read('chat.maxInputChars')
+      read('chat.maxInputChars'),
+      read('chat.maxRunTokens')
     ])
     const num = (v: string | null): number | null => {
       if (v == null || v === '') return null
@@ -119,7 +125,8 @@ export const useSettingsStore = defineStore('settings', () => {
       default_temperature: num(temp),
       default_thinking: think || null,
       compression_ratio: num(ratio),
-      max_input_chars: num(maxChars)
+      max_input_chars: num(maxChars),
+      max_run_tokens: num(maxRun)
     }
   }
 
@@ -130,7 +137,8 @@ export const useSettingsStore = defineStore('settings', () => {
       ['chat.defaultTemperature', chatDefaults.value.default_temperature?.toString() ?? ''],
       ['chat.defaultThinking', chatDefaults.value.default_thinking ?? ''],
       ['chat.compressionRatio', chatDefaults.value.compression_ratio?.toString() ?? ''],
-      ['chat.maxInputChars', chatDefaults.value.max_input_chars?.toString() ?? '']
+      ['chat.maxInputChars', chatDefaults.value.max_input_chars?.toString() ?? ''],
+      ['chat.maxRunTokens', chatDefaults.value.max_run_tokens?.toString() ?? '']
     ]
     try {
       for (const [key, value] of items) {
@@ -186,7 +194,7 @@ export const useSettingsStore = defineStore('settings', () => {
     loading.value = true
     error.value = null
     try {
-      const [p, g, s, w, c, k, trs] = await Promise.all([
+      const [p, g, s, w, c, k, trs, presets] = await Promise.all([
         apiGet<AiProvider[]>('/api/v1/ai-provider'),
         // 注意：必须取 /settings/general（返回 theme/appearance/fontScale 的 JSON map）；
         // /settings 返回的是全部 KV 数组，不是前端要读的外观对象 —— 取错会导致缩放/主题永远无法恢复。
@@ -195,7 +203,8 @@ export const useSettingsStore = defineStore('settings', () => {
         apiGet<WebSearchConfig>('/api/v1/settings/websearch'),
         apiGet<CircuitState[]>('/api/v1/ai-provider/circuit-status').catch(() => [] as CircuitState[]),
         apiGet<AiProviderKind[]>('/api/v1/ai-provider/kinds').catch(() => [] as AiProviderKind[]),
-        apiGet<string[]>('/api/v1/ai-provider/tiers').catch(() => [] as string[])
+        apiGet<string[]>('/api/v1/ai-provider/tiers').catch(() => [] as string[]),
+        apiGet<ProviderPreset[]>('/api/v1/ai-provider/presets').catch(() => [] as ProviderPreset[])
       ])
       providers.value = p
       general.value = g
@@ -203,6 +212,7 @@ export const useSettingsStore = defineStore('settings', () => {
       webSearchConfig.value = w
       providerKinds.value = Array.isArray(k) ? k : []
       providerTiers.value = Array.isArray(trs) && trs.length > 0 ? trs : ['primary', 'backup']
+      providerPresets.value = Array.isArray(presets) ? presets : []
       applyTheme(String(g.theme ?? theme.value))
       // 设置页自身也要回填外观（缩放/代码字体），否则这里显示默认 100%，
       // 与后端已保存的实际值不一致。
@@ -490,6 +500,7 @@ export const useSettingsStore = defineStore('settings', () => {
     providers,
     providerKinds,
     providerTiers,
+    providerPresets,
     general,
     smtpConfig,
     webSearchConfig,

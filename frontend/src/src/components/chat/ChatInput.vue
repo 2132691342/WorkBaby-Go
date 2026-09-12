@@ -1,12 +1,7 @@
 <script setup lang="ts">
 /**
- * 聊天输入框（composer）。
- *
- * <p>自上而下分三层：顶部 chip 行（工作区 / 权限）→ 中间输入区（队列 / 附件 / textarea /
- * slash 与 mention 浮层 / 底部工具行）→ 底部状态行（上下文用量 / 快捷键提示）。
- *
- * <p>输入框保留原生 `textarea`：中文 IME composition、自增高、`@` mention 与 `/` 命令
- * 的光标解析都依赖原生事件，ElementPlus `el-input` 无法等价承接。
+ * 聊天输入框（composer）：顶部工作区/权限 chip、中间输入区（附件、slash 与 mention 浮层）、
+ * 底部状态行。保留原生 textarea——IME composition、自增高与光标解析依赖原生事件。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'

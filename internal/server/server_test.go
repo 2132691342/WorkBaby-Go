@@ -81,7 +81,6 @@ func TestSSEServe(t *testing.T) {
 	assert.Contains(t, got, "id: 1")
 }
 
-
 // TestSSEReplayFromLastEventID 回归 B3：断线重连按 Last-Event-ID 补发错过的事件。
 func TestSSEReplayFromLastEventID(t *testing.T) {
 	log := event.NewRunEventLog(0, 0)

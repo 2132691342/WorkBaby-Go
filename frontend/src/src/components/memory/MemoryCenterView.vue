@@ -1,26 +1,27 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Brain, Search, Trash2 } from '@/components/common/icons'
+import { Brain, Check, Search, Trash2, X } from '@/components/common/icons'
 import { useMemoryStore } from '@/stores/memory'
 import { t } from '@/i18n'
-import type { MemoryEpisode } from '@/types/api'
+import type { InboxItem, MemoryEpisode } from '@/types/api'
 import { formatDateTime } from '@/utils/time'
 
 /**
  * 记忆中心（照 prd/WorkBaby-UI-Prototype.html 08 屏）：
- * hero + 统一召回（RRF 跨三类） + 三 tab：长期 delta / 语义 fact / 程序 procedure。
+ * hero + 统一召回（RRF 跨三类） + 四 tab：长期 delta / 语义 fact / 程序 procedure / 回写收件箱。
  * 视觉走 wb-ui 设计系统层。
  */
-type MemoryTab = 'episodes' | 'facts' | 'procedures'
+type MemoryTab = 'episodes' | 'facts' | 'procedures' | 'inbox'
 
 const memory = useMemoryStore()
 const {
   episodes, total, loading, error,
   facts, procedures,
-  recallResults, recallLoading
+  recallResults, recallLoading,
+  inbox, inboxStats, inboxLoading
 } = storeToRefs(memory)
-const { load, loadFacts, loadProcedures, recall, doDelete } = memory
+const { load, loadFacts, loadProcedures, recall, doDelete, loadInbox, approveInbox, rejectInbox } = memory
 
 const activeTab = ref<MemoryTab>('episodes')
 const recallQuery = ref('')
@@ -31,6 +32,7 @@ function switchTab(tab: string | number): void {
   if (k === 'episodes' && episodes.value.length === 0) void load()
   if (k === 'facts' && facts.value.length === 0) void loadFacts()
   if (k === 'procedures' && procedures.value.length === 0) void loadProcedures()
+  if (k === 'inbox') void loadInbox()
 }
 
 function setPane(pane: MemoryTab): void {
@@ -47,11 +49,12 @@ function fmtTime(iso: string | number | null): string {
   return formatDateTime(iso)
 }
 
-// 刷新当前 tab：episodes/facts/procedures 各自拉取（模板里通过键盘 / 后续页面复用）
+// 刷新当前 tab：四类各自拉取（模板里通过键盘 / 后续页面复用）
 function refreshActive(): void {
   if (activeTab.value === 'episodes') void load()
   else if (activeTab.value === 'facts') void loadFacts()
-  else void loadProcedures()
+  else if (activeTab.value === 'procedures') void loadProcedures()
+  else void loadInbox()
 }
 // 仅保留供未来热键复用，避免 TS6133
 void refreshActive
@@ -59,8 +62,25 @@ void refreshActive
 const tabButtons = computed(() => [
   { id: 'episodes' as MemoryTab, label: t('memory.center.tab.episodes'), count: episodes.value.length },
   { id: 'facts' as MemoryTab, label: t('memory.center.tab.facts'), count: facts.value.length },
-  { id: 'procedures' as MemoryTab, label: t('memory.center.tab.procedures'), count: procedures.value.length }
+  { id: 'procedures' as MemoryTab, label: t('memory.center.tab.procedures'), count: procedures.value.length },
+  { id: 'inbox' as MemoryTab, label: t('memory.center.tab.inbox'), count: inboxStats.value.pending }
 ])
+
+/** 收件箱候选类型 → 徽章 i18n key（skill 复用技能 kind 文案）。 */
+function inboxKindKey(kind: string): string {
+  if (kind === 'skill') return 'memory.center.kind.skill'
+  if (kind === 'procedure') return 'memory.center.kind.procedure'
+  return 'memory.center.kind.fact'
+}
+
+/** 候选载荷一行摘要（后端 summary 为空时兜底渲染载荷字段）。 */
+function inboxDetail(item: InboxItem): string {
+  if (item.summary) return item.summary
+  const p = item.payload ?? {}
+  const v = p.value ?? p.steps ?? p.body
+  if (Array.isArray(v)) return v.join(' → ')
+  return typeof v === 'string' ? v : ''
+}
 
 function badgeKindClass(kind: string): string {
   switch (kind) {
@@ -73,6 +93,7 @@ function badgeKindClass(kind: string): string {
 
 onMounted(() => {
   void load()
+  void memory.loadInboxStats()
 })
 </script>
 
@@ -208,6 +229,50 @@ onMounted(() => {
                 <td class="mono muted">{{ (p as Record<string, unknown>).signature as string || (p.steps ?? []).join(' → ') }}</td>
                 <td class="muted">{{ (p as Record<string, unknown>).source as string || '—' }}</td>
                 <td class="ta-r mono">{{ fmtTime(p.last_used_at ?? p.created_at) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div v-show="activeTab === 'inbox'" class="card p-sm">
+        <div class="flex-r mb10">
+          <span class="badge b-warning">{{ t('memory.center.inbox.pending') }} · {{ inboxStats.pending }}</span>
+          <span class="badge b-info">{{ t('memory.center.inbox.approved') }} · {{ inboxStats.approved }}</span>
+          <span class="badge b-neutral">{{ t('memory.center.inbox.rejected') }} · {{ inboxStats.rejected }}</span>
+        </div>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th>{{ t('memory.center.col.name') }}</th>
+                <th style="min-width: 260px">{{ t('memory.center.col.summary') }}</th>
+                <th>{{ t('memory.center.inbox.source') }}</th>
+                <th class="ta-r">{{ t('memory.center.col.time') }}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="inboxLoading"><td colspan="5" class="empty">{{ t('ui.status.loading') }}</td></tr>
+              <tr v-else-if="inbox.length === 0"><td colspan="5" class="empty">{{ t('memory.center.inbox.empty') }}</td></tr>
+              <tr v-for="it in inbox" v-else :key="it.id">
+                <td>
+                  <span class="badge" :class="badgeKindClass(it.kind)">{{ t(inboxKindKey(it.kind)) }}</span>
+                  <span class="mono" style="margin-left: 6px">{{ it.title }}</span>
+                </td>
+                <td class="muted">{{ inboxDetail(it) }}</td>
+                <td class="muted">{{ it.source }} · {{ it.confidence.toFixed(2) }}</td>
+                <td class="ta-r mono">{{ fmtTime(it.created_at) }}</td>
+                <td>
+                  <div class="tbl-actions">
+                    <button class="btn-icon" style="color: var(--wb-success, #34d399)" :title="t('memory.center.inbox.approve')" @click="approveInbox(it.id)">
+                      <Check class="ic ic-sm" />
+                    </button>
+                    <button class="btn-icon" style="color: var(--wb-danger)" :title="t('memory.center.inbox.reject')" @click="rejectInbox(it.id)">
+                      <X class="ic ic-sm" />
+                    </button>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>

@@ -24,12 +24,13 @@ type MemoryStore interface {
 type memoryCap struct {
 	mem     MemoryStore
 	enabled func(ctx context.Context) bool // 全局开关回调（system_settings）
+	gate    *RelevanceGate                 // 跨会话召回门控（重型段，默认关闭）
 	tools   []tool.Tool
 }
 
 // NewMemory 构造记忆能力；enabled 为 nil 时按开启处理。
 func NewMemory(mem MemoryStore, enabled func(ctx context.Context) bool) Capability {
-	c := &memoryCap{mem: mem, enabled: enabled}
+	c := &memoryCap{mem: mem, enabled: enabled, gate: NewRelevanceGate(memoryGateTokens, memoryGateKeywords)}
 	if mem != nil {
 		c.tools = []tool.Tool{memorywrite.New(mem, harness.SessionIDFromCtx)}
 	}
@@ -58,9 +59,12 @@ func (c *memoryCap) Preload(ctx context.Context, p *PreloadCtx) ([]harness.Conte
 		out = append(out, harness.ContextPiece{Key: "memory", Title: "本会话长期记忆",
 			Body: tailRunes(ltm, maxMemoryInjectRunes)})
 	}
-	// 跨会话召回：按本轮输入取相关条目，否则形成过的记忆永远进不了上下文
-	if recalled := c.recallText(ctx, p.UserInput, p.Def.Memory.RecallLimit); recalled != "" {
-		out = append(out, harness.ContextPiece{Key: "recall", Title: "相关记忆（自动召回，仅供参考）", Body: recalled})
+	// 跨会话召回：重型段，按 RelevanceGate 门控（显式 @记忆 > 指向前文的关键词 > 默认关闭）。
+	// 未命中时模型仍可主动经 memory_write / 对话记忆获取，只是不默认占上下文预算。
+	if c.gate.Evaluate(p.UserInput).Open {
+		if recalled := c.recallText(ctx, c.gate.Clean(p.UserInput), p.Def.Memory.RecallLimit); recalled != "" {
+			out = append(out, harness.ContextPiece{Key: "recall", Title: "相关记忆（自动召回，仅供参考）", Body: recalled})
+		}
 	}
 	return out, nil
 }

@@ -11,3 +11,6 @@ func resolveCommand(name string) (string, []string) {
 	}
 	return name, nil
 }
+
+// wrapShell 非 Windows 平台无 shell 外壳与内建命令，解析结果即最终命令。
+func wrapShell(abs string) (string, []string) { return abs, nil }

@@ -1,9 +1,6 @@
 package harness
 
-// 韧性（resilience）：超时 / 取消 / 重试三条失败路径的收束行为。
-//
-// 判据是「run 一定有唯一终态」——失败必须折叠成终态事件而不是中断循环或把 goroutine 漏在半路；
-// 以及「重试只发生在安全的位置」——建流期可重试，流中途已有增量输出，重试会重复内容。
+// 失败路径收束：run 必须落在唯一终态；重试只允许发生在建流期（流中途重试会重复输出）。
 
 import (
 	"context"
@@ -42,7 +39,7 @@ func (f *flakyProvider) Stream(_ context.Context, _ *llm.ChatRequest) (<-chan ll
 	fail := f.calls <= f.failFirst
 	f.mu.Unlock()
 	if fail {
-		return nil, pkg.New(3003, "429 rate limited", "retry_after=0s")
+		return nil, pkg.New(3003, "429 rate limited", "")
 	}
 	ch := make(chan llm.StreamChunk, len(f.chunks)+1)
 	for _, c := range f.chunks {

@@ -10,13 +10,8 @@ import { MATH_CLASS, MERMAID_CLASS } from './setup'
 export const CODE_FOLD_LINES = 400
 
 /**
- * 为代码块加「语言标签 + 复制 + 长代码折叠」。
- *
- * <p>MarkdownRenderer 是 v-html 输出（markdown-it 渲染管线），无法走 Vue 组件化，
- * 因此与 katex/mermaid 同模式：终态 enhance 阶段做幂等 DOM 装饰
- * （{@code data-wb-deco} 标记防重；流式期间不跑，终态内容稳定只装饰一次）。
- * 折叠用原生 {@code <details>}（零 JS）；复制按钮靠 MarkdownRenderer 挂的一次性
- * <b>事件委托</b>监听（v-html 重写 innerHTML 不影响容器自身的监听器）。
+ * 为代码块加「语言标签 + 复制 + 长代码折叠」。v-html 输出无法组件化，故在终态 enhance 阶段做
+ * 幂等 DOM 装饰（data-wb-deco 防重，流式期不跑）；折叠用原生 details，复制走容器事件委托。
  */
 export function decorateCodeBlocks(root: HTMLElement): void {
   const pres = root.querySelectorAll<HTMLElement>('pre > code')

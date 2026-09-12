@@ -13,11 +13,10 @@ export const DEFAULT_STREAMING_INTERVAL_MS = 100
 /**
  * 把高频写入的 content 节流到固定频率输出。
  *
- * @param source        原始内容 ref（流式时高频变化）
- * @param streaming     当前是否处于流式状态（ref 或 computed）
- * @param intervalMs    节流间隔，默认 100ms；传 ref 可随内容长度自适应
- *                      （正文越长，全量重解析越贵，放慢刷新反而更跟手）
- * @returns             节流后的内容 ref
+ * @param source     原始内容 ref（流式时高频变化）
+ * @param streaming  当前是否处于流式状态
+ * @param intervalMs 节流间隔，默认 100ms；可传 ref 随内容长度自适应
+ * @returns          节流后的内容 ref
  */
 export function useThrottledContent(
   source: Ref<string>,

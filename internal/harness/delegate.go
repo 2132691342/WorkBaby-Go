@@ -103,6 +103,12 @@ func (r *Runner) Delegate(ctx context.Context, agentName, task string) (string, 
 		WithRequestParams(r.reqParams).
 		WithProviderParams(r.providerParams).
 		WithDefaults(r.defaults)
+	// 继承父 run 的护栏钩子：子 Agent 与父 run 受同一套权限模式、目录信任与审批约束。
+	// 不继承会退化为「无策略门」——exec / run_skill_script 这类靠策略门裁决的工具
+	// 将在无闸门状态下执行，安全性只能依赖工具自身兜底而非统一的单层闸门。
+	child.hooks.ToolGate = r.hooks.ToolGate
+	child.hooks.Approver = r.hooks.Approver
+	child.hooks.BeforeToolCall = r.hooks.BeforeToolCall
 
 	msgs := make([]*llm.Message, 0, 2)
 	if persona := def.PersonaSystemMessage(); persona != nil {
@@ -123,18 +129,6 @@ func (r *Runner) Delegate(ctx context.Context, agentName, task string) (string, 
 		flight.err = pkg.Wrap(5008, "子任务执行失败", res.Err)
 		return "", flight.err
 	}
-	flight.summary = truncateRunes(strings.TrimSpace(res.Content), delegateSummaryMax)
+	flight.summary = pkg.TruncateRunes(strings.TrimSpace(res.Content), delegateSummaryMax)
 	return flight.summary, nil
-}
-
-// truncateRunes 按 rune 截断（中文安全）。
-func truncateRunes(s string, n int) string {
-	if n <= 0 {
-		return s
-	}
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
 }

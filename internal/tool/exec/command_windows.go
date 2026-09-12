@@ -8,21 +8,21 @@ import (
 	"strings"
 )
 
-// resolveCommand 把命令名解析为可直接 CreateProcess 的可执行文件与其前置参数。
-//
-// Windows 上有两类命令无法直接 CreateProcess，必须包一层 cmd /c：
-//   - .cmd / .bat 脚本外壳（npm / npx / uvx 的真实形态），直接启动报 ERROR_BAD_EXE_FORMAT(193)；
-//   - dir / type / echo / copy 等 cmd 内建命令：没有对应 exe，LookPath 必然失败。
-//
-// 白名单校验仍针对调用方传入的原始 command（用户意图的 basename），
-// 包 shell 只是执行侧的实现细节，不因此放宽白名单。
+// resolveCommand 把命令名解析为可直接 CreateProcess 的可执行文件与前置参数。
+// Windows 上 .cmd/.bat 外壳（npm/npx 等）与 dir/type 等 cmd 内建命令必须包一层 cmd /c。
+// 白名单校验仍针对原始 command，包 shell 只是执行细节，不放宽白名单。
 func resolveCommand(name string) (string, []string) {
 	lp, err := exec.LookPath(name)
 	if err != nil {
 		return "cmd", []string{"/c", name}
 	}
-	if ext := strings.ToLower(filepath.Ext(lp)); ext == ".cmd" || ext == ".bat" {
-		return "cmd", []string{"/c", lp}
+	return wrapShell(lp)
+}
+
+// wrapShell 已解析到具体可执行文件后的收尾：.cmd / .bat 需包 cmd /c 才能 CreateProcess。
+func wrapShell(abs string) (string, []string) {
+	if ext := strings.ToLower(filepath.Ext(abs)); ext == ".cmd" || ext == ".bat" {
+		return "cmd", []string{"/c", abs}
 	}
-	return lp, nil
+	return abs, nil
 }

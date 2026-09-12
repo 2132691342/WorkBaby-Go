@@ -1,12 +1,7 @@
 <script setup lang="ts">
 /**
- * 流式中的 assistant 气泡：按块顺序展示（thinking / text / tool_call / tool_result / artifact / skill / genui）。
- *
- * <p>数据源：chat store 的 streamingBlocks（按事件到达顺序累积的块序列）——
- * 与历史消息的 message_blocks 共用同一组 kind，渲染层统一在 MessageBlocksRenderer。
- *
- * <p>光标与用量：最后一条 text 块由本组件附加（避免 v-html 重写破坏动画稳定）；
- * 流式结束时统计用量徽标照常挂在底部。
+ * 流式中的 assistant 气泡：数据源为 chat store 的 streamingBlocks，渲染交给 MessageBlocksRenderer；
+ * 本组件补光标与实时用量徽标。
  */
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'

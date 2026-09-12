@@ -2,15 +2,8 @@
 import { computed } from 'vue'
 
 /**
- * 空状态组件（阶段 3-2 · 空状态插画 + 加载动画）。
- *
- * <p>提供多种可爱 SVG 插画替代纯文字空状态。
- * 使用方式：
- * <pre>
- * &lt;EmptyState variant="empty-chat" title="还没有对话" subtitle="开始聊天吧~" /&gt;
- * </pre>
- *
- * <p>
+ * 空状态组件：内置多套 SVG 插画，按 variant 选择。
+ * 用法：`<EmptyState variant="empty-chat" title="还没有对话" subtitle="开始聊天吧~" />`
  */
 
 export type EmptyStateVariant =

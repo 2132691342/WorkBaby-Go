@@ -24,12 +24,8 @@ type Compressor interface {
 // 占位文案声明「结果已消费」，避免模型为找回 payload 重跑有副作用的工具。
 type MicroCompressor struct{}
 
-// Compress 实现 Compressor。
-//
-// <p>协议铁律：assistant(tool_calls) 与其后连续 tool 结果必须同进同出——
-// 只删 tool 结果会让上游以「tool_calls must be followed by tool messages」拒绝；
-// 盲切把 tool 结果留在尾部开头则是「tool result's tool id not found」。
-// 两条路径都以段为最小单位，绝不制造孤儿。
+// Compress 实现 Compressor：以「assistant(tool_calls) + 其后连续 tool 结果」为最小单位裁剪，
+// 绝不拆散配对（拆散会被上游以非法消息拒绝）。
 func (MicroCompressor) Compress(msgs []*llm.Message, budgetTokens int) []*llm.Message {
 	if budgetTokens <= 0 || EstimateTokens(msgs) <= budgetTokens {
 		return msgs

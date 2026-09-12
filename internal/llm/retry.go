@@ -7,7 +7,6 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -84,23 +83,34 @@ func ClassifyError(err error) ErrorClass {
 // IsTransient 是否可重试（仅瞬时类）。调用方取消永远优先且不重试。
 func IsTransient(err error) bool { return ClassifyError(err) == ClassTransient }
 
-// retryAfterRe provider 层在 429 响应时把 Retry-After 嵌入错误文本（retry_after=3s）。
-var retryAfterRe = regexp.MustCompile(`retry_after=(\d+)s`)
+// RetryAfterError 携带服务端 Retry-After 节奏的结构化错误；重试策略优先采用其值，
+// 避免"节拍走文本约定 + 正则提取"这类结构化信息串味。
+type RetryAfterError struct {
+	Err        error
+	RetryAfter time.Duration
+}
 
-// RetryAfter 提取错误中的 Retry-After 提示；无/越界返回 0。
+func (e *RetryAfterError) Error() string { return e.Err.Error() }
+func (e *RetryAfterError) Unwrap() error { return e.Err }
+
+// WithRetryAfter 把 Retry-After 节奏挂到错误上；d<=0 或 err 为 nil 时原样返回。
+func WithRetryAfter(err error, d time.Duration) error {
+	if err == nil || d <= 0 {
+		return err
+	}
+	return &RetryAfterError{Err: err, RetryAfter: d}
+}
+
+// RetryAfter 提取错误中的 Retry-After 节奏；无/越界返回 0。
 func RetryAfter(err error) time.Duration {
 	if err == nil {
 		return 0
 	}
-	m := retryAfterRe.FindStringSubmatch(err.Error())
-	if m == nil {
-		return 0
+	var rae *RetryAfterError
+	if errors.As(err, &rae) && rae.RetryAfter > 0 && rae.RetryAfter <= 120*time.Second {
+		return rae.RetryAfter
 	}
-	sec, perr := strconv.Atoi(m[1])
-	if perr != nil || sec <= 0 || sec > 120 {
-		return 0
-	}
-	return time.Duration(sec) * time.Second
+	return 0
 }
 
 // RetryPolicy 有界重试参数：指数退避 + 抖动 + Retry-After 优先 + 取消优先。
@@ -146,19 +156,24 @@ func Wait(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// RetryAfterHint 提取 429 响应的 Retry-After 秒数后缀（retry_after=Ns），
-// 供 provider 层拼进错误文本，重试策略据此尊重服务端节奏；缺失/非法返回空串。
-func RetryAfterHint(status int, header func(string) string) string {
+// ParseRetryAfter 解析 429 响应的 Retry-After 头（秒）；缺失/非法/越界返回 0。
+func ParseRetryAfter(status int, header func(string) string) time.Duration {
 	if status != 429 || header == nil {
-		return ""
+		return 0
 	}
 	v := strings.TrimSpace(header("Retry-After"))
 	if v == "" {
-		return ""
+		return 0
 	}
 	sec, err := strconv.Atoi(v)
 	if err != nil || sec <= 0 || sec > 120 {
-		return ""
+		return 0
 	}
-	return fmt.Sprintf(" retry_after=%ds", sec)
+	return time.Duration(sec) * time.Second
+}
+
+// UpstreamStatusErr 非流式上游 HTTP 状态错误统一构造：段位码映射 + 响应体预览 + Retry-After 结构化挂载。
+func UpstreamStatusErr(status int, bodyPreview string, header func(string) string) error {
+	err := pkg.Wrap(3100, fmt.Sprintf("http %d: %s", status, bodyPreview), MapHTTPStatus(status))
+	return WithRetryAfter(err, ParseRetryAfter(status, header))
 }

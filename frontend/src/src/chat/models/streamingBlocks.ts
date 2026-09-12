@@ -1,17 +1,9 @@
 /**
  * 流式块累积（streamingBlocks）纯函数模型层。
  *
- * 设计动机：原 streamingContent / streamingTools / streamingSkill 三个 ref 把「按事件到达顺序」
- * 的内容强行按维度拆开 → 渲染时变回『工具堆在一组 + 正文在底部』，与真实时序脱钩，
- * 看起来像『模型先讲完再做事』。本模块把同一序列改成『按事件到达顺序累积的块数组』，
- * 渲染层按数组顺序展示，恢复『文本 / 工具 / 文本 / 工具』的真实穿插。
- *
- * 块类型与 chat:thinking / chat:stream / chat:tool / chat:tool-result / chat:skill / chat:genui
- * 事件一一对应；同一 kind 的块若『同类连续』会原地合并（连续正文 delta 累计，
- * 连续 tool_result 增量合并到同一块），减少 v-for DOM 节点数量。
- *
- * 与持久化 blocks (chat/models/blocks.ts) 共享同一组 kind；前者是『落库后的稳定序列』，
- * 后者是『流式期间高频更新的暂存序列』，渲染组件 MessageBlocksRenderer 同时接受两者。
+ * 按事件到达顺序累积块数组（而非按维度拆成正文/工具/技能三份），渲染层按序展示，
+ * 保持「文本 / 工具 / 文本 / 工具」的真实穿插；同类连续块原地合并以减少 DOM 节点。
+ * 与持久化 blocks（chat/models/blocks.ts）共享同一组 kind，是流式期的高频暂存序列。
  */
 import type { MessageBlockKind } from '@/types/api'
 
@@ -43,18 +35,8 @@ export interface StreamingBlock {
 }
 
 /**
- * 按事件增量更新块序列（同 kind 连续合并）。
- *
- * <p>事件来源与 ChatStreamDecoder 的更新一一对应：
- * <ul>
- *   <li>thinking delta → 合并到最后 thinking 块</li>
- *   <li>text delta → 合并到最后 text 块</li>
- *   <li>tool_call → 新建 tool_call 块</li>
- *   <li>tool_result → 新建/合并到最后 tool_result 块（按 tool_call_id 配对）</li>
- *   <li>skill hit → 新建 skill 块（一轮至多 1 条）</li>
- *   <li>genui → 新建 genui 块</li>
- *   <li>artifact → 新建 artifact 块</li>
- * </ul>
+ * 按事件增量更新块序列：thinking/text delta 合并到同类末块，tool_call / skill / genui / artifact
+ * 新建块，tool_result 按 tool_call_id 合并。
  */
 export function applyBlockUpdate(
   blocks: StreamingBlock[],

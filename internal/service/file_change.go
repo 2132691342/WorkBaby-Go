@@ -110,6 +110,11 @@ func (s *FileChangeService) Record(ctx context.Context, in ChangeInput) (*domain
 	return row, nil
 }
 
+// ListByRun 单次 run 的变更记录（完成度证据：核对声明路径与本 run 产物）。
+func (s *FileChangeService) ListByRun(ctx context.Context, runID string, limit int) ([]domain.FileChangeDO, error) {
+	return s.repo.ListByRun(ctx, runID)
+}
+
 // List 会话变更清单（最新在前）。
 func (s *FileChangeService) List(ctx context.Context, sessionID string, limit int) (domain.FileChangeListRESP, error) {
 	rows, err := s.repo.ListBySession(ctx, sessionID, limit)
@@ -284,15 +289,8 @@ func relativeTo(root, p string) string {
 	return filepath.ToSlash(rel)
 }
 
-// isOutOfSandbox 判定绝对路径 p 是否落在 workspace 根（含其下子目录）但不在 .workbaby/ 子树内。
-//
-// <p>判定口径：
-// <ol>
-//   <li>p 必须在 workspace 内（Rel 无 `..`）—— 否则是更深层的越界，提示文案按「污染」算</li>
-//   <li>p 必须**不在** `<workspace>/.workbaby/` 子树内——这是允许的沙箱落点</li>
-// </ol>
-//
-// <p>未绑定 workspace / 解析失败均按「非越界」处理（向后兼容默认会话）。
+// isOutOfSandbox 判定 p 是否落在 workspace 根之内但不在 .workbaby/ 子树内（即写进了用户原有目录）。
+// 未绑定 workspace 或解析失败按「非越界」处理。
 func isOutOfSandbox(workspace, p string) bool {
 	if workspace == "" || p == "" {
 		return false

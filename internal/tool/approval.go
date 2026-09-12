@@ -16,21 +16,15 @@ const (
 )
 
 // Approver 高风险命令审批门：阻塞等待用户决策后放行/拒绝。
-//
-// 抽象定义在 tool 包（ExecTool 依赖），实现位于 service 层（ApprovalService）——
-// tool 包不感知事件总线与前端，符合分层铁律（internal/{能力域} 不引上层）。
+// 接口定义在 tool 包，实现位于 service 层（tool 不感知事件总线与前端）。
 type Approver interface {
 	// Approve 阻塞等待用户决策；返回 true = 放行执行，false = 拒绝 / 超时 / 取消。
 	// ctx 携带 harness 注入的 runID/sessionID（RunIDFromCtx），用于事件路由。
 	Approve(ctx context.Context, command string, risk string) bool
 }
 
-// RiskClassifier 按本次调用参数计算风险与人类可读描述（工具可选实现）。
-//
-// <p>统一护栏链的关键拼图：exec / skillrun 的「命令级」风险（白名单 / 危险正则）
-// 经此上移到执行链统一裁决——runner 的策略门拿它给出精准审批描述与 per-call
-// 风险，工具自身不再内置第二道审批。返回空 description 表示无法按参数分类
-// （退回工具级静态风险）。
+// RiskClassifier 按本次调用参数计算风险与可读描述（工具可选实现）。
+// 供 runner 策略门做统一裁决；返回空 description 表示退回工具级静态风险。
 type RiskClassifier interface {
 	ClassifyArgs(args json.RawMessage) (description string, risk string)
 }

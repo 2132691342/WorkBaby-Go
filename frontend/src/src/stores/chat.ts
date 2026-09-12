@@ -9,6 +9,7 @@ import { useToast } from '@/composables/useToast'
 import { t } from '@/i18n'
 import type {
   ApprovalPending,
+  PendingApproval,
   Artifact,
   ArtifactPayload,
   AvailableModel,
@@ -117,8 +118,11 @@ export const useChatStore = defineStore('chat', () => {
   const tasks = ref<BackgroundTask[]>([])
   /** 斜杠命令元数据（启动拉一次，命令面板消费）。 */
   const commands = ref<SlashCommand[]>([])
-  /** 启动时拉回的未决审批（页面刷新后恢复，）。 */
-  const pendingApprovals = ref<ApprovalPending[]>([])
+  /**
+   * 未决审批列表（唯一真相源）：流式事件与启动恢复共用。
+   * 一次 run 里可能有多个并发审批（同轮多个需确认工具），必须按队列承载。
+   */
+  const pendingApprovals = ref<PendingApproval[]>([])
   /** 流终止原因（stopped 事件写入；用户主动停止 → 'cancelled'，中性终态不弹错误）。 */
   const stopReason = ref<string | null>(null)
   /** 本轮 run 起始时刻；终止时算出耗时，让横幅能说「你在 12s 后停止」。 */
@@ -127,7 +131,11 @@ export const useChatStore = defineStore('chat', () => {
   const stopElapsedMs = ref<number | null>(null)
   /** 本轮流是否由用户主动取消。 */
   const userCancelled = ref(false)
-  const pendingApproval = ref<ApprovalRequest | null>(null)
+  /** 当前展示的审批（队列首项，只读）：单值 UI 与既有调用签名保持兼容。 */
+  const pendingApproval = computed<ApprovalRequest | null>(() => {
+    const first = pendingApprovals.value[0]
+    return first ? toApprovalRequest(first) : null
+  })
   // ===== M2 会话体验增强状态 =====
   /** 当前会话上下文占用快照；切会话或流式 stats 更新后刷新。 */
   const contextUsage = ref<ContextUsageRESP | null>(null)
@@ -400,22 +408,22 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  /** 启动期一次性拉取未决审批（页面刷新后恢复，）。 */
+  /** 未决审批（队列项）→ 展示用审批请求。 */
+  function toApprovalRequest(p: PendingApproval): ApprovalRequest {
+    return {
+      id: p.id,
+      command: p.command,
+      reason: p.reason,
+      risk: p.risk === 'irreversible' ? 'irreversible' : p.risk === 'input_required' ? 'input_required' : 'needs_approval',
+      canRemember: p.can_remember === true
+    }
+  }
+
+  /** 启动期一次性拉取未决审批（页面刷新后恢复）。 */
   async function loadPendingApprovals(): Promise<void> {
     try {
       const list = await apiGet<ApprovalPending[]>('/api/v1/chat/approvals/pending')
       pendingApprovals.value = Array.isArray(list) ? list : []
-      // 单个 pending 同步到 pendingApproval（兼容单审批 UI）
-      if (pendingApprovals.value.length > 0 && !pendingApproval.value) {
-        const first = pendingApprovals.value[0]
-        pendingApproval.value = {
-          id: first.id,
-          command: first.command,
-          reason: first.reason,
-          risk: first.risk === 'irreversible' ? 'irreversible' : 'needs_approval',
-          canRemember: first.can_remember === true
-        }
-      }
     } catch {
       pendingApprovals.value = []
     }
@@ -676,7 +684,7 @@ export const useChatStore = defineStore('chat', () => {
     stopElapsedMs.value = null
     runStartedAt.value = Date.now()
     userCancelled.value = false
-    pendingApproval.value = null
+    pendingApprovals.value = []
     streamingTurn.value = 0
     lastCheckpointTurn.value = null
     // 注：本轮新增的 file_changes / artifacts 由流式事件增量累积；
@@ -746,7 +754,7 @@ export const useChatStore = defineStore('chat', () => {
     stopElapsedMs.value = null
     runStartedAt.value = Date.now()
     userCancelled.value = false
-    pendingApproval.value = null
+    pendingApprovals.value = []
     streamingTurn.value = 0
     lastCheckpointTurn.value = null
     try {
@@ -856,10 +864,10 @@ export const useChatStore = defineStore('chat', () => {
   ): Promise<void> {
     try {
       await call()
-      if (pendingApproval.value?.id === a.id) pendingApproval.value = null
+      // 成功才出队；失败保留卡片供重试（此前失败会重新赋值单值 ref，多审批下会挤掉队友）
+      pendingApprovals.value = pendingApprovals.value.filter((p) => p.id !== a.id)
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
-      pendingApproval.value = a
     }
   }
 
@@ -897,6 +905,24 @@ export const useChatStore = defineStore('chat', () => {
     await settleApproval(a, () =>
       apiPost(`/api/v1/chat/approval/${a.id}/decide`, { approved: false })
     )
+  }
+
+  /**
+   * 全部批准：一次确认放行队列中所有「可恢复」审批。
+   *
+   * 不可逆（irreversible）与补充输入（input_required）不参与批量——前者必须逐条确认
+   * （永不免审），后者需要具体内容而非「批准」。
+   */
+  async function approveAllPending(): Promise<void> {
+    const targets = pendingApprovals.value.filter((p) => p.risk === 'needs_approval')
+    for (const p of targets) {
+      try {
+        await apiPost(`/api/v1/chat/approval/${p.id}/decide`, { approved: true })
+        pendingApprovals.value = pendingApprovals.value.filter((x) => x.id !== p.id)
+      } catch (e) {
+        error.value = e instanceof Error ? e.message : String(e)
+      }
+    }
   }
 
   /**
@@ -955,7 +981,7 @@ export const useChatStore = defineStore('chat', () => {
         stopReason,
         streamingArtifacts,
         streamingGenUi,
-        pendingApproval,
+        pendingApprovals,
         error,
         streamingRetry,
         todoState,
@@ -1101,6 +1127,7 @@ export const useChatStore = defineStore('chat', () => {
     tasks,
     commands,
     pendingApprovals,
+    approveAllPending,
     effectiveParams,
     loadSessions,
     loadMessages,

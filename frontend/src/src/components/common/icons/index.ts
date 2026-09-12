@@ -94,14 +94,8 @@ import {
 } from './custom'
 
 /**
- * 统一图标模块（图标统一）。
- *
- * <p>全站图标只从本模块取：Element Plus 图标 re-export + 缺失图标自绘，保证风格统一。
- * 用户决策：统一到 EP 图标库（与 EP 组件同源）；EP 缺失的图标（Bot/Brain/Sparkles/PawPrint/
- * Rocket/GitBranch 等）在 `./custom` 自绘（数据取自 lucide path，props 与 lucide 兼容）。
- *
- * <p>本模块保持 lucide 命名导出（`<Xxx />` 模板零改动），EP 库有的直接映射、
- * 没有的走自绘。所有消费方统一 `import { Xxx } from '@/components/common/icons'`。
+ * 统一图标出口：Element Plus 图标 re-export + 缺失图标自绘（`./custom`），
+ * 对外保持 lucide 命名（`<Xxx />` 模板零改动）。全站只从这里取图标。
  */
 export {
   // —— EP 同名直接导出 ——

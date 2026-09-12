@@ -1,7 +1,5 @@
 // 运行上下文与能力注入的转发层。
-//
-// 身份 key（runID / sessionID）与委派接口的唯一定义在 tool 包——工具需要据此解析
-// 会话工作区、发起子任务；harness 只做转发，避免两处各存一套 key 导致读写对不上。
+// 身份 key（runID / sessionID）与委派接口唯一定义在 tool 包，harness 只做转发。
 package harness
 
 import (
@@ -24,4 +22,18 @@ func SessionIDFromCtx(ctx context.Context) string { return tool.SessionIDFromCtx
 // WithDelegator 注入委派能力（Runner 在 run 开始时注入自身）。
 func WithDelegator(ctx context.Context, d tool.Delegator) context.Context {
 	return tool.WithDelegator(ctx, d)
+}
+
+// resumedKey 标记「本 run 是检查点续跑的回放」：审批门据此允许按已决记录快速裁决。
+type resumedKey struct{}
+
+// WithResumedRun 标记续跑回放（Runner.Resume 注入）。
+func WithResumedRun(ctx context.Context) context.Context {
+	return context.WithValue(ctx, resumedKey{}, true)
+}
+
+// IsResumedRun 本轮工具调用是否处于续跑回放。
+func IsResumedRun(ctx context.Context) bool {
+	v, _ := ctx.Value(resumedKey{}).(bool)
+	return v
 }

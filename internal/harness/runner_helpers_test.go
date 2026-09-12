@@ -150,5 +150,27 @@ var (
 
 func stringPtr(s string) *string { return &s }
 
+// guardProbeTool 记录执行时 ctx 是否携带「护栏链已裁决」标记。
+// 该标记是工具跳过自有审批兜底的唯一凭据：漏报会重复询问，谎报则直接绕过审批。
+type guardProbeTool struct {
+	mu      sync.Mutex
+	calls   int
+	guarded bool
+}
+
+func (p *guardProbeTool) Name() string              { return "probe" }
+func (p *guardProbeTool) Description() string       { return "records guard-chain mark" }
+func (p *guardProbeTool) RiskLevel() tool.RiskLevel { return tool.RiskWriteLocal }
+func (p *guardProbeTool) Schema() tool.ToolSchema {
+	return tool.ToolSchema{Name: "probe", Parameters: json.RawMessage(`{"type":"object"}`)}
+}
+func (p *guardProbeTool) Execute(ctx context.Context, _ json.RawMessage) tool.ToolResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	p.guarded = tool.GuardChainActive(ctx)
+	return tool.ToolResult{Content: "ok"}
+}
+
 // countingApprover / classifiedTool 与具体测试方法签名紧耦合，留在 runner_test.go 同测试附近，
 // 不在 helpers 集中（避免不同测试的 mock 互相干扰）。

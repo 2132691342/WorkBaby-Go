@@ -9,11 +9,7 @@ import (
 )
 
 // OpenFileDialog 单选文件，返回选中绝对路径；用户取消返回空串。
-//
-// Wails v2 生成的 JS runtime 不含 dialog 绑定（runtime.js / runtime.d.ts 均无），
-// 故在此暴露——api 层是唯一允许 import wails runtime 的层。
-// 用扁平参数而非 struct 入参：Wails 为 struct 生成的 TS 是带 convertValues 的 class，
-// 前端无法直接用对象字面量传参。
+// 用扁平参数而非 struct：Wails 为 struct 生成的 TS 是带 convertValues 的 class，前端无法传对象字面量。
 func (h *Handler) OpenFileDialog(title, pattern string) (string, error) {
 	opts := wruntime.OpenDialogOptions{Title: title}
 	if pattern != "" {

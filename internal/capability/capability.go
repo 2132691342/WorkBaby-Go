@@ -59,18 +59,23 @@ type CaptureCtx struct {
 	Reply      string
 	Transcript []llm.Message
 	Def        harness.Definition
+	// 本 run 使用的 provider / model：终局抽取类能力（收件箱）据此调模型。
+	ProviderID string
+	Model      string
 }
 
-// 注入顺序：人格 → 环境 → 工作区 → 计划 → 记忆 → 知识库 → Skill → 工作流。
+// 注入顺序：人格 → 环境 → 工作区 → 计划 → 会话变量 → 记忆 → 知识库 → Skill → 工作流。
 const (
 	OrderPersona      = 10
 	OrderEnvironment  = 15
 	OrderWorkspace    = 20
 	OrderTodo         = 25
+	OrderSessionVar   = 28
 	OrderMemory       = 30
 	OrderKnowledge    = 40
 	OrderSkill        = 50
 	OrderWorkflow     = 60
+	OrderInbox        = 70
 )
 
 type entry struct {

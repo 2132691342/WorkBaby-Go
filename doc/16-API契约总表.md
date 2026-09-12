@@ -44,7 +44,10 @@
 | GET | /chat/sessions/:id/params | 生效参数与来源 |
 | POST | /chat/sessions/:id/model | 切换模型 |
 | POST | /chat/sessions/:id/permission | 切换权限模式 |
+| POST | /chat/sessions/:id/agent | 切换会话 Agent（写元数据，下一轮生效） |
 | POST | /chat/sessions/:id/workspace | 绑定工作区 |
+| GET/POST | /chat/sessions/:id/vars | 结构化状态清单 / 写入（body 带 scope：user/session） |
+| POST | /chat/sessions/:id/vars/delete | 删除结构化状态（body 带 scope） |
 | GET | /chat/sessions/:id/messages | 消息分页 |
 | POST | /chat/messages/:sid/delete/:id | 删除单条 |
 | POST | /chat/messages/:sid/truncate | 截断到指定消息 |
@@ -73,7 +76,9 @@
 | POST | /chat/approval/:id/decide | 审批决策（批准 / 本会话允许 / 拒绝） |
 | POST | /chat/approval/:id/answer | 补充输入答复 |
 | POST | /chat/approval/:id/skip | 跳过补充输入 |
-| GET | /chat/approvals/pending | 未决审批（刷新恢复） |
+| GET | /chat/approvals/pending | 未决审批（刷新/重启恢复） |
+| GET | /chat/approval-grants | 免审授权列表（「本会话允许」持久化授权） |
+| POST | /chat/approval-grants/:id/delete | 撤销免审授权 |
 | POST | /tasks | 提交后台任务 |
 | GET | /tasks | 任务列表（可按 session_id） |
 | GET | /tasks/:id | 任务详情 |
@@ -109,6 +114,7 @@
 | GET | /ai-provider/available | 可用模型（供会话选择） |
 | GET | /ai-provider/kinds | 支持的协议类型 |
 | GET | /ai-provider/tiers | 合法档位取值（primary/backup，仅排序） |
+| GET | /ai-provider/presets | 内置模型服务预设（新增 provider 一键预填） |
 | GET | /ai-provider/:id | 详情 |
 | POST | /ai-provider/:id/update | 更新 |
 | POST | /ai-provider/:id/delete | 删除 |
@@ -193,6 +199,10 @@
 | POST | /memory/procedures/:id/delete | 删除程序 |
 | GET | /memory/stats | 三类计数 |
 | GET | /memory/long-term/:id | 长期记忆全文 |
+| GET | /memory/inbox | 回写收件箱列表（query: status= pending/approved/rejected，缺省全部） |
+| GET | /memory/inbox/stats | 收件箱概览（pending / approved / rejected 计数） |
+| POST | /memory/inbox/:id/approve | 合入候选（fact→语义记忆 / procedure→程序记忆 / skill→技能库） |
+| POST | /memory/inbox/:id/reject | 忽略候选 |
 
 ### 通道、定时任务、桌宠、文件夹与文件
 
@@ -218,6 +228,7 @@
 | POST | /pet/sprites | 新增形象 |
 | POST | /pet/sprites/:id/delete | 删除形象 |
 | POST | /pet/window/:mode | 切换形态（pet / main） |
+| POST | /pet/window/click-through | 设置桌宠命中区域（body: enabled + rects[]，物理像素；空列表恢复整窗可交互） |
 | GET | /folders/tree | 文件夹树 |
 | GET | /folders | 按父级列文件夹 |
 | POST | /folders | 新建文件夹 |
@@ -248,7 +259,7 @@
 | `chat:checkpoint` | 检查点已写入（续跑位点轮次） |
 | `chat:skill` | 命中技能（名称/来源/版本/工具白名单/注入字数） |
 | `chat:tool` | 工具调用开始（id/name/arguments/agent/activity） |
-| `chat:tool-result` | 工具结果（id/name/content/error/duration_ms/agent） |
+| `chat:tool-result` | 工具结果（id/name/content/error/duration_ms/agent/ui_hint） |
 | `chat:approval` | 审批请求（id/command/reason/risk/can_remember） |
 | `chat:approval-decided` | 审批决策 |
 | `chat:subagent-start` / `-done` / `-error` | 子 Agent 生命周期 |
@@ -263,7 +274,14 @@
 | `chat:done` | 终态（status/reason/stop_reason/message_id/usage） |
 | `chat:gap` | 重放窗口失效 → 前端拉全量快照 |
 | `task:created` / `task:started` / `task:done` | 后台任务生命周期 |
+| `workflow:started` / `-node-start` / `-node-done` | 工作流执行与节点推进 |
+| `workflow:paused` / `-resumed` / `-input-required` | 工作流暂停、续跑、等待人工输入 |
+| `workflow:completed` / `-failed` / `-cancelled` | 工作流终态 |
+| `pet:state` | 桌宠状态机变化（idle / happy / working / sleeping） |
+| `pet:show` / `pet:hide` | 桌宠形态切换 |
+| `app:ready` | 应用就绪（携带 `server_port`、数据根、版本；Wails 与 HTTP 双通道） |
 
 ## Wails 绑定（非 HTTP）
 
-系统能力经 Wails 绑定暴露：文件/目录选择对话框、剪贴板、窗口形态切换与置顶、系统托盘、受管图片代读、`app:ready` 与 `app:*` 生命周期事件（含 `server_port` 与数据根路径）。
+- **Go 绑定**（`api.Handler` 方法，前端经 `@/wailsjs/go/main/App` 调用）：`OpenFileDialog` / `OpenDirectoryDialog` 选择对话框、`OpenExternal` 打开外链、`ReadLocalImage` / `UploadPetSprite` / `SavePetSpriteImage` 形象资产读写、`PetToggleMode` / `PetMove` 桌宠窗口、`GetServerPort` 引导端口、`SettingValue` 读取设置；生命周期事件 `app:ready` / `app:open-file`。
+- **Wails JS runtime**（前端直接调用 `@/wailsjs/runtime/runtime`）：窗口最小化/最大化/关闭、事件订阅，不经 Go 绑定。

@@ -140,12 +140,8 @@ func (s *ToolService) LLMDefinitionsFiltered(ctx context.Context, allowed []stri
 	return defs
 }
 
-// enabled 读取启停状态；未配置（ErrSettingNotFound）时按工具分组决定默认：
-//
-//   - functools 分组默认禁用——30+ 个纯函数工具会让模型选择困难，先关掉让用户按需开启。
-//   - 其他分组默认启用。
-//
-// 已在设置中显式配过的工具一律以配置为准（不再被默认覆盖）。
+// enabled 读取工具启停状态；未配置时按分组给默认值：functools 默认禁用（数量多、易干扰选择），
+// 其余默认启用。已显式配置过的一律以配置为准。
 func (s *ToolService) enabled(ctx context.Context, name string) (bool, error) {
 	row, err := s.settings.Get(ctx, domain.SettingKeyToolEnabledPrefix+name)
 	if err != nil {

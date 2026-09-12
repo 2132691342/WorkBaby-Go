@@ -5,14 +5,8 @@ import (
 	"sync"
 )
 
-// runRegistry 记录当前正在跑的 run（按 sessionID），提供 Cancel 接口中断后端 Agent 循环。
-//
-// 设计要点：
-//   - 单用户桌面应用：同一 sessionID 同时只可能有一个 run（SendStream 由 ChatService.mu 串行化）；
-//     set 重复注册同一 sessionID 时，cancel 旧 ctx（防 ctx 泄漏），覆盖为新 ctx。
-//   - cancel 后立即 delete：保证 CancelStream 是"一次性"语义，再次调幂等（找不到就 nil）。
-//   - 记录 runID：steering 注入需要知道当前活动 run 的身份。
-//   - 极小：单独成文件便于单测（不需要 repo/bus/reg 全套依赖）。
+// runRegistry 记录当前活动的 run（按 sessionID），提供取消能力。
+// 同 sessionID 重复注册会取消旧 ctx 防泄漏；取消后立即移除，重复取消幂等。
 type runRegistry struct {
 	mu   sync.Mutex
 	runs map[string]runEntry

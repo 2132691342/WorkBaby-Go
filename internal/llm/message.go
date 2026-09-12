@@ -1,9 +1,5 @@
-// Package llm 提供 LLM Provider 抽象、流式协议适配、tool call 归一化、thinking 分离。
-//
-// Message 与 TokenUsage 自实现。
-//
-// 边界：llm/ 不 import harness / agent / api / service / wails；
-// Provider 实例由 Registry 按 domain.AiProviderDO 配置构建。
+// Package llm 提供 Provider 抽象、流式协议适配、tool call 归一化与 thinking 分离。
+// 不 import harness / api / service / wails；Provider 实例由 registry 按配置构建。
 package llm
 
 import "strings"
@@ -30,22 +26,16 @@ type ImageURL struct {
 	URL string `json:"url"`
 }
 
-// Message 跨边界统一消息：
-//   - Content：模型可见正文（用户输入/助手输出）
-//   - Parts：多模态片段（图片）；非空时各上游按自身协议展开
-//   - Thinking：推理文本（Anthropic thinking / DeepSeek reasoning_content / GLM thinking），不混入 Content
-//   - ToolCalls：助手消息的工具调用
-//   - ToolCallID / ToolName：仅 role==tool 时使用，回填 LLM 的工具结果
-//   - Name：可选显示名
+// Message 跨边界统一消息。
 type Message struct {
 	Role       RoleType      `json:"role"`
-	Content    string        `json:"content"`
-	Parts      []ContentPart `json:"parts,omitempty"`
-	Thinking   string        `json:"thinking,omitempty"`
-	ToolCalls  []ToolCall    `json:"toolCalls,omitempty"`
-	ToolCallID string        `json:"toolCallID,omitempty"`
-	ToolName   string        `json:"toolName,omitempty"`
-	Name       string        `json:"name,omitempty"`
+	Content    string        `json:"content"`              // 模型可见正文
+	Parts      []ContentPart `json:"parts,omitempty"`      // 多模态片段；非空时各上游按自身协议展开
+	Thinking   string        `json:"thinking,omitempty"`   // 推理文本，不混入 Content
+	ToolCalls  []ToolCall    `json:"toolCalls,omitempty"`  // 助手消息的工具调用
+	ToolCallID string        `json:"toolCallID,omitempty"` // 仅 role==tool
+	ToolName   string        `json:"toolName,omitempty"`   // 仅 role==tool
+	Name       string        `json:"name,omitempty"`       // 可选显示名
 }
 
 // ImageDataURL 是否图片 data URI（data:image/...）。

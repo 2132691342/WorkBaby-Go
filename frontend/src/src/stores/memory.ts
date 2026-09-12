@@ -4,7 +4,7 @@ import { apiGet, apiPost } from '@/api/client'
 import { t } from '@/i18n'
 import { useDialog } from '@/composables/useDialog'
 import { useToast } from '@/composables/useToast'
-import type { MemoryEpisode, MemoryEpisodeReq, MemoryFact, MemoryProcedure, RecallEntry } from '@/types/api'
+import type { InboxItem, InboxStats, MemoryEpisode, MemoryEpisodeReq, MemoryFact, MemoryProcedure, RecallEntry } from '@/types/api'
 
 /**
  * 记忆中心 store：三类记忆的浏览 / 搜索 / 手动写入 / 删除，端点见 doc/16。
@@ -29,6 +29,11 @@ export const useMemoryStore = defineStore('memory', () => {
   const recallLoading = ref(false)
   const factsLoading = ref(false)
   const proceduresLoading = ref(false)
+
+  // 回写收件箱：run 终局抽取的候选（事实 / 程序 / 技能草稿）待人工评审
+  const inbox = ref<InboxItem[]>([])
+  const inboxStats = ref<InboxStats>({ pending: 0, approved: 0, rejected: 0 })
+  const inboxLoading = ref(false)
 
   /** 按 query 拼 url 加载记忆列表，并取 total 统计。 */
   async function load(): Promise<void> {
@@ -145,9 +150,53 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   }
 
+  // ===== 回写收件箱 =====
+
+  /** 加载收件箱条目（status 缺省只看待审）。 */
+  async function loadInbox(status = 'pending'): Promise<void> {
+    inboxLoading.value = true
+    try {
+      inbox.value = await apiGet<InboxItem[]>(`/api/v1/memory/inbox?status=${status}&limit=100`)
+    } catch (e) {
+      toast.error(t('memory.loadFailed'), e instanceof Error ? e.message : String(e))
+    } finally {
+      inboxLoading.value = false
+    }
+  }
+
+  /** 加载收件箱概览统计。 */
+  async function loadInboxStats(): Promise<void> {
+    try {
+      inboxStats.value = await apiGet<InboxStats>('/api/v1/memory/inbox/stats')
+    } catch {
+      /* 统计失败不影响列表展示 */
+    }
+  }
+
+  /** 合入一条候选（写入语义记忆 / 程序记忆 / 技能库）。 */
+  async function approveInbox(id: string): Promise<void> {
+    try {
+      await apiPost(`/api/v1/memory/inbox/${id}/approve`, {})
+      toast.success(t('common.saved'))
+    } catch (e) {
+      toast.error(t('common.saveFailed'), e instanceof Error ? e.message : String(e))
+    }
+    await Promise.all([loadInbox(), loadInboxStats()])
+  }
+
+  /** 忽略一条候选。 */
+  async function rejectInbox(id: string): Promise<void> {
+    try {
+      await apiPost(`/api/v1/memory/inbox/${id}/reject`, {})
+    } catch (e) {
+      toast.error(t('common.saveFailed'), e instanceof Error ? e.message : String(e))
+    }
+    await Promise.all([loadInbox(), loadInboxStats()])
+  }
+
   /** 初始化时加载三类记忆。 */
   async function initAll(): Promise<void> {
-    await Promise.all([load(), loadFacts(), loadProcedures()])
+    await Promise.all([load(), loadFacts(), loadProcedures(), loadInbox(), loadInboxStats()])
   }
 
   return {
@@ -165,6 +214,9 @@ export const useMemoryStore = defineStore('memory', () => {
     recallLoading,
     factsLoading,
     proceduresLoading,
+    inbox,
+    inboxStats,
+    inboxLoading,
     load,
     doCreate,
     addTag,
@@ -173,6 +225,10 @@ export const useMemoryStore = defineStore('memory', () => {
     recall,
     loadFacts,
     loadProcedures,
+    loadInbox,
+    loadInboxStats,
+    approveInbox,
+    rejectInbox,
     initAll
   }
 })

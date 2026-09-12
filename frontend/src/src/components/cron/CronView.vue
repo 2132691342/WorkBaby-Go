@@ -1,12 +1,7 @@
 <script setup lang="ts">
 /**
- * 定时任务管理视图（无 cron 友好版）。
- *
- * <p>D1 hero 使用场景说明
- * <p>D2 工作流下拉替代裸 input workflowID（el-select）
- * <p>D3 「立即测试」按钮：调 /cron/jobs/trigger/{id} 后立刻 toast 反馈
- * <p>D4 简单 / 高级双模式：默认简单模式（时间 + 频率 + 周几，全部图形化）；
- *     高级模式才露 5 段 cron 输入。简单模式内部仍产 5 段 cron 串后端无感。
+ * 定时任务管理视图：工作流下拉选择、立即触发测试，简单 / 高级双模式
+ * （简单模式用时间 + 频率 + 周几图形化配置，内部仍生成 5 段 cron 串）。
  */
 import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'

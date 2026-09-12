@@ -1,73 +1,85 @@
 package service
 
 import (
-	"sync"
+	"context"
 
 	"WorkBaby/internal/domain"
+	"WorkBaby/internal/repo"
 )
 
-// SessionTodoStore 内存版会话计划存储（实现 internal/tool/todo.Store）。
+// SessionTodoStore 会话计划持久化存储（实现 internal/tool/todo.Store 与 capability.TodoStore）。
 //
-// todo 工具与后续前端进度卡共享同一实例；v1 内存语义：会话关闭即清空，
-// 持久化（跨重启/归档）留待迭代。
+// 计划随会话落库：跨进程重启、归档、切换会话后仍能回放进度，不再依赖进程内存。
+// 覆盖语义由 repo.ReplaceAll（事务删旧 + 插新）承担。
 type SessionTodoStore struct {
-	mu    sync.Mutex
-	items map[string][]domain.TodoItem
+	repo *repo.SessionTodoRepo
 }
 
-// NewSessionTodoStore 构造。
-func NewSessionTodoStore() *SessionTodoStore {
-	return &SessionTodoStore{items: map[string][]domain.TodoItem{}}
+// NewSessionTodoStore 构造；repo 为 nil 时读写退化为空操作（不阻断 run）。
+func NewSessionTodoStore(r *repo.SessionTodoRepo) *SessionTodoStore {
+	return &SessionTodoStore{repo: r}
 }
 
-// Load 返回该会话当前计划（副本，避免调用方改内部切片）。
-func (s *SessionTodoStore) Load(sessionID string) ([]domain.TodoItem, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]domain.TodoItem(nil), s.items[sessionID]...), nil
+// Load 返回该会话当前计划。
+func (s *SessionTodoStore) Load(ctx context.Context, sessionID string) ([]domain.TodoItem, error) {
+	if s == nil || s.repo == nil {
+		return nil, nil
+	}
+	rows, err := s.repo.List(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return toTodoItems(rows), nil
 }
 
 // Save 覆盖该会话计划。
-func (s *SessionTodoStore) Save(sessionID string, items []domain.TodoItem) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.items[sessionID] = append([]domain.TodoItem(nil), items...)
-	return nil
+func (s *SessionTodoStore) Save(ctx context.Context, sessionID string, items []domain.TodoItem) error {
+	if s == nil || s.repo == nil {
+		return nil
+	}
+	return s.repo.ReplaceAll(ctx, sessionID, items)
 }
 
 // State 返回会话计划快照（done/total 已统计）。
-func (s *SessionTodoStore) State(sessionID string) domain.TodoStateRESP {
-	return stateOf(sessionID, s.load(sessionID))
+func (s *SessionTodoStore) State(ctx context.Context, sessionID string) (domain.TodoStateRESP, error) {
+	items, err := s.Load(ctx, sessionID)
+	if err != nil {
+		return domain.TodoStateRESP{SessionID: sessionID}, err
+	}
+	return stateOf(sessionID, items), nil
 }
 
 // Toggle 用户手动勾选/取消某条待办（会话计划面板交互）。
 // 与模型侧的 todo 工具写同一份状态，下一轮 system 注入会带上最新进度。
-func (s *SessionTodoStore) Toggle(sessionID, itemID string) (domain.TodoStateRESP, error) {
-	s.mu.Lock()
-	items := s.items[sessionID]
-	found := false
+func (s *SessionTodoStore) Toggle(ctx context.Context, sessionID, itemID string) (domain.TodoStateRESP, error) {
+	if s == nil || s.repo == nil {
+		return domain.TodoStateRESP{SessionID: sessionID}, nil
+	}
+	items, err := s.Load(ctx, sessionID)
+	if err != nil {
+		return domain.TodoStateRESP{SessionID: sessionID}, err
+	}
 	for i := range items {
-		if items[i].ID == itemID {
-			items[i].Done = !items[i].Done
-			found = true
-			break
+		if items[i].ID != itemID {
+			continue
 		}
+		next := !items[i].Done
+		if _, err := s.repo.UpdateDone(ctx, sessionID, itemID, next); err != nil {
+			return domain.TodoStateRESP{SessionID: sessionID}, err
+		}
+		items[i].Done = next
+		return stateOf(sessionID, items), nil
 	}
-	if found {
-		s.items[sessionID] = items
-	}
-	s.mu.Unlock()
-	if !found {
-		return domain.TodoStateRESP{SessionID: sessionID}, domain.ErrTodoItemNotFound
-	}
-	return s.State(sessionID), nil
+	return domain.TodoStateRESP{SessionID: sessionID}, domain.ErrTodoItemNotFound
 }
 
-// load 内部读取（已在锁内调用时不要用；公开 Load 走副本语义）。
-func (s *SessionTodoStore) load(sessionID string) []domain.TodoItem {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]domain.TodoItem(nil), s.items[sessionID]...)
+// toTodoItems DO → 领域项（ItemID 承载模型给出的标识，主键仅用于存储）。
+func toTodoItems(rows []domain.SessionTodoDO) []domain.TodoItem {
+	out := make([]domain.TodoItem, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, domain.TodoItem{ID: r.ItemID, Title: r.Title, Done: r.Done})
+	}
+	return out
 }
 
 // stateOf 由 items 组装快照。

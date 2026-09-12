@@ -87,14 +87,10 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 		raw, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		appErr := llm.NewUpstreamError("模型服务返回", resp.StatusCode, raw)
-		// Retry-After 供重试器提取退避时长；不进 UI 文案，故拼在 Details 末尾而非 Message。
-		if hint := llm.RetryAfterHint(resp.StatusCode, resp.Header.Get); hint != "" {
-			appErr.Details = strings.TrimSpace(appErr.Details + " " + hint)
-		}
-		return nil, appErr
+		return nil, llm.WithRetryAfter(appErr, llm.ParseRetryAfter(resp.StatusCode, resp.Header.Get))
 	}
 
-	out := make(chan llm.StreamChunk, 32)
+	out, send := llm.NewChunkStream(ctx, 32)
 	acc := toolcall.NewAccumulator()
 
 	go func() {
@@ -105,7 +101,7 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 			line, err := r.ReadBytes('\n')
 			if err != nil {
 				if err != io.EOF {
-					out <- llm.StreamChunk{Err: pkg.Wrap(3005, "stream read failed", err)}
+					send(llm.StreamChunk{Err: pkg.Wrap(3005, "stream read failed", err)})
 				}
 				return
 			}
@@ -121,13 +117,17 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 				// 流结束兜底：把未闭合的 tool call 全部吐出
 				for _, c := range acc.Dump() {
 					tc := c
-					out <- llm.StreamChunk{ToolCall: &tc}
+					if !send(llm.StreamChunk{ToolCall: &tc}) {
+						return
+					}
 				}
 				return
 			}
 			var s OpenAIStreamResponse
 			if err := json.Unmarshal([]byte(data), &s); err != nil {
-				out <- llm.StreamChunk{Err: pkg.Wrap(3033, "decode stream chunk failed", err)}
+				if !send(llm.StreamChunk{Err: pkg.Wrap(3033, "decode stream chunk failed", err)}) {
+					return
+				}
 				continue
 			}
 			for _, ch := range s.Choices {
@@ -139,19 +139,25 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 					delta.Thinking = ch.Delta.ReasoningContent
 				}
 				if len(delta.Content) > 0 || len(delta.Thinking) > 0 {
-					out <- llm.StreamChunk{Delta: delta}
+					if !send(llm.StreamChunk{Delta: delta}) {
+						return
+					}
 				}
 				for _, t := range ch.Delta.ToolCalls {
 					otc := toolcall.OpenAIToolCall{Index: t.Index, ID: t.ID, Type: t.Type, Function: toolcall.OpenAIFunctionCall{Name: t.Function.Name, Arguments: t.Function.Arguments}}
 					done := acc.Feed(otc)
 					for _, c := range done {
 						tc := c
-						out <- llm.StreamChunk{ToolCall: &tc}
+						if !send(llm.StreamChunk{ToolCall: &tc}) {
+							return
+						}
 					}
 				}
 				if ch.FinishReason != nil {
 					fr := *ch.FinishReason
-					out <- llm.StreamChunk{FinishReason: &fr}
+					if !send(llm.StreamChunk{FinishReason: &fr}) {
+						return
+					}
 				}
 			}
 			if s.Usage != nil {
@@ -174,7 +180,9 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 						"input", u.InputTokens, "cache_read", u.CacheReadTokens)
 					u.CacheReadTokens = 0
 				}
-				out <- llm.StreamChunk{FinalUsage: &u}
+				if !send(llm.StreamChunk{FinalUsage: &u}) {
+					return
+				}
 			}
 		}
 	}()
@@ -473,10 +481,3 @@ func mustMarshal(v any) []byte {
 }
 
 func intPtr(i int) *int { return &i }
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}

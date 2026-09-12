@@ -11,12 +11,8 @@ import (
 )
 
 // sqlCheckpointStore 把 harness.Checkpoint 持久化到 agent_checkpoints 表。
-//
-// 相比 JSONL 文件：跨进程重启可恢复、会话删除可级联清理、可为「可恢复运行」列表查询。
-// 每 run 只保留最新一轮快照（旧轮次落库后立即删除）：Resume 只认最后一轮，
-// 逐轮全量落库会让一次 30 轮 run 放大成 30× 全文。
-//
-// repo 层只做无业务语义读写，序列化/反序列化在此 adapter 收敛（service 允许依赖 repo/harness）。
+// 每 run 只保留最新一轮快照（Resume 只认最后一轮，避免磁盘放大）；
+// 序列化在 service 层收敛，repo 只做无业务语义读写。
 type sqlCheckpointStore struct {
 	repo *repo.AgentCheckpointRepo
 }

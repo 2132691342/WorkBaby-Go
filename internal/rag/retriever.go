@@ -100,12 +100,8 @@ func (r *FTS5Retriever) Search(ctx context.Context, query string, topK int) ([]H
 	return out, nil
 }
 
-// searchLike FTS5 兜底：MATCH 对 1 字 token 与部分专名无解（token 过短或库中没有该词形），
-// 此时退化成 LIKE 子串扫描——本地单库规模下代价可接受。命中条件：整串 LIKE OR 任一 token
-// LIKE——多 token 短查询（"怎么 部署 服务"）不会因要求整串连续而漏命中。
-//
-// 相关性打分在 Go 侧完成（LIKE 无法用 bm25）：整串命中 > 多 token 命中计数。
-// 禁止按 created_at 排序——那会让兜底结果完全取决于文档新旧而不是相关性。
+// searchLike FTS5 兜底：MATCH 对过短 token 与生僻专名零命中时退化为 LIKE 子串扫描；
+// 命中条件为整串 LIKE 或任一 token LIKE。Go 侧按相关度打分（整串命中 > token 命中计数），不按时间排序。
 func (r *FTS5Retriever) searchLike(ctx context.Context, query string, topK int) ([]Hit, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {

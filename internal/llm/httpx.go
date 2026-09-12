@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -60,18 +59,10 @@ func DoJSON(ctx context.Context, hc *http.Client, method, url string, headers ma
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		appErr := MapHTTPStatus(resp.StatusCode)
-		return resp, pkg.Wrap(3100, fmt.Sprintf("http %d: %s", resp.StatusCode, truncate(string(raw), 200))+RetryAfterHint(resp.StatusCode, resp.Header.Get), appErr)
+		return resp, UpstreamStatusErr(resp.StatusCode, pkg.TruncateRunes(string(raw), 200), resp.Header.Get)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return resp, pkg.Wrap(3032, "decode response failed", err)
 	}
 	return resp, nil
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

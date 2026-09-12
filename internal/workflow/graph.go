@@ -248,14 +248,8 @@ func NodeActive(nd *NodeDef, conditionOutputs map[string]string) bool {
 	return false
 }
 
-// NodeRunnable 运行期活性判定（分支跳过传播 + 汇合语义）：
-//
-//  1. 自身 branch 不命中 → 跳过（NodeActive 保守语义）；
-//  2. 无上游 → 恒运行；
-//  3. 全部上游被跳过 → 整条分支路径不成立，**跳过传播**给下游
-//     （修复深分支下「父被跳过、无独立 branch 的子仍执行」的错误）；
-//  4. 至少一个上游存活（执行成功或为 condition）→ 运行。
-//     多分支汇合即由此成立：condition 恒执行，任一分支存活即可重新汇入主流程。
+// NodeRunnable 运行期活性判定：自身 branch 不命中或全部上游被跳过则跳过（跳过向下游传播）；
+// 无上游恒运行；至少一个上游存活即运行（多分支由恒执行的 condition 节点汇合）。
 func NodeRunnable(nd *NodeDef, conditionOutputs map[string]string, skipped map[string]bool) bool {
 	if nd.Branch != "" && !NodeActive(nd, conditionOutputs) {
 		return false

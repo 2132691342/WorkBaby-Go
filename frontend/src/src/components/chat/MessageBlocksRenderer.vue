@@ -1,17 +1,9 @@
 <script setup lang="ts">
 /**
- * 按块序列渲染 assistant 消息的完整过程（thinking / text / tool_call / tool_result / artifact / skill / genui）。
- *
- * <p>输入是『块序列』而非『工具数组 + 正文』，渲染层不再按维度分组——
- * 真实时序就是文本→工具→文本→工具的穿插，用户看到的就是模型做了什么、思考了什么、写了什么。
- *
- * <p>支持两类输入：
- * <ul>
- *   <li>历史消息：{@link ResolvedBlock[]}（chat/models/blocks.ts 归一化的稳定块序列）</li>
- *   <li>流式暂存：{@link StreamingBlock[]}（chat/models/streamingBlocks.ts 的高频更新块序列）</li>
- * </ul>
- *
- * 组件内部把两种形态统一转成 {@link RenderBlock}，下游渲染逻辑只写一遍。
+ * 按事件到达顺序渲染 assistant 的完整过程块
+ * （thinking / text / tool_call / tool_result / artifact / skill / genui）。
+ * 同时接受历史稳定序列（ResolvedBlock[]）与流式暂存序列（StreamingBlock[]），
+ * 内部统一转为 RenderBlock 后只写一遍渲染逻辑。
  */
 import { computed, ref, watch } from 'vue'
 import { Brain, Sparkles, Loader2, Square, Check, X, ChevronDown } from '@/components/common/icons'
@@ -57,7 +49,7 @@ interface RenderBlock {
   /** tool_call 块。 */
   call?: { id: string; name: string; arguments: string }
   /** tool_result 块。 */
-  result?: { toolCallId: string; name: string; content: string; error?: string; durationMs?: number; refused?: boolean }
+  result?: { toolCallId: string; name: string; content: string; error?: string; durationMs?: number; refused?: boolean; uiHint?: string }
   /** skill 块。 */
   skill?: Record<string, unknown>
   /** artifact 块。 */
@@ -87,7 +79,8 @@ const renderBlocks = computed<RenderBlock[]>(() => {
           content: String(b.data.content ?? ''),
           error: typeof b.data.error === 'string' ? b.data.error : undefined,
           durationMs: typeof b.data.duration_ms === 'number' ? b.data.duration_ms : undefined,
-          refused: b.data.refused === true
+          refused: b.data.refused === true,
+          uiHint: typeof b.data.ui_hint === 'string' ? b.data.ui_hint : undefined
         }
       } else if (b.kind === 'skill' && b.data) {
         rb.skill = b.data
@@ -139,13 +132,8 @@ const renderBlocks = computed<RenderBlock[]>(() => {
 })
 
 /**
- * 把 tool_call 和对应 tool_result 配对成单个工具单元。
- *
- * <p>设计上 RenderBlock 同时含 call + result 两套字段（独立持久化、独立流式累积）；
- * 但渲染层按"工具单元"配对展示，避免用户看到"file_list → file_list 0s"两次（截图回归 bug）。
- *
- * 配对后：tool_call 块附带 result（运行时合并自同 tool_call_id 的 tool_result 块）；
- * 孤立的 tool_result 块（无对应 call）退化为单独展示。
+ * 把 tool_call 与同 tool_call_id 的 tool_result 配对为单个工具单元（避免同一工具渲染两次）；
+ * 无对应 call 的孤立 tool_result 退化为单独展示。
  */
 const renderUnits = computed(() => {
   const blocks = renderBlocks.value
@@ -322,7 +310,7 @@ watch(
               <code>{{ ln }}</code>
             </li>
           </ul>
-          <pre v-else-if="b.result?.content && looksLikeDiff(b.result.content)" class="wb-tool-pre"><span
+          <pre v-else-if="b.result?.content && (b.result.uiHint === 'diff' || looksLikeDiff(b.result.content))" class="wb-tool-pre"><span
               v-for="(ln, li) in parseDiffLines(b.result.content)"
               :key="li"
               :class="diffLineClass(ln.type)"

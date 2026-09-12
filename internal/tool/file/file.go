@@ -193,7 +193,7 @@ func (t *WriteTool) Schema() tool.ToolSchema {
 
 // Meta 声明：写文件、文件组、编辑类动作。
 func (t *WriteTool) Meta() tool.ToolMeta {
-	return tool.ToolMeta{Group: tool.GroupFile, Category: tool.CategoryEdit, ActivityDesc: "写入文件", PathParams: []string{"path"}}
+	return tool.ToolMeta{Group: tool.GroupFile, Category: tool.CategoryEdit, ActivityDesc: "写入文件", PathParams: []string{"path"}, UIHint: "diff"}
 }
 
 // ActivityDescription 时间线文案。

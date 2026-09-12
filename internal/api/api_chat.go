@@ -77,6 +77,14 @@ func (h *Handler) ListChatCommands() domain.CommandListRESP {
 	return domain.CommandListRESP{Items: items, Total: len(items)}
 }
 
+// SetSessionAgent 切换会话 Agent（写元数据；下次 run 起生效）。
+//
+// req.Agent 合法值："" / "default" / "coding" / "research" / "writer"。
+// 空字符串 = 清除覆盖（回到 harness 内置 defaultAgentName）。
+func (h *Handler) SetSessionAgent(sessionID string, req domain.SetSessionAgentREQ) error {
+	return h.chatSvc.SetSessionAgent(h.ctx, sessionID, req.Agent)
+}
+
 // CompactSession 压缩会话历史上下文（/compact 命令的后端实现）。
 //
 // req.Instructions 是「保留指示」：非空会钉进会话元数据并以 system 段常驻注入
@@ -103,7 +111,13 @@ func (h *Handler) GetSessionTodos(sessionID string) domain.TodoStateRESP {
 	if h.todoStore == nil {
 		return domain.TodoStateRESP{SessionID: sessionID}
 	}
-	return h.todoStore.State(sessionID)
+	state, err := h.todoStore.State(h.ctx, sessionID)
+	if err != nil {
+		// 读取失败返回空快照而非抛错：进度卡属增强信息，不该让会话页整体报错
+		pkg.L.Warn("load session todos failed", "sessionID", sessionID, "err", err.Error())
+		return domain.TodoStateRESP{SessionID: sessionID}
+	}
+	return state
 }
 
 // ToggleSessionTodo 用户手动勾选/取消计划项：与模型写的同一份状态，下一轮注入即生效。
@@ -111,7 +125,49 @@ func (h *Handler) ToggleSessionTodo(sessionID, itemID string) (domain.TodoStateR
 	if h.todoStore == nil {
 		return domain.TodoStateRESP{SessionID: sessionID}, nil
 	}
-	return h.todoStore.Toggle(sessionID, itemID)
+	return h.todoStore.Toggle(h.ctx, sessionID, itemID)
+}
+
+// SessionVars 会话变量清单（跨轮次结构化状态；与 system 注入同源）。
+func (h *Handler) SessionVars(sessionID string) (domain.SessionVarRESP, error) {
+	out := domain.SessionVarRESP{SessionID: sessionID, Items: []domain.SessionVarItem{}}
+	if h.sessionVarSvc == nil {
+		return out, nil
+	}
+	items, err := h.sessionVarSvc.List(h.ctx, sessionID)
+	if err != nil {
+		return out, err
+	}
+	out.Items = items
+	return out, nil
+}
+
+// SetSessionVar 写入/覆盖一个结构化状态变量（scope 空值按会话级）。
+func (h *Handler) SetSessionVar(sessionID string, req domain.SessionVarREQ) (domain.SessionVarRESP, error) {
+	out := domain.SessionVarRESP{SessionID: sessionID, Items: []domain.SessionVarItem{}}
+	if h.sessionVarSvc == nil {
+		return out, nil
+	}
+	items, err := h.sessionVarSvc.Set(h.ctx, sessionID, domain.NormalizeSessionVarScope(req.Scope), req.Key, req.Value)
+	if err != nil {
+		return out, err
+	}
+	out.Items = items
+	return out, nil
+}
+
+// DeleteSessionVar 删除一个结构化状态变量。
+func (h *Handler) DeleteSessionVar(sessionID string, req domain.SessionVarREQ) (domain.SessionVarRESP, error) {
+	out := domain.SessionVarRESP{SessionID: sessionID, Items: []domain.SessionVarItem{}}
+	if h.sessionVarSvc == nil {
+		return out, nil
+	}
+	items, err := h.sessionVarSvc.Delete(h.ctx, sessionID, domain.NormalizeSessionVarScope(req.Scope), req.Key)
+	if err != nil {
+		return out, err
+	}
+	out.Items = items
+	return out, nil
 }
 
 // ClearMessages 清空某会话全部消息。

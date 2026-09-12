@@ -6,24 +6,36 @@ import (
 	"time"
 
 	"WorkBaby/internal/domain"
+	"WorkBaby/internal/harness"
 	"WorkBaby/internal/pkg"
 )
 
 // BuiltinCommands 内置斜杠命令表（命令面板）。
 //
 // 单一真相源：前端启动拉一次 GET /api/v1/chat/commands 渲染面板。
-// ClientOnly 命令的执行逻辑在前端（切模型/开面板/导出），后端不重复实现。
+// ClientOnly 命令的执行逻辑在前端（切模型/开面板/导出），后端不重复实现；
+// 非 ClientOnly 命令的面板项直接跳到现有端点（/chat/sessions/:id/compact 等）。
 func BuiltinCommands() []domain.SlashCommand {
 	return []domain.SlashCommand{
-		{Name: "help", Desc: "查看全部命令说明", Group: "system", ClientOnly: true},
+		// 会话闭环：新建 / 重命名 / 清空 / 分叉 / 截断
 		{Name: "new", Desc: "新建会话", Group: "session", ClientOnly: true},
+		{Name: "rename", Args: "<新标题>", Desc: "重命名当前会话", Group: "session", ClientOnly: true},
 		{Name: "clear", Desc: "清空当前会话消息", Group: "session", ClientOnly: true},
+		{Name: "fork", Args: "[消息ID]", Desc: "从指定消息分叉新会话（不传则从末尾分叉）", Group: "session"},
+		{Name: "truncate", Args: "<消息ID>", Desc: "截断会话到指定消息", Group: "session"},
+		// 上下文闭环（空上下文管理）
 		{Name: "compact", Args: "[保留指示]", Desc: "压缩历史上下文，可附带压缩后必须保留的要点", Group: "session"},
-		{Name: "export", Desc: "导出当前会话为 Markdown", Group: "session", ClientOnly: true},
+		{Name: "context", Desc: "查看当前上下文占用分段（system / 历史 / 工具）", Group: "session"},
+		// 跨会话恢复
+		{Name: "resume", Args: "<会话ID|关键词>", Desc: "跨会话快速恢复（关键词搜 title / content / all）", Group: "session"},
+		// 模型与 Agent
 		{Name: "model", Args: "<模型名>", Desc: "切换当前会话模型", Group: "model", ClientOnly: true},
-		{Name: "agent", Args: "<default|coding|research|writer>", Desc: "切换当前 Agent", Group: "agent", ClientOnly: true},
-		{Name: "trust", Args: "<default|auto-edit|yolo>", Desc: "切换工具权限模式", Group: "agent", ClientOnly: true},
+		{Name: "agent", Args: "<default|coding|research|writer>", Desc: "切换当前 Agent（工具集与记忆策略随之切换）", Group: "agent", ClientOnly: true},
+		{Name: "trust", Args: "<default|auto-edit|yolo>", Desc: "切换工具权限模式（默认 / 自动放行本地写 / 全部放行）", Group: "agent", ClientOnly: true},
+		// 工具开关
 		{Name: "tasks", Desc: "打开后台任务中心", Group: "system", ClientOnly: true},
+		{Name: "export", Desc: "导出当前会话为 Markdown", Group: "session", ClientOnly: true},
+		{Name: "help", Desc: "查看全部命令说明", Group: "system", ClientOnly: true},
 	}
 }
 
@@ -100,6 +112,43 @@ func (s *ChatService) CompactSession(ctx context.Context, sessionID string, req 
 	return out, nil
 }
 
+// SetSessionAgent 切换会话 Agent（仅写元数据，不影响进行中的 run）。
+func (s *ChatService) SetSessionAgent(ctx context.Context, sessionID, agentName string) error {
+	ses, err := s.sessions.GetByID(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	meta := readSessionMeta(ses)
+	if agentName == "" {
+		delete(meta, sessionMetaKeyAgentName)
+	} else {
+		// 仅允许内置 Agent（harness.Agent 会回退 default，但写库前先校验避免歧义）
+		known := false
+		for _, d := range harness.DefaultAgents() {
+			if d.Name == agentName {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return pkg.New(5008, "未知 Agent（仅支持 default/coding/research/writer）", agentName)
+		}
+		meta[sessionMetaKeyAgentName] = agentName
+	}
+	return s.writeSessionMeta(ctx, ses, meta)
+}
+
+// SessionAgent 返回会话级 Agent 名称（空表示回退 default）。
+func SessionAgent(ses *domain.ChatSessionDO) string {
+	if ses == nil {
+		return ""
+	}
+	meta := readSessionMeta(ses)
+	if v, ok := meta[sessionMetaKeyAgentName].(string); ok {
+		return v
+	}
+	return ""
+}
 // pinCompactInstructions 把保留指示写进会话元数据（后续 run 装配期注入 system 段）。
 func (s *ChatService) pinCompactInstructions(ctx context.Context, ses *domain.ChatSessionDO, ins string) bool {
 	meta := readSessionMeta(ses)

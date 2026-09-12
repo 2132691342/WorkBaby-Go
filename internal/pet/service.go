@@ -89,6 +89,9 @@ func (s *Service) UpdateConfig(ctx context.Context, req domain.PetConfigREQ) (do
 	if req.BackgroundBlurPx != nil {
 		row.BackgroundBlurPx = *req.BackgroundBlurPx
 	}
+	if req.ClickThrough != nil {
+		row.ClickThrough = *req.ClickThrough
+	}
 	if err := s.cfgRepo.Upsert(ctx, row); err != nil {
 		return domain.PetConfigRESP{}, err
 	}
@@ -244,7 +247,7 @@ func toConfigRESP(d *domain.PetConfigDO) domain.PetConfigRESP {
 		PositionX: d.PositionX, PositionY: d.PositionY, Scale: d.Scale,
 		BubbleEnabled: d.BubbleEnabled, BubbleDurationMs: d.BubbleDurationMs,
 		ChatBackground: d.ChatBackground, BackgroundOpacity: d.BackgroundOpacity,
-		BackgroundBlurPx: d.BackgroundBlurPx, UpdatedAt: d.UpdatedAt,
+		BackgroundBlurPx: d.BackgroundBlurPx, ClickThrough: d.ClickThrough, UpdatedAt: d.UpdatedAt,
 	}
 }
 

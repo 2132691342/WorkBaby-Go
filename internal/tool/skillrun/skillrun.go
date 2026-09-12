@@ -1,9 +1,6 @@
 // Package skillrun 把 Skill 内置脚本暴露为 Agent 可调用工具。
-//
-// 边界：脚本内容来自 skills 表 ScriptsJSON；解释器按 language 固定映射
-// （javascript→node / python→python / powershell→powershell），参数数组直传、不经 shell；
-// 脚本落临时文件用完即删；执行前经 ApprovalService 审批（RiskExec）；
-// 内置运行时 bin 目录前置 PATH（node/python 隔离环境）。
+// 脚本来自 skills 表 ScriptsJSON，解释器按 language 固定映射，参数数组直传不经 shell；
+// 脚本落临时文件用完即删，执行前经审批门，内置运行时 bin 目录前置 PATH。
 package skillrun
 
 import (

@@ -39,7 +39,6 @@ type Config struct {
 	MaxToolResultLen int           // 工具结果回填 LLM 的截断长度，默认 50k
 	ToolParallelism  int           // 只读工具并发数；默认 4；1 = 串行
 	ContextBudget    int           // 单轮消息估算 token 预算；超预算每轮前自动压缩；0 = 关
-	CompressTrigger  int           // 触发历史截断的估算 token 数，默认 0 = 不截断（旧字段，由 ContextBudget 取代）
 	CompressRatio    float64       // 截断比例，默认 0.9
 }
 
@@ -68,20 +67,20 @@ type RunState struct {
 	Stagnant             bool   // 已触发停滞熔断
 }
 
-// LoopHooks 循环缝集合：按在循环中的位置从外到里排开，nil 字段 = 关闭（走默认行为）。
-//
-//	Steering / FollowUp   注入缝——跑过工具的轮之间 / 本轮收尾后续接
-//	PrepareNextTurn       轮间调整——下一轮换模型 / 换工具集（流式失败降级也经此）
-//	ShouldStopAfterTurn   优雅停止点——任务已完成等主动终止，区别于停滞/预算类被动熔断
-//	BeforeToolCall        工具执行前拦截（目录信任三态）
-//	AfterToolCall         工具执行后逐字段覆盖结果（脱敏 / 富化 / 前端提示增强）
+// ToolResultHook 工具执行后处理钩子：拿到 ToolResult 后、事件发出前逐字段覆盖
+// （脱敏 / 富化 / 前端提示增强）。多槽：按注册顺序依次调用，可叠加关注点。
+type ToolResultHook func(ctx context.Context, name string, args json.RawMessage, res *tool.ToolResult)
+
+// LoopHooks 循环缝集合：Steering / FollowUp 注入、PrepareNextTurn 轮间调整、
+// ShouldStopAfterTurn 优雅停止、BeforeToolCall 执行前拦截、AfterToolCalls 结果覆盖。
+// nil 字段 = 该缝关闭。
 type LoopHooks struct {
 	Steering            Injector
 	FollowUp            Injector
 	PrepareNextTurn     TurnAdjuster
 	ShouldStopAfterTurn func(ctx context.Context, sig *TurnSignal) bool
 	BeforeToolCall      PathTrust
-	AfterToolCall       func(ctx context.Context, name string, args json.RawMessage, res *tool.ToolResult)
+	AfterToolCalls      []ToolResultHook
 	ToolGate            *tool.Gate
 	Approver            func(ctx context.Context, description, risk string) bool
 }
@@ -108,6 +107,8 @@ type Runner struct {
 	loopMu          sync.Mutex                 // 循环护栏 / 工具计数保护（并行只读路径也走 execOne）
 	loopHits        map[string]int             // run 内 name+args → 累计调用次数
 	toolCallsRun    int                        // 本 run 已执行的工具次数（预算护栏）
+	hiddenDefs      []llm.ToolDefinition       // 折叠未暴露的工具定义（tool_search 激活池）
+	activatedHidden []llm.ToolDefinition       // 已激活的隐藏工具（并入 exposedDefs，loopMu 保护）
 	steps           map[string]StepRecord      // 幂等恢复：已完成成功工具调用（name+args → 结果）
 	stepsMu         sync.Mutex                 // 工具并发路径保护 steps
 	delegateMu      sync.Mutex                 // 委派去重保护
@@ -117,14 +118,9 @@ type Runner struct {
 	OnDelegateUsage func(agentName string, turns []TurnUsage)
 }
 
-// PathTrust 目录信任闸门。
-//
-// 输入工具名与原始参数，由 service 侧抽取目标目录并解析信任三态：
-//   - ok=true：放行（目录已信任，或 ask 经人工批准）；
-//   - ok=false：拒绝，reason 直接进工具回执——与 Refused 同构，模型可据此改道
-//     （例如改用工作区内的目录）而不是把拒绝当故障硬终止。
-//
-// 询问（阻塞等待人工决策）在钩子内部完成，harness 不感知审批机制。
+// PathTrust 目录信任闸门：由 service 侧抽取目标目录并解析信任三态，返回是否放行与拒绝原因。
+// ok=false 的 reason 直接进工具回执（与 Refused 同构），模型可据此改道。
+// 询问在钩子内部完成，harness 不感知审批机制。
 type PathTrust func(ctx context.Context, toolName string, args json.RawMessage) (ok bool, reason string)
 
 // TurnUpdate turn 间的热切换载荷；非 nil 字段在下一轮或本轮重试时生效。
@@ -144,13 +140,8 @@ type TurnSignal struct {
 // TurnAdjuster turn 间调整钩子：返回要应用的 TurnUpdate（空值 = 不调整）。
 type TurnAdjuster func(ctx context.Context, sig *TurnSignal) TurnUpdate
 
-// Injector 注入缝：返回要追加进上下文的消息；返回空表示不注入。
-//
-// 两条缝的分工：
-//   - steering：turn 与 turn 之间，且仅在本轮跑过工具后触发——「一次持续工作中的中途插话」；
-//   - followUp：模型说完了（本轮无工具调用）之后触发——「一轮对话结束后的自动续接」。
-//
-// 缝的实现由 service 提供（从注入队列取消息），harness 不感知来源。
+// Injector 注入缝：返回要追加进上下文的消息，空表示不注入。
+// steering 在轮间且本轮跑过工具后触发（中途插话），followUp 在本轮收尾后触发（自动续接）。
 type Injector func(ctx context.Context) []*llm.Message
 
 // checkpointKeepRuns 每会话保留的最近 run 检查点数。
@@ -188,10 +179,10 @@ func (r *Runner) WithShouldStopAfterTurn(fn func(ctx context.Context, sig *TurnS
 	return r
 }
 
-// WithAfterToolCall 启用工具后处理钩子：拿到 ToolResult 后、事件发出前逐字段覆盖
-// （脱敏、富化、前端展示增强）。nil = 关闭。
-func (r *Runner) WithAfterToolCall(fn func(ctx context.Context, name string, args json.RawMessage, res *tool.ToolResult)) *Runner {
-	r.hooks.AfterToolCall = fn
+// WithAfterToolCall 追加工具后处理钩子（多槽）：拿到 ToolResult 后、事件发出前逐字段
+// 覆盖（脱敏、富化、前端展示增强）；按注册顺序依次生效。
+func (r *Runner) WithAfterToolCall(fn ToolResultHook) *Runner {
+	r.hooks.AfterToolCalls = append(r.hooks.AfterToolCalls, fn)
 	return r
 }
 
@@ -249,9 +240,8 @@ func NewRunner(p llm.Provider, sink Sink, cfg Config) *Runner {
 	if cfg.MaxToolResultLen <= 0 {
 		cfg.MaxToolResultLen = 50_000
 	}
-	// 压缩走 ContextBudget + MicroCompressor（每轮压缩）；CompressTrigger 是 v1
-	// 旧字段保留读兼容，但不再挂任何中间件——runner 直接持 TokenUsageAccumulator
-	// 唯一实例，每轮 AfterTurn 同步直调（中间件链接口本身未导出）。
+	// 压缩由 ContextBudget 驱动：超预算的轮次交由压缩器（Auto 优先 / Micro 兜底）处理；
+	// Runner 持 TokenUsageAccumulator 唯一实例，每轮 AfterTurn 同步直调。
 	return &Runner{
 		provider:   p,
 		sink:       sink,
@@ -312,6 +302,16 @@ type TurnUsage struct {
 	LatencyMs int // 本轮「建流→流结束」墙钟耗时（含重试等待；0 = 未计量）
 }
 
+// RunTimings 一次 run 的分段耗时归因（毫秒）。
+//
+// 三段互斥且近似穷举：等模型（含建流重试与全量流消费）、跑工具（含审批等待）、
+// 压缩上下文。剩余差额是本机调度与落库开销——低到不值得单独归因。
+type RunTimings struct {
+	LLMMs      int64
+	ToolsMs    int64
+	CompressMs int64
+}
+
 // RunResult 一次 Run 的成品（service 用于落库与返回）。
 type RunResult struct {
 	Content    string
@@ -326,7 +326,9 @@ type RunResult struct {
 	Turns       []TurnUsage // 每轮明细；只在有用量时追加
 	Reason      RunStopReason
 	Err         error
-}
+	// Timings 分段耗时归因：回答「这次 run 慢在哪」。
+	Timings RunTimings
+	}
 
 // RunMessages 跑一个多轮 ReAct 循环；返回完整 content/thinking 与 usage。
 //
@@ -354,7 +356,7 @@ func (r *Runner) Resume(ctx context.Context, runID, sessionID, assistantMessageI
 	if err != nil {
 		return RunResult{Reason: ReasonError, Err: err}
 	}
-	ctx = WithDelegator(WithRunContext(ctx, runID, sessionID), r)
+	ctx = WithResumedRun(WithDelegator(WithRunContext(ctx, runID, sessionID), r))
 	r.steps = cp.StepRecords
 	if r.steps == nil {
 		r.steps = map[string]StepRecord{}
@@ -364,6 +366,8 @@ func (r *Runner) Resume(ctx context.Context, runID, sessionID, assistantMessageI
 
 // runLoop 控制循环主体；startTurn 与初始累积值用于中断后 Resume。
 func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessageID, model string, msgs []*llm.Message, state *RunState, startTurn int, initContent, initThinking string, initUsage llm.TokenUsage) RunResult {
+	// 分段耗时归因：等模型 / 跑工具 / 压缩
+	var tim RunTimings
 	r.modelSwitches = 0
 	r.usage = &TokenUsageAccumulator{
 		Input:      initUsage.InputTokens,
@@ -400,6 +404,7 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		// 预算先按校准系数折算再交给压缩器：压缩器内部用 EstimateTokens 比较，
 		// 折算后等价于「估算 × 系数 ≤ 真实预算」，无需改动压缩器实现。
 		if r.cfg.ContextBudget > 0 && r.compressor != nil {
+			compressStart := time.Now()
 			budget := r.calibratedBudget(r.cfg.ContextBudget)
 			before := msgs
 			if cc, ok := r.compressor.(ContextCompressor); ok {
@@ -412,19 +417,20 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			if boundary, changed := CompressDiff(CompressorKey(r.compressor), before, msgs); changed {
 				r.sink.Emit(Event{Kind: EventCompressed, RunID: runID, SessionID: sessionID, Turn: turn, Payload: boundary})
 			}
+			tim.CompressMs += time.Since(compressStart).Milliseconds()
 		}
 
-		// 中间件已下线：BeforeTurn 调整由各压缩器（ContextCompressor / MicroCompressor）每轮处理，
+		// BeforeTurn 调整由各压缩器（ContextCompressor / MicroCompressor）每轮处理，
 		// 这里直接走 compress 后的 msgs。
 		// 本轮实际送入模型的估算量（含工具定义），供实测回推校准
-		estAtTurn := EstimateTokens(msgs) + EstimateToolTokens(r.toolDefs)
+		estAtTurn := EstimateTokens(msgs) + EstimateToolTokens(r.exposedDefs())
 
 		r.sink.Emit(Event{Kind: EventTurnStart, RunID: runID, SessionID: sessionID, Turn: turn})
 		req := &llm.ChatRequest{
 			Model:     model,
 			Messages:  msgs,
 			User:      "local",
-			Tools:     r.toolDefs,
+			Tools:     r.exposedDefs(),
 			SessionID: sessionID,
 		}
 		// 三层合并：请求级 > Provider 级 > 全局默认
@@ -465,9 +471,16 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		var usage llm.TokenUsage
 		for chunk := range stream {
 			if chunk.Err != nil {
-				runErr = chunk.Err
-				finalReason = ReasonError
-				break
+				// 不提前 break：继续读到 channel 关闭，避免上游生产者在满缓冲的 send 上
+				// 永久阻塞（goroutine + HTTP 连接泄漏）。此后增量一律丢弃。
+				if runErr == nil {
+					runErr = chunk.Err
+					finalReason = ReasonError
+				}
+				continue
+			}
+			if runErr != nil {
+				continue
 			}
 			if chunk.Delta.Content != "" {
 				content.WriteString(chunk.Delta.Content)
@@ -494,6 +507,8 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			break
 		}
 		turnLatency := int(time.Since(turnStartedAt).Milliseconds())
+		// 等模型归因：turnLatency 即本轮「建流 → 流消费完」的墙钟（含重试等待）
+		tim.LLMMs += int64(turnLatency)
 		r.usage.AfterTurn(usage)
 		// 用上游实测 prompt tokens 回推本地估算的系统性偏差：工具结果（文档正文 /
 		// 结构化 JSON）与纯文本的 token 密度可差数倍，单次估算无法覆盖，逐轮 EMA 修正。
@@ -510,7 +525,7 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 
 		// 文本工具调用兜底：部分兼容端点把调用意图写成正文；只认本次暴露的工具名
 		if len(toolCalls) == 0 {
-			if textCalls := parseTextToolCalls(content.String(), r.toolDefs); len(textCalls) > 0 {
+			if textCalls := parseTextToolCalls(content.String(), r.exposedDefs()); len(textCalls) > 0 {
 				toolCalls = textCalls
 				for _, tc := range textCalls {
 					r.emitToolCall(runID, sessionID, turn, tc)
@@ -560,8 +575,10 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 			break
 		}
 
-		// 执行工具并回填 tool 消息
+		// 执行工具并回填 tool 消息（含审批等待——那正是用户最能感知的「卡住」）
+		toolsStart := time.Now()
 		results := r.executeTools(ctx, runID, sessionID, turn, toolCalls, state)
+		tim.ToolsMs += time.Since(toolsStart).Milliseconds()
 		if state.Stagnant {
 			finalReason = ReasonStagnation
 			break
@@ -602,13 +619,9 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 	if !normalStop && turnsRun == r.cfg.MaxTurns-startTurn && finalReason == ReasonEndTurn {
 		finalReason = ReasonMaxTurns
 	}
-	// 已消耗 token 即出账：用户取消 / 预算超限 / 停滞 等非 end_turn 终态同样回填用量。
-	//
-	// 关键：finalUsage 必须是「末轮 per-turn」而非「全程累加」。
-	//   - message.input_tokens 落库后被 ContextUsage.historyTokens() 当成「当前上下文占用」展示，
-	//     累加值会让一次 5 轮 run 显示成 5× input_tokens（前端 323% 的根因）。
-	//   - 每轮 per-turn 明细在 turnUsages 里，会单独写入 token_usage 表用于「总消耗」统计；
-	//     RunResult.Usage / RunDone 事件 / message.input_tokens 三个口径统一用末轮 per-turn。
+	// 已消耗 token 即出账：非 end_turn 终态（取消 / 预算超限 / 停滞）同样回填用量。
+	// finalUsage 取「末轮 per-turn」而非全程累加——它同时是上下文占用口径；
+	// 每轮明细单独写 token_usage 表用于总消耗统计。
 	if len(turnUsages) > 0 {
 		last := turnUsages[len(turnUsages)-1].Usage
 		if last.InputTokens > 0 || last.OutputTokens > 0 || last.TotalTokens > 0 {
@@ -656,6 +669,7 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 		Turns:       turnUsages,
 		Reason:      finalReason,
 		Err:         runErr,
+		Timings:     tim,
 	}
 }
 
@@ -731,8 +745,8 @@ func buildAssistantMessage(content string, calls []llm.NormalizedToolCall) *llm.
 //   - 其余严格串行（写工具间无并发，避免互相覆盖）；
 //   - 每次执行包 panic 恢复：单工具 panic 不拖垮整个 run。
 func (r *Runner) executeTools(ctx context.Context, runID, sessionID string, turn int, calls []llm.NormalizedToolCall, state *RunState) []*llm.Message {
-	// 标记护栏链生效：工具内部据此跳过自有审批兜底（单层闸门，杜绝重复询问）
-	ctx = tool.WithGuardChain(ctx)
+	// 护栏链标记不在此处设置：由 layerPolicyGate 在真正裁决通过后写入 tc.ctx。
+	// 未装配策略门的 runner（子 Agent / RunOnce）保持未标记，工具内部审批兜底继续生效。
 	if len(calls) > 1 && r.cfg.ToolParallelism > 1 && r.allReadonly(calls) {
 		// 只读无副作用，停滞检测略过（并行下 state 不共享）；结果按序回填
 		out := make([]*llm.Message, len(calls))
@@ -772,10 +786,11 @@ func (r *Runner) allReadonly(calls []llm.NormalizedToolCall) bool {
 // 注册中心仍能查到并执行，这是执行侧漏洞；defs 非空时严格校验，
 // defs 为空（单测/无工具场景）视为不过滤以保持兼容。
 func (r *Runner) toolExposed(name string) bool {
-	if len(r.toolDefs) == 0 {
+	defs := r.exposedDefs()
+	if len(defs) == 0 {
 		return true
 	}
-	for _, d := range r.toolDefs {
+	for _, d := range defs {
 		if d.Name == name {
 			return true
 		}
@@ -877,14 +892,4 @@ func (r *Runner) saveCheckpoint(runID, sessionID, assistantMessageID string, tur
 	}
 	_ = r.checkpoints.Cleanup(sessionID, checkpointKeepRuns)
 	r.sink.Emit(Event{Kind: EventCheckpoint, RunID: runID, SessionID: sessionID, Turn: turn})
-}
-
-// truncate 工具结果回填截断：按 rune 切（中文安全），避免落在多字节序列中间
-// 产生乱码回填（严格的上游会直接 400）。n 为 rune 数。
-func truncate(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "\n... (truncated)"
 }

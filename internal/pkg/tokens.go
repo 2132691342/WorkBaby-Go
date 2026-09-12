@@ -1,11 +1,7 @@
 package pkg
 
-// EstimateTextTokens 估算单段文本的 token 数（无 tokenizer 的加权近似）。
-//
-// 口径：CJK 字符按 1 token/字（主流分词器对中文约 0.6~1.5 token/字，取 1 偏保守），
-// 其余按 4 字符/token 向上取整。
-// 约束：这是全项目唯一的文本 token 估算实现，压缩阈值 / 上下文占用 / RAG 分块共用，
-// 禁止各包再就地另算（口径不一致会让压缩触发与占用展示同时失准）。
+// EstimateTextTokens 估算单段文本的 token 数：CJK 按 1 token/字，其余按 4 字符/token。
+// 全项目唯一的文本估算实现，压缩阈值 / 上下文占用 / RAG 分块共用，各包不得就地另算。
 func EstimateTextTokens(s string) int {
 	if s == "" {
 		return 0

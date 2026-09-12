@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -96,6 +97,20 @@ func (r *WorkflowExecutionRepo) MarkFinished(ctx context.Context, id string, sta
 	return nil
 }
 
+// ReapRunning 启动排空：把上次进程遗留的 running 执行标为 paused（可断点续跑）。
+//
+// 进程崩溃后这些执行没有任何 goroutine 在跑，保持 running 会让界面永远转圈；
+// 标 paused 既如实表达「未完成」，也给了前端一个可恢复入口。
+func (r *WorkflowExecutionRepo) ReapRunning(ctx context.Context) (int64, error) {
+	res := r.db.WithContext(ctx).Model(&domain.WorkflowExecutionDO{}).
+		Where("status = ?", domain.WorkflowStatusRunning).
+		Update("status", domain.WorkflowStatusPaused)
+	if res.Error != nil {
+		return 0, pkg.Wrap(2093, "reap running workflow executions failed", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
 // WorkflowNodeExecutionRepo workflow_node_executions 表 CRUD。
 type WorkflowNodeExecutionRepo struct{ db *gorm.DB }
 
@@ -164,4 +179,46 @@ func (r *WorkflowNodeExecutionRepo) ListByExecution(ctx context.Context, executi
 		return nil, pkg.Wrap(2093, "list workflow node executions failed", err)
 	}
 	return rows, nil
+}
+
+// FindLatestByNode 取某执行下指定节点的最新一条执行记录（人工输入回填定位用）。
+func (r *WorkflowNodeExecutionRepo) FindLatestByNode(ctx context.Context, executionID, nodeID string) (*domain.WorkflowNodeExecutionDO, error) {
+	var row domain.WorkflowNodeExecutionDO
+	if err := r.db.WithContext(ctx).
+		Where("execution_id = ? AND node_id = ?", executionID, nodeID).
+		Order("started_at DESC").
+		First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrWorkflowNotFound
+		}
+		return nil, pkg.Wrap(2093, "find workflow node execution failed", err)
+	}
+	return &row, nil
+}
+
+// SetWaitingInput 把节点置为等待人工输入，并把提问文案写入 outputs（跨重启后 UI 仍可回放）。
+func (r *WorkflowNodeExecutionRepo) SetWaitingInput(ctx context.Context, id, prompt string) error {
+	b, _ := json.Marshal(map[string]any{"prompt": prompt})
+	if err := r.db.WithContext(ctx).
+		Model(&domain.WorkflowNodeExecutionDO{}).
+		Where("id = ?", id).
+		Updates(map[string]any{"status": string(domain.NodeStatusWaiting), "outputs": string(b)}).Error; err != nil {
+		return pkg.Wrap(2093, "set node waiting input failed", err)
+	}
+	return nil
+}
+
+// SetHumanInput 记录人工输入到 outputs.user_input，供断点续跑取用。
+//
+// 场景：进程重启后原等待 goroutine 已消失，输入无处投递；先落库，再由续跑注入节点。
+// 人工输入节点在等待期间不写其他 outputs，整体覆盖是安全的。
+func (r *WorkflowNodeExecutionRepo) SetHumanInput(ctx context.Context, id, value string) error {
+	b, _ := json.Marshal(map[string]any{"user_input": value})
+	if err := r.db.WithContext(ctx).
+		Model(&domain.WorkflowNodeExecutionDO{}).
+		Where("id = ?", id).
+		Update("outputs", string(b)).Error; err != nil {
+		return pkg.Wrap(2093, "set human input failed", err)
+	}
+	return nil
 }

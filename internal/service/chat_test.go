@@ -463,16 +463,8 @@ func testCompactSessionArchive(t *testing.T) {
 	assert.NotContains(t, sum, "收尾", "保留侧轮次不应出现在归档摘要里")
 }
 
-// TestToLLMMessagesDropsOrphanTools 续跑/压缩后孤儿 tool 消息不会把整轮送进 LLM。
-//
-// <p>回归：toLLMMessages 历史上会把所有 role=tool 一并发回模型；若某条 tool 消息
-// 的 tool_call_id 在全列表里没有任何 assistant.tool_calls 匹配，上游 LLM 会以
-// 400 「tool result's tool id not found」拒绝整轮。修复后这些孤儿被静默剥掉。
-// TestToLLMMessagesDropsEmptyAssistant 复现 GLM 400（上游码 1214「messages 参数非法」）：
-//
-// <p>上次 run 失败/中断后落库的 assistant 占位（content 为空、无 tool_calls）若原样
-// 回发上游，GLM 等厂商直接以 400 拒绝整轮；且消息已持久化，会话被永久毒化。
-// 修复后空 assistant 消息被静默剥掉；空 content 的 tool 消息兜底为 "(empty)"。
+// testToLLMMessagesDropsEmptyAssistant 空 assistant 占位（失败/中断残留）必须剥离，
+// 否则部分上游以 400 拒绝整轮且会话被持久化毒化；空 content 的 tool 消息兜底为 "(empty)" 而非剥离。
 func testToLLMMessagesDropsEmptyAssistant(t *testing.T) {
 	svc, _ := newChatOpsService(t)
 	toolCallsJSON := `[{"id":"CALL_1","type":"function","function":{"name":"exec","arguments":"{}"}}]`

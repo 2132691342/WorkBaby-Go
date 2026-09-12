@@ -17,7 +17,7 @@ export const usePetStore = defineStore('pet', () => {
   const info = ref<string | null>(null)
   const loading = ref(false)
 
-  const form = ref<PetConfigReq>({ enabled: false, mode: 'swing', scale: 1, bubble_enabled: true, bubble_duration_ms: 3000 })
+  const form = ref<PetConfigReq>({ enabled: false, mode: 'swing', scale: 1, bubble_enabled: true, bubble_duration_ms: 3000, click_through: false })
   const spriteName = ref('')
   /** 图片编辑器待处理的源图（data URL）；非空时 PetSpaceView 打开裁剪弹窗。 */
   const editSource = ref('')
@@ -32,7 +32,7 @@ export const usePetStore = defineStore('pet', () => {
       const [c, s] = await Promise.all([apiGet<PetConfig>('/api/v1/pet/config'), apiGet<PetSprite[]>('/api/v1/pet/sprites')])
       config.value = c
       sprites.value = s
-      form.value = { enabled: c.enabled, mode: c.mode, sprite_id: c.sprite_id, position_x: c.position_x, position_y: c.position_y, scale: c.scale, bubble_enabled: c.bubble_enabled, bubble_duration_ms: c.bubble_duration_ms }
+      form.value = { enabled: c.enabled, mode: c.mode, sprite_id: c.sprite_id, position_x: c.position_x, position_y: c.position_y, scale: c.scale, bubble_enabled: c.bubble_enabled, bubble_duration_ms: c.bubble_duration_ms, click_through: c.click_through }
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
     } finally {

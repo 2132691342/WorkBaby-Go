@@ -1,10 +1,6 @@
 // Package anthropic 实现 Anthropic Messages API（/v1/messages，SSE 流式）。
-//
-// 协议要点：
-//   - content_block.type=="thinking" → Message.Thinking
-//   - content_block.type=="tool_use" → NormalizedToolCall
-//   - 流事件：message_start → content_block_start → content_block_delta* → content_block_stop → message_delta → message_stop
-//   - prompt caching：三个断点（配额 4）—— system 末段（覆盖全部 system）/ 工具定义 / 历史前缀
+// 归一化：thinking 块 → Message.Thinking，tool_use 块 → NormalizedToolCall；
+// prompt caching 在 system 末段、工具定义、历史前缀三处打断点。
 package anthropic
 
 import (
@@ -91,10 +87,11 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 	}
 	if resp.StatusCode >= 400 {
 		_ = resp.Body.Close()
-		return nil, pkg.Wrap(3100, "anthropic stream"+llm.RetryAfterHint(resp.StatusCode, resp.Header.Get), llm.MapHTTPStatus(resp.StatusCode))
+		err := pkg.Wrap(3100, "anthropic stream", llm.MapHTTPStatus(resp.StatusCode))
+		return nil, llm.WithRetryAfter(err, llm.ParseRetryAfter(resp.StatusCode, resp.Header.Get))
 	}
 
-	out := make(chan llm.StreamChunk, 32)
+	out, send := llm.NewChunkStream(ctx, 32)
 
 	type openBlock struct {
 		Index int
@@ -119,7 +116,7 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 			line, rerr := r.ReadBytes('\n')
 			if rerr != nil {
 				if rerr != io.EOF {
-					out <- llm.StreamChunk{Err: pkg.Wrap(3005, "anthropic stream read", rerr)}
+					send(llm.StreamChunk{Err: pkg.Wrap(3005, "anthropic stream read", rerr)})
 				}
 				return
 			}
@@ -152,12 +149,16 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 				case "text_delta":
 					if ev.Delta.Text != "" {
 						textBuf.WriteString(ev.Delta.Text)
-						out <- llm.StreamChunk{Delta: llm.Message{Role: llm.RoleAssistant, Content: ev.Delta.Text}}
+						if !send(llm.StreamChunk{Delta: llm.Message{Role: llm.RoleAssistant, Content: ev.Delta.Text}}) {
+							return
+						}
 					}
 				case "thinking_delta":
 					thinkBuf.WriteString(ev.Delta.Thinking)
 					if ev.Delta.Thinking != "" {
-						out <- llm.StreamChunk{Delta: llm.Message{Role: llm.RoleAssistant, Thinking: ev.Delta.Thinking}}
+						if !send(llm.StreamChunk{Delta: llm.Message{Role: llm.RoleAssistant, Thinking: ev.Delta.Thinking}}) {
+							return
+						}
 					}
 				case "input_json_delta":
 					toolInputBuf.WriteString(ev.Delta.PartialJSON)
@@ -177,7 +178,9 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 					}
 					toolInputBuf.Reset()
 					tc := llm.NormalizedToolCall{ID: ob.ID, Name: ob.Name, Arguments: json.RawMessage(argRaw)}
-					out <- llm.StreamChunk{ToolCall: &tc}
+					if !send(llm.StreamChunk{ToolCall: &tc}) {
+						return
+					}
 				}
 			case "message_delta":
 				if ev.Delta != nil && ev.Delta.StopReason != "" {
@@ -188,7 +191,9 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 				}
 			case "message_stop":
 				if stopReason != "" {
-					out <- llm.StreamChunk{FinishReason: &stopReason}
+					if !send(llm.StreamChunk{FinishReason: &stopReason}) {
+						return
+					}
 				}
 				if lastUsage != nil {
 					// Anthropic 的 input_tokens 不含缓存读/写；归一化为「完整 prompt」口径
@@ -200,9 +205,11 @@ func (c *Client) Stream(ctx context.Context, req *llm.ChatRequest) (<-chan llm.S
 						CacheWriteTokens: lastUsage.CacheCreationInputTokens,
 					}
 					u.TotalTokens = u.InputTokens + u.OutputTokens
-					out <- llm.StreamChunk{FinalUsage: &u}
-				}
-				return
+					if !send(llm.StreamChunk{FinalUsage: &u}) {
+						return
+					}
+					}
+					return
 			case "ping", "error":
 				// ignore / 已通过 HTTP 状态表达
 			}
@@ -493,9 +500,3 @@ func toAnthropicTools(ts []llm.ToolDefinition) []map[string]any {
 
 func mustMarshal(v any) []byte { bs, _ := json.Marshal(v); return bs }
 func intPtr(i int) *int        { return &i }
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}

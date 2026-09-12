@@ -13,12 +13,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SSEHub 把应用内 event.Bus 的 `chat:*` / `pet:*` / `app:*` 事件桥接到 SSE 长连接。
-// 每个客户端按 (scope, runID) 过滤；事件名与载荷与旧 Wails 事件完全一致（前端解码器零改动）。
-//
-// 断线重连：每条事件带 id（run 内单调 seq）。浏览器 EventSource 重连时自动回传
-// Last-Event-ID，服务端从 RunEventLog 重放该序号之后的事件；缓冲已被覆盖则推 chat:gap，
-// 由前端转全量回补。
+// SSEHub 把 event.Bus 的 chat:* / pet:* / app:* / workflow:* / task:* 事件桥接到 SSE 长连接，
+// 客户端按 (scope, runID) 过滤；每条事件带 run 内单调 seq，重连时按 Last-Event-ID 重放，
+// 缓冲被覆盖则推 chat:gap 由前端转全量回补。
 type SSEHub struct {
 	bus     *event.Bus
 	log     *event.RunEventLog
@@ -92,7 +89,8 @@ func (h *SSEHub) onEvent(name string, payload any) {
 // extractRunID 从事件载荷中提取订阅键：run_id 优先，缺失则退到 executionID（workflow 事件）。
 //
 // workflow 事件不带 run_id（不属于某个 chat run），但前端按 executionID 订阅工作流进度，
-//  这里把 executionID 视为订阅键，复用同一套过滤逻辑。
+//
+//	这里把 executionID 视为订阅键，复用同一套过滤逻辑。
 func extractRunID(payload any) string {
 	if m, ok := payload.(map[string]any); ok {
 		if v, ok := m["run_id"].(string); ok && v != "" {

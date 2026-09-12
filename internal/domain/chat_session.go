@@ -67,6 +67,12 @@ type ChatSessionModelREQ struct {
 	Model      string `json:"model"`
 }
 
+// SetSessionAgentREQ 切换会话 Agent 入参（前端 → /chat/sessions/:id/agent）。
+// Agent 合法值：""（清除）/"default"/"coding"/"research"/"writer"。
+type SetSessionAgentREQ struct {
+	Agent string `json:"agent"`
+}
+
 // ChatSessionRESP 出参。
 type ChatSessionRESP struct {
 	ID             string        `json:"id"`
@@ -202,11 +208,7 @@ type SessionHitDTO struct {
 }
 
 // SessionSearchREQ 跨会话检索入参（/resume 快速检索）。
-//
-// Query 同时匹配会话名与消息正文；Scope 控制匹配范围：
-//   - "" / "all"：标题 + 正文
-//   - "title"：仅标题
-//   - "content"：仅消息正文
+// Scope 控制范围：""/"all" 标题+正文，"title" 仅标题，"content" 仅正文。
 type SessionSearchREQ struct {
 	Query string `json:"query"`
 	Scope string `json:"scope,omitempty"`

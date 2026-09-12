@@ -1,16 +1,7 @@
 <script setup lang="ts">
 /**
- * 桌宠管理视图（主题迁移完成 · 配套 PetConfigPanel 桌面壳下的"标箱"视图）。
- *
- * <p>三栏布局（WorkBaby PetSpacePage）：
- * <ul>
- *   <li>左：配置表单（位置/缩放/气泡/模式）</li>
- *   <li>中：实时预览（带气泡动画 + 缩放控制联动）</li>
- *   <li>右：sprite 资产列表</li>
- * </ul>
- *
- * <p>主题统一改用 wb-* token（与 SettingsView/ChatView 等保持一致）。
- * 自定义形象的裁剪 / 旋转 / 抠图直接在页内 ImageCropper 中完成。
+ * 桌宠管理视图，三栏：左配置表单、中实时预览、右 sprite 资产列表；
+ * 自定义形象在页内 ImageCropper 完成裁剪 / 旋转 / 抠图。
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -163,6 +154,11 @@ onMounted(load)
                 class="flex-1"
                 :placeholder="t('pet.bubbleDuration')"
               />
+            </div>
+
+            <!-- 点击穿透：透明区域不拦截鼠标（Windows 原生窗口区域裁剪） -->
+            <div class="flex items-center gap-3">
+              <el-switch v-model="form.click_through" :active-text="t('pet.clickThrough')" />
             </div>
 
             <el-button type="primary" native-type="submit" class="w-full">

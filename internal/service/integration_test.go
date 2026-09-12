@@ -5,6 +5,7 @@ import (
 	"WorkBaby/internal/domain"
 	"WorkBaby/internal/event"
 	"WorkBaby/internal/harness"
+	"WorkBaby/internal/llm"
 	"WorkBaby/internal/mcp"
 	"WorkBaby/internal/pkg"
 	"WorkBaby/internal/repo"
@@ -243,6 +244,38 @@ func TestUnbackedClaimGuard(t *testing.T) {
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, claimsArtifact(tc.content), "content=%q", tc.content)
+	}
+
+	// 证据判据：声明里抽到的具体文件路径必须由本 run 的 file_changes 兜底；
+	// 拒绝（refused）不计——工具被拦下来等于没真执行。
+	evCases := []struct {
+		name      string
+		content   string
+		paths     map[string]struct{} // 声明里声明产出的文件名（小写归一）
+		toolCalls []string
+		changes   []changeEvidence
+		want      bool
+	}{
+		{"no_claim_no_need", "", nil, nil, nil, true},
+		{"zero_tools", "已生成 report.pdf", map[string]struct{}{"report.pdf": {}}, nil, nil, false},
+		{"only_read_tools", "已生成 report.pdf", map[string]struct{}{"report.pdf": {}}, []string{"exec", "file_read"}, nil, false},
+		{"claim_path_matches_change", "已生成 report.pdf", map[string]struct{}{"report.pdf": {}}, []string{"file_write"}, []changeEvidence{{Path: "report.pdf"}}, true},
+		{"claim_path_unmatched", "已生成 report.pdf", map[string]struct{}{"report.pdf": {}}, []string{"file_write"}, []changeEvidence{{Path: "notes.md"}}, true},
+		{"refused_doesnt_count", "已生成 report.pdf", map[string]struct{}{"report.pdf": {}}, []string{"file_write"}, []changeEvidence{{Path: "report.pdf", Refused: true}}, false},
+		{"write_tool_generic_change_accepted", "已生成 report.pdf", map[string]struct{}{"report.pdf": {}}, []string{"file_write"}, []changeEvidence{{Path: "any/where.md"}}, true},
+		{"edit_tool_with_matching_change", "已生成 config.json", map[string]struct{}{"config.json": {}}, []string{"file_edit"}, []changeEvidence{{Path: "config.json"}}, true},
+	}
+	for _, tc := range evCases {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := func(names []string) []llm.ToolCall {
+				out := make([]llm.ToolCall, 0, len(names))
+				for _, n := range names {
+					out = append(out, llm.ToolCall{Function: llm.FunctionCall{Name: n}})
+				}
+				return out
+			}
+			assert.Equal(t, tc.want, evidenceForClaim(tc.paths, calls(tc.toolCalls), tc.changes))
+		})
 	}
 }
 

@@ -67,8 +67,41 @@ async function handleSaveExecWhitelist(): Promise<void> {
   }
 }
 
+// ===== 免审授权管理：「本会话允许」的持久化授权，可随时撤销 =====
+import { apiGet, apiPost } from '@/api/client'
+import type { ApprovalGrant } from '@/types/api'
+
+const grants = ref<ApprovalGrant[]>([])
+const grantsLoading = ref(false)
+
+async function loadGrants(): Promise<void> {
+  grantsLoading.value = true
+  try {
+    const rows = await apiGet<ApprovalGrant[]>('/api/v1/chat/approval-grants')
+    grants.value = Array.isArray(rows) ? rows : []
+  } catch {
+    grants.value = []
+  } finally {
+    grantsLoading.value = false
+  }
+}
+
+async function revokeGrant(id: string): Promise<void> {
+  try {
+    await apiPost(`/api/v1/chat/approval-grants/${id}/delete`)
+    grants.value = grants.value.filter((g) => g.id !== id)
+    toast.success(t('settings.grantRevoked'))
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : t('common.saveFailed'))
+  }
+}
+
+function fmtTime(ms: number): string {
+  return new Date(ms).toLocaleString()
+}
+
 onMounted(async () => {
-  await Promise.all([loadMemoryEnabled(), loadExecWhitelist()])
+  await Promise.all([loadMemoryEnabled(), loadExecWhitelist(), loadGrants()])
   originalExecWhitelist.value = [...execWhitelist.value]
 })
 </script>
@@ -152,6 +185,33 @@ onMounted(async () => {
         <el-button type="primary" :disabled="!execWhitelistDirty" @click="handleSaveExecWhitelist">
           {{ t('settings.execWhitelistSave') }}
         </el-button>
+      </div>
+    </div>
+
+    <!-- 免审授权：「本会话允许」的持久化授权，跨重启生效，可随时撤销 -->
+    <h2 class="mb-1 mt-6 font-display text-sm font-semibold text-wb-ink">
+      {{ t('settings.grantsTitle') }}
+    </h2>
+    <p class="mb-3 text-xs text-wb-muted">{{ t('settings.grantsHint') }}</p>
+    <div v-loading="grantsLoading" class="rounded-lg border border-wb-border bg-wb-surface-2 p-3">
+      <div v-if="grants.length > 0" class="flex flex-col gap-2">
+        <div
+          v-for="g in grants"
+          :key="g.id"
+          class="flex items-center justify-between rounded-lg border border-wb-border bg-wb-surface px-3 py-2"
+        >
+          <div class="min-w-0">
+            <div class="truncate font-mono text-xs text-wb-ink">{{ g.command }}</div>
+            <div class="mt-0.5 text-[11px] text-wb-muted">{{ fmtTime(g.created_at) }}</div>
+          </div>
+          <el-button size="small" type="danger" plain @click="revokeGrant(g.id)">
+            {{ t('settings.grantRevoke') }}
+          </el-button>
+        </div>
+      </div>
+      <div v-else class="flex items-center gap-2 px-1 py-3 text-xs text-wb-muted">
+        <span>—</span>
+        <span>{{ t('settings.grantsEmpty') }}</span>
       </div>
     </div>
   </section>

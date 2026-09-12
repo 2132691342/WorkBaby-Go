@@ -151,11 +151,29 @@ func (s *WorkflowService) GetExecution(ctx context.Context, executionID string) 
 	}, nil
 }
 
-// ResolveHumanInput 前端回填：把 value 投递到等待中的 resolver；返回 bool 表示是否成功。
-func (s *WorkflowService) ResolveHumanInput(executionID, nodeID, value string) error {
-	if !s.resolver.Deliver(executionID, nodeID, value) {
+// ResolveHumanInput 前端回填人工输入。
+//
+// 两条路径：
+//   - 进程内仍有等待者 → 直接投递，节点随即继续；
+//   - 等待者已随进程消失（重启后）→ 输入先落库到节点执行，再触发断点续跑。
+func (s *WorkflowService) ResolveHumanInput(ctx context.Context, executionID, nodeID, value string) error {
+	if s.resolver.Deliver(executionID, nodeID, value) {
+		return nil
+	}
+	row, err := s.nodeRepo.FindLatestByNode(ctx, executionID, nodeID)
+	if err != nil {
 		return pkg.New(9106, "no waiting human input for this node", executionID+"/"+nodeID)
 	}
+	if err := s.nodeRepo.SetHumanInput(ctx, row.ID, value); err != nil {
+		return err
+	}
+	// 续跑脱离请求生命周期：HTTP 立即返回，进度经 workflow:* 事件推送
+	go func() {
+		if err := s.exec.ResumeFrom(context.Background(), executionID); err != nil {
+			pkg.L.Warn("resume workflow after human input failed",
+				"executionID", executionID, "nodeID", nodeID, "err", err.Error())
+		}
+	}()
 	return nil
 }
 
@@ -174,12 +192,8 @@ func (s *WorkflowService) Resume(ctx context.Context, executionID string) error 
 	return s.exec.Resume(ctx, executionID)
 }
 
-// GraphToDAG 把后端 Graph JSON 转换为前端 Vue Flow 可编辑格式。
-//
-// 双向语义：
-//   - NodeDef.Pos → DAGNode.Pos（画布坐标）
-//   - NodeDef.Branch → 指向 condition 上游的边的 SourceHandle（分支出口）
-//   - NodeDef.Inputs / Graph.Inputs → DAGNode.Inputs / WorkflowDAGRESP.Inputs
+// GraphToDAG 把后端 Graph 转为前端 Vue Flow 可编辑格式：
+// Pos 映射画布坐标，NodeDef.Branch 映射为来自 condition 上游的边 SourceHandle。
 func (s *WorkflowService) GraphToDAG(ctx context.Context, id string) (*domain.WorkflowDAGRESP, error) {
 	wf, err := s.wfRepo.GetByID(ctx, id)
 	if err != nil {
@@ -226,12 +240,8 @@ func (s *WorkflowService) GraphToDAG(ctx context.Context, id string) (*domain.Wo
 	return out, nil
 }
 
-// SaveGraph 把前端 Vue Flow 格式保存为后端 Graph JSON（校验后落库）。
-//
-// 保存语义：
-//   - DAGNode.Pos → NodeDef.Pos（画布坐标持久化）
-//   - 来自 condition 源的边带 source_handle → 目标 NodeDef.Branch
-//   - 其余边 → NodeDef.Deps
+// SaveGraph 把前端 Vue Flow 格式校验后保存为后端 Graph：
+// Pos 持久化画布坐标，来自 condition 源且带 source_handle 的边映射为目标节点 Branch，其余为 Deps。
 func (s *WorkflowService) SaveGraph(ctx context.Context, id string, req *domain.WorkflowDAGREQ) (*domain.WorkflowDAGRESP, error) {
 	if req.Name == "" {
 		return nil, pkg.New(9102, "工作流名称必填", "")

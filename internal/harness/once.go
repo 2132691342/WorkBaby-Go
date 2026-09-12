@@ -22,6 +22,13 @@ type OneShot struct {
 	ToolDefs      []llm.ToolDefinition // 可选：暴露给模型的工具定义
 	Config        Config               // 可选；零值走 DefaultConfig
 	RequestParams RequestParams        // 可选：采样参数（temperature / thinking）
+
+	// 护栏（可选）：无人值守执行（工作流 LLM 节点 / 定时任务）显式装配后，
+	// 工具调用与聊天 run 受同一套策略门、人工审批与目录信任约束。
+	// 缺省为零值 = 无策略门，此时工具内部的审批兜底仍生效（fail-closed）。
+	ToolGate  *tool.Gate
+	Approver  func(ctx context.Context, description, risk string) bool
+	PathTrust PathTrust
 }
 
 // RunOnce 会话无关地跑一次完整 ReAct 循环，语义与 Runner.RunMessages 一致；
@@ -41,6 +48,13 @@ func RunOnce(ctx context.Context, o OneShot) RunResult {
 	r := NewRunner(o.Provider, NopSink{}, cfg).WithRequestParams(o.RequestParams)
 	if o.Tools != nil && len(o.ToolDefs) > 0 {
 		r = r.WithTools(o.Tools, o.ToolDefs)
+	}
+	// 护栏按需装配：注入后与聊天 run 走同一套单层闸门语义
+	if o.ToolGate != nil {
+		r = r.WithToolGate(o.ToolGate, o.Approver)
+	}
+	if o.PathTrust != nil {
+		r = r.WithPathTrust(o.PathTrust)
 	}
 	return r.RunMessages(ctx, runID, "", "", o.Model, o.Messages)
 }

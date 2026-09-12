@@ -5,6 +5,7 @@ import type {
   ChatStats,
   ChatStreamEvent,
   FileChange,
+  PendingApproval,
   SkillHit,
   TodoStateRESP
 } from '@/types/api'
@@ -12,7 +13,7 @@ import type { UiNode } from '@/components/genui/GenUiRenderer.vue'
 import { applyBlockUpdate } from '@/chat/models/streamingBlocks'
 
 /**
- * 流式聊天事件解码器（纯函数）：输入 WS 帧事件 → 输出 {@link StreamEventUpdate} 描述对象，store 负责 apply。
+ * 流式聊天事件解码器（纯函数）：输入 SSE 领域事件 → 输出 {@link StreamEventUpdate} 描述对象，store 负责 apply。
  * 事件映射：{@code content/thinking → appendContent/appendThinking}、{@code tool_call → addTool}、{@code tool_result → updateTool}、{@code artifact → setArtifacts}、
  * {@code tool_approval_request → setApproval}、{@code error → setError}、{@code stopped → setStopReason}（中性终态）。
  */
@@ -344,7 +345,8 @@ export function applyStreamUpdate(
     streamingSkill?: { value: SkillHit | null }
     streamingArtifacts: { value: ArtifactPayload | null }
     streamingGenUi: { value: UiNode | null }
-    pendingApproval: { value: ApprovalRequest | null }
+    /** 未决审批队列（唯一真相源；多审批并发时按到达顺序排队）。 */
+    pendingApprovals: { value: PendingApproval[] }
     error: { value: string | null }
     /** 建流自动重试提示（可选）。 */
     streamingRetry?: { value: { attempt: number; delay_ms: number } | null }
@@ -471,13 +473,22 @@ export function applyStreamUpdate(
     state.streamingGenUi.value = update.setGenUi
   }
   if (update.setApproval) {
-    state.pendingApproval.value = update.setApproval
+    // 入队而非覆盖：同轮多个工具需确认时，覆盖会让先到的请求永久看不到、也无法决策
+    const a = update.setApproval
+    if (!state.pendingApprovals.value.some((p) => p.id === a.id)) {
+      state.pendingApprovals.value.push({
+        id: a.id,
+        command: a.command,
+        reason: a.reason,
+        risk: a.risk ?? 'needs_approval',
+        can_remember: a.canRemember
+      })
+    }
   }
   if (update.clearApproval) {
-    // 仅 id 匹配的才清：避免在「A 决策事件」到达时误清「B 新审批请求」
-    if (state.pendingApproval.value && state.pendingApproval.value.id === update.clearApproval.id) {
-      state.pendingApproval.value = null
-    }
+    // 仅按 id 移除：避免在「A 决策事件」到达时误清「B 新审批请求」
+    const clearID = update.clearApproval.id
+    state.pendingApprovals.value = state.pendingApprovals.value.filter((p) => p.id !== clearID)
   }
   if (update.setError !== undefined) {
     state.error.value = update.setError

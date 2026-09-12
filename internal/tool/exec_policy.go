@@ -17,6 +17,8 @@ type ExecPolicy struct {
 	DeniedPatterns  []string      // 危险命令正则（匹配整条 command + args）
 	ApprovalLevel   RiskLevel     // 该等级及以上需审批
 	Timeout         time.Duration // 默认单次执行超时
+
+	denied []*regexp.Regexp // DeniedPatterns 的编译产物（Compile 填充；零值回退即时编译）
 }
 
 // DefaultExecPolicy 开箱可用默认：内置 Windows 常用工具链白名单（设置页 exec.whitelist 可整体覆盖），
@@ -55,7 +57,35 @@ func DefaultExecPolicy() ExecPolicy {
 		},
 		ApprovalLevel: RiskExec,
 		Timeout:       5 * time.Minute,
+	}.Compile()
+}
+
+// Compile 预编译危险命令正则并返回带编译产物的副本。
+//
+// Classify 对每条命令都要匹配全部拒绝模式，逐次 regexp.MustCompile 属热路径浪费；
+// 装配方在构造或策略变更后调用一次即可。未编译时 Classify 回退即时编译，语义不变。
+func (p ExecPolicy) Compile() ExecPolicy {
+	if len(p.DeniedPatterns) == 0 {
+		p.denied = nil
+		return p
 	}
+	p.denied = make([]*regexp.Regexp, 0, len(p.DeniedPatterns))
+	for _, pat := range p.DeniedPatterns {
+		p.denied = append(p.denied, regexp.MustCompile(pat))
+	}
+	return p
+}
+
+// deniedRes 生效的拒绝正则：优先用预编译产物；模式被运行时整体替换（长度不匹配）时即时编译兜底。
+func (p ExecPolicy) deniedRes() []*regexp.Regexp {
+	if len(p.denied) == len(p.DeniedPatterns) {
+		return p.denied
+	}
+	rs := make([]*regexp.Regexp, 0, len(p.DeniedPatterns))
+	for _, pat := range p.DeniedPatterns {
+		rs = append(rs, regexp.MustCompile(pat))
+	}
+	return rs
 }
 
 // Allow 校验命令是否允许执行：bin 必须在白名单，整条命令不得命中拒绝模式。
@@ -83,8 +113,8 @@ func (p ExecPolicy) Classify(command string) (ok bool, risk string) {
 		return false, ""
 	}
 	whitelisted := slicesContains(p.AllowedBinaries, filepath.Base(fields[0]))
-	for _, pat := range p.DeniedPatterns {
-		if regexp.MustCompile(pat).MatchString(command) {
+	for _, re := range p.deniedRes() {
+		if re.MatchString(command) {
 			return false, RiskApprovalIrrev
 		}
 	}

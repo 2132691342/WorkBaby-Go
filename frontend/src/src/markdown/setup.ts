@@ -5,15 +5,8 @@ import taskLists from 'markdown-it-task-lists'
 import footnote from 'markdown-it-footnote'
 
 /**
- * Markdown 扩展装配。
- *
- * <p>分两类挂载：
- * <ul>
- *   <li><b>同步插件</b>（任务列表 / 脚注）：体积与耗时可忽略，渲染时直接生效。</li>
- *   <li><b>占位规则</b>（数学公式 / Mermaid）：渲染阶段只吐出带 {@code data-*} 的占位节点，
- *       真正的 katex / mermaid 由渲染器异步按需加载后填充。
- *       这两个依赖合计 >1MB，绝不能进首屏关键路径。</li>
- * </ul>
+ * Markdown 扩展装配：任务列表 / 脚注为同步插件直接生效；
+ * 数学公式与 Mermaid 只吐带 data-* 的占位节点，由渲染器异步按需加载填充（依赖 >1MB，不进首屏）。
  */
 
 /** 需要异步增强的占位节点 class。 */
