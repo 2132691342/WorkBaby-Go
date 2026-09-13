@@ -28,7 +28,7 @@ import {
 import { StreamEventBatcher } from '@/stores/chat/StreamEventBatcher'
 
 /**
- * 辅助对话 store（ZCode「辅助对话」对标）：右栏与主任务并行的独立小会话。
+ * 辅助对话 store：右栏与主任务并行的独立小会话。
  *
  * <p>辅助会话是一个功能完整的会话（可调工具、走权限确认），后端以 kind='side' + parent_id
  * 标识且每轮 run 自动前置主会话的有界历史（service/side_conversation.go），追问不用重复交代背景。

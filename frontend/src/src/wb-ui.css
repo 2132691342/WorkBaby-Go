@@ -146,7 +146,7 @@ body {
   border-right: 1px solid var(--wb-border);
   transition: width 0.18s ease;
 }
-/* 折叠态整栏隐藏（ZCode 式 Ctrl+B 收起侧栏） */
+/* 折叠态整栏隐藏（Ctrl+B 收起侧栏） */
 .side.collapsed {
   display: none;
 }
@@ -294,7 +294,7 @@ body {
   color: var(--wb-primary-strong);
 }
 
-/* ===== 极简左栏（ZCode 式）：快捷动作 + 任务列表 ===== */
+/* ===== 极简左栏：快捷动作 + 任务列表 ===== */
 .rail-actions {
   flex: none;
   display: flex;
@@ -359,7 +359,7 @@ body {
   flex: 1;
   min-height: 0;
 }
-/* 标题栏工作区 chip（ZCode 式 folder 徽标） */
+/* 标题栏工作区 chip（folder 徽标） */
 .titlebar .tb-chip {
   display: inline-flex;
   align-items: center;
@@ -1865,7 +1865,7 @@ kbd.chip {
   color: var(--wb-warning);
 }
 
-/* ================= 变更聚合条（ZCode 式） ================= */
+/* ================= 变更聚合条 ================= */
 /* 一轮的文件变更折叠成一行：N 个文件已更改 +Σ -Σ + 全部撤销；点开就地看 diff 卡 */
 .wb-chgbar {
   display: flex;

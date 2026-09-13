@@ -33,7 +33,13 @@ const KNOWN_PREFIXES = [
   '/api/v1/admin',
   // 后端能力
   '/api/v1/tasks',
-  '/api/v1/trust'
+  '/api/v1/trust',
+  // 工作面板与设置中心新域
+  '/api/v1/git/',
+  '/api/v1/terminal/',
+  '/api/v1/browser/',
+  '/api/v1/wiki/',
+  '/api/v1/hooks'
 ]
 
 function assertKnown(path: string): void {

@@ -63,7 +63,7 @@ DB 历史 → `[]*llm.Message`：跳过 streaming 占位与 archived 消息（�
 
 ## 6. 工具洋葱链（toolchain.go）
 
-顺序即语义（外 → 内）：暴露校验 → 解析 → JSON Schema 校验 → 注入防护 → 目录信任 → 策略门 → 停滞 → 循环/预算 → 幂等恢复 → 执行。任一层返回消息即短路整链。
+顺序即语义（外 → 内）：暴露校验 → 解析 → JSON Schema 校验 → 注入防护 → 目录信任 → 策略门 → 用户钩子 → 停滞 → 循环/预算 → 幂等恢复 → 执行。任一层返回消息即短路整链。
 
 | 层 | 行为 |
 |---|---|
@@ -72,13 +72,20 @@ DB 历史 → `[]*llm.Message`：跳过 streaming 占位与 archived 消息（�
 | 注入防护 | 参数含伪工具调用标记 → 拒绝（prompt_injection） |
 | 目录信任 | 信任三态（allow/ask/deny）+ 计划模式硬拦 → 拒绝（path_trust） |
 | 策略门 | 显式规则 glob > 会话模式 × 风险默认；按 per-call 命令级风险裁决；deny → policy，ask 经审批 → approval |
+| 用户钩子 | before_tool 事件触发用户命令（子进程协议），deny 即拦截 → user_hook；钩子故障不阻断（执行器已兜底放行） |
 | 停滞 | 同名同参连续 ≥ StagnationLimit（默认 5）置熔断信号 |
 | 循环/预算 | 全 run 同名同参计数 ≥ LoopLimit（默认 3）→ loop_guard；执行次数超上限 → tool_budget；签名键序归一化（JSON 规范化），同参异序仍判重复，计数在锁内并行安全 |
 | 幂等恢复 | Resume 命中已完成成功调用 → 复用，不重放副作用 |
 | 执行 | 施加超时（工具级覆盖全局默认 5min）、panic 隔离为错误结果、后处理钩子链（多槽，按注册序逐字段覆盖）、结果截断、成功且未拒绝时写幂等记忆 |
 
 - 并发：整轮全只读且并发数 > 1 → 并行执行（结果按序回填）；否则严格串行（写工具无并发）。
-- 拒绝回执为结构化 JSON（refused + reason_code + hint）。原因码：not_exposed / prompt_injection / path_trust / policy / approval / loop_guard / tool_budget。
+- 拒绝回执为结构化 JSON（refused + reason_code + hint）。原因码：not_exposed / prompt_injection / path_trust / policy / approval / user_hook / loop_guard / tool_budget。
+
+### 用户钩子子进程协议（user_hooks）
+
+事件：`run_start` / `before_tool` / `after_tool` / `run_end`（matcher 仅对 before/after_tool 生效，工具名逗号分隔精确匹配）。触发即经 `cmd /c` 拉起子进程：stdin 收 JSON 载荷（event/session_id/run_id/tool/params/outcome/reason），stdout 输出 JSON 决策——`before_tool` 输出 `{"decision":"deny","reason":"…"}` 拦截工具调用（理由回填模型），其余事件只观察不阻断。exit 非 0 / 超时 / 非法 JSON 均记日志后放行（失败原因带子进程输出前 200 字，便于定位）。run_start / after_tool / run_end 异步执行不阻塞 run。
+
+命令行按用户填写原样透传给 `cmd`（`SysProcAttr.CmdLine`，不做参数转义）——带引号的写法（`node "C:\Program Files\guard.js"`、`cmd /c "echo ok"`）不会被重排破坏。
 
 ## 7. 会话权限模式（tool.SessionMode）
 

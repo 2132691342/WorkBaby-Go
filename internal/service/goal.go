@@ -49,7 +49,7 @@ func (s *ChatService) SetGoal(ctx context.Context, sessionID string, req domain.
 		if text == "" {
 			return domain.GoalRESP{}, pkg.New(2101, "目标描述不能为空（/goal <目标描述>）", "")
 		}
-		// set 语义：已有活动目标时等价 replace（ZCode 同款），否则新建
+		// set 语义：已有活动目标时等价 replace，否则新建
 		maxRounds := domain.GoalDefaultMaxRounds
 		round := 0
 		status := domain.GoalStatusActive

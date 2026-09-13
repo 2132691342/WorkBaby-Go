@@ -7,7 +7,7 @@
 - 响应包裹：成功 `{code:0, data:...}`；失败 `{code:<错误码>, message:<文案>, detail?}`。
 - 请求体统一 JSON 绑定（类型不符即返回参数错误）；分页/条数参数由各接口的 `limit` / `k` 查询参数控制。
 - 契约版本：`GET /api/v1/meta/contract`；前端启动比对，不一致显式报错。
-- 错误码按域分段（新增错误复用所属段位）：1000 通用/文件/路径、2000 配置/持久化、3000 LLM/Provider、4000 工具/命令审批、5000 Agent/Harness（含会话与消息编排）、6000 Memory、7000 Knowledge/RAG、8000 Skill/MCP、9000 Workflow/Pet/Channel/Cron。
+- 错误码按域分段（新增错误复用所属段位）：1000 通用/文件/路径、2000 配置/持久化、3000 LLM/Provider、4000 工具/命令审批、5000 Agent/Harness（含会话与消息编排）、6000 Memory、7000 Knowledge/RAG、8000 Skill/MCP、9000 Workflow/Pet/Channel/Cron；扩展段位：8200 AgentProfile、8300 UserCommand、8400 Git、8500 终端、8600 UserHook、8700 浏览器、8800 Wiki。
 
 ## 端点
 
@@ -73,6 +73,66 @@
 | POST | /chat/sessions/:id/steer | run 中插入指令 |
 | GET | /chat/runs | 运行历史列表 |
 | GET | /chat/runs/:id/events | 某次运行的事件明细 |
+
+### Git 面板
+
+工作区跟随会话绑定（`session_id` 定位仓库）；状态源是工作区里的 `.git`。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /git/overview | 概览（分支/ahead-behind/变更文件/本地分支/最近 20 条提交） |
+| POST | /git/switch | 切换分支（create=true 不存在即新建） |
+| GET | /git/diff | unified diff（path 空=全部变更；staged=true 暂存区 vs HEAD） |
+| POST | /git/stage | 暂存（path 空 = add -A） |
+| POST | /git/unstage | 取消暂存 |
+| POST | /git/discard | 丢弃单文件工作区改动（未跟踪文件删除） |
+| POST | /git/commit | 提交（message 必填；stage_all 先 add -A） |
+
+### 终端面板
+
+每会话一个持久 cmd.exe（cd 与环境变量跨命令保留）；输出 GBK→UTF-8 解码。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | /terminal/open | 打开（同会话幂等复用；cwd=会话工作区根） |
+| POST | /terminal/:id/run | 写入一行命令 |
+| GET | /terminal/:id/output | 增量输出（since=上次 seq 游标） |
+| POST | /terminal/:id/stop | 关闭终端 |
+
+### 浏览器面板
+
+托管浏览器 = 本机 Edge/Chrome + 独立 profile（`{home}/browser-profile`），CDP 驱动；browser_* 工具与本组端点共用同一实例。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /browser/status | 运行态（running/browser/url/title） |
+| POST | /browser/start | 拉起并 attach 页面（幂等） |
+| POST | /browser/stop | 关闭托管浏览器 |
+| POST | /browser/navigate | 导航（无 scheme 补 https；含空格走搜索） |
+| POST | /browser/click | 坐标点击（CSS 像素） |
+| POST | /browser/scroll | 滚轮滚动 |
+| POST | /browser/type | 焦点元素输入（submit=true 补回车） |
+| POST | /browser/key | 按键（Enter/Tab/Escape/方向键等） |
+| GET | /browser/screenshot | 视口截图（JPEG base64 + CSS 视口尺寸） |
+| GET | /browser/snapshot | 结构化快照（URL/标题/正文/可交互元素坐标） |
+
+### Wiki 仓库导读
+
+确定性扫描生成（不依赖 LLM）；`session_id` 定位工作区，跳过依赖/构建目录。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /wiki/overview | 画像（语言统计/入口文件/目录树，每文件带一句话摘要） |
+| GET | /wiki/page | 单页：目录页子项清单 / 文件页正文（上限 512KB） |
+
+### 用户钩子
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /hooks | 钩子列表 |
+| POST | /hooks | 创建/更新（按 id upsert，id 空=新建） |
+| POST | /hooks/:id/delete | 删除 |
+| POST | /hooks/:id/test | 试跑（样例载荷，返回决策与耗时） |
 
 ### 审批与任务
 

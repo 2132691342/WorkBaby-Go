@@ -34,6 +34,7 @@ import (
 	"WorkBaby/internal/skill"
 	"WorkBaby/internal/tool"
 	archivetool "WorkBaby/internal/tool/archive"
+	browsertool "WorkBaby/internal/tool/browser"
 	delegatetool "WorkBaby/internal/tool/delegate"
 	doctool "WorkBaby/internal/tool/doc"
 	exectool "WorkBaby/internal/tool/exec"
@@ -107,6 +108,9 @@ type Handler struct {
 	artifactSvc   *service.ArtifactService   // 会话产出物登记
 	taskSvc       *service.TaskService       // 后台任务队列
 	trustSvc      *service.TrustService      // 工作目录信任
+	termSvc       *service.TerminalService   // 面板终端（每会话持久 cmd.exe）
+	browserSvc    *service.BrowserService    // 托管浏览器（CDP；工具与面板共用）
+	hookSvc       *service.UserHookService   // 用户钩子（设置页 CRUD + 运行时执行器）
 	// Files 服务本地受管文件（main.go AssetServer 转发 /files/**）。
 	// 独立类型而非 Handler 方法：避免 net/http 类型泄漏进 Wails 绑定（见 fileserver.go）。
 	Files        *FileServer
@@ -705,6 +709,19 @@ func (h *Handler) Startup(ctx context.Context) error {
 		return h.chatSvc.WorkspaceRoot(h.ctx, sessionID, filepath.Join(paths.Home, "workspaces", sessionID))
 	})
 
+	// 面板终端：每会话一个持久 cmd.exe（cwd 跟随会话工作区）
+	h.termSvc = service.NewTerminalService()
+	// 托管浏览器：CDP 驱动，browser_* 工具与浏览器面板共用同一实例
+	h.browserSvc = service.NewBrowserService(paths.Home)
+	for _, t := range browsertool.New(h.browserSvc).All() {
+		if err := toolReg.Register(t); err != nil {
+			return err
+		}
+	}
+	// 用户钩子：设置页管理 + run 生命周期（run_start/before_tool/after_tool/run_end）
+	h.hookSvc = service.NewUserHookService(h.app.UserHookRepo)
+	h.chatSvc.WithHookRunner(h.hookSvc)
+
 	// 桌宠：配置单行 + sprite 资产 + 状态机（chat run 事件驱动）
 	h.petSvc = pet.NewService(h.app.PetCfgRepo, h.app.PetSpriteRepo, filepath.Join(paths.Home, "sprites"))
 	h.petSvc.SeedBuiltin(ctx)
@@ -770,6 +787,12 @@ func (h *Handler) Shutdown(_ context.Context) {
 	}
 	if h.mcpSvc != nil {
 		h.mcpSvc.Close() // 回收 MCP 子进程，避免残留孤儿进程
+	}
+	if h.termSvc != nil {
+		h.termSvc.Shutdown() // 回收面板终端进程
+	}
+	if h.browserSvc != nil {
+		h.browserSvc.Shutdown() // 回收托管浏览器
 	}
 	if pkg.L != nil {
 		pkg.L.Info("workbaby shutting down")

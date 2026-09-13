@@ -83,6 +83,9 @@ type LoopHooks struct {
 	AfterToolCalls      []ToolResultHook
 	ToolGate            *tool.Gate
 	Approver            func(ctx context.Context, description, risk string) bool
+	// HooksBeforeTool 用户自定义钩子闸门（子进程协议）：deny 拦截工具调用。
+	// 与目录信任/策略门平级的一层，拒绝理由直达模型。
+	HooksBeforeTool func(ctx context.Context, tool string, args json.RawMessage) (ok bool, reason string)
 }
 
 // Runner 控制循环主控（多轮 ReAct）；模型可调用工具，每轮执行并回填结果，直到无调用或达终止条件。
@@ -189,6 +192,13 @@ func (r *Runner) WithAfterToolCall(fn ToolResultHook) *Runner {
 // WithPathTrust 启用目录信任闸门：工具执行前先过信任三态，挂在工具策略门之前。
 // nil = 关闭（维持既有行为）。
 func (r *Runner) WithPathTrust(p PathTrust) *Runner { r.hooks.BeforeToolCall = p; return r }
+
+// WithHooksBeforeTool 启用用户自定义钩子闸门（子进程协议）：工具执行前跑用户命令，
+// deny 即拦截。挂在策略门之后、停滞检测之前。nil = 关闭。
+func (r *Runner) WithHooksBeforeTool(fn func(ctx context.Context, tool string, args json.RawMessage) (ok bool, reason string)) *Runner {
+	r.hooks.HooksBeforeTool = fn
+	return r
+}
 
 // streamWithRetry 建流分类有界重试：仅重试瞬时错误（限流/5xx/超时），
 // 指数退避+抖动，Retry-After 优先，取消优先；流中途错误不重试（避免重复输出）。

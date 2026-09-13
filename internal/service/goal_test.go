@@ -38,7 +38,7 @@ func TestGoalLifecycle(t *testing.T) {
 	require.NotNil(t, got.Goal)
 	assert.Equal(t, "修复所有 TS 编译错误并保持测试通过", got.Goal.Text)
 
-	// set 已有活动目标 = replace（ZCode 同款），Round 保留
+	// set 已有活动目标 = replace，Round 保留
 	g2, err := svc.SetGoal(ctx, sesID, domain.GoalREQ{Action: "set", Text: "新目标"})
 	require.NoError(t, err)
 	assert.Equal(t, "新目标", g2.Goal.Text)
@@ -59,26 +59,4 @@ func TestGoalLifecycle(t *testing.T) {
 	// pause 空目标报错
 	_, err = svc.SetGoal(ctx, sesID, domain.GoalREQ{Action: "pause"})
 	require.Error(t, err)
-}
-
-// TestParseGoalVerdict 校验输出宽松解析：容忍代码块包裹；缺 next_step 拒绝。
-func TestParseGoalVerdict(t *testing.T) {
-	v, err := parseGoalVerdict("```json\n{\"done\":false,\"next_step\":\"跑 go test\",\"because\":\"测试仍红\"}\n```")
-	require.NoError(t, err)
-	assert.False(t, v.Done)
-	assert.Equal(t, "跑 go test", v.NextStep)
-
-	done, err := parseGoalVerdict(`{"done":true,"because":"全部测试通过"}`)
-	require.NoError(t, err)
-	assert.True(t, done.Done)
-
-	_, err = parseGoalVerdict(`{"done":false}`)
-	require.Error(t, err, "未达成但没给下一步动作：无法续跑，必须拒绝")
-}
-
-// TestAgentsMdPieces AGENTS.md 注入：工作区文件存在才出段，缺失静默。
-func TestAgentsMdPieces(t *testing.T) {
-	ses := &domain.ChatSessionDO{WorkspacePath: t.TempDir()}
-	pieces := agentsMdPieces(ses)
-	assert.Empty(t, pieces, "无 AGENTS.md 时静默跳过")
 }

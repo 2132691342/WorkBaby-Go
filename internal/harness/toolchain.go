@@ -23,6 +23,7 @@ const (
 	RefusedPathTrust  RefusedReason = "path_trust"       // 目录未授权 / 计划模式硬拦
 	RefusedPolicy     RefusedReason = "policy"           // 工具策略门 deny
 	RefusedApproval   RefusedReason = "approval"         // 用户拒绝或审批超时
+	RefusedUserHook   RefusedReason = "user_hook"        // 用户自定义钩子拦截
 	RefusedLoopGuard  RefusedReason = "loop_guard"       // 同名同参反复调用
 	RefusedToolBudget RefusedReason = "tool_budget"      // 单 run 工具调用预算耗尽
 )
@@ -65,6 +66,7 @@ func (r *Runner) toolChain() toolHandler {
 		r.layerInjectionGuard,
 		r.layerPathTrust,
 		r.layerPolicyGate,
+		r.layerUserHook,
 		r.layerStagnation,
 		r.layerLoopBudget,
 		r.layerIdempotent,
@@ -172,6 +174,18 @@ func (r *Runner) layerPolicyGate(tc *toolCallCtx) (msg *llm.Message) {
 	}
 	if !r.hooks.Approver(tc.ctx, desc, risk) {
 		return r.refused(tc, RefusedApproval, "denied by user")
+	}
+	return nil
+}
+
+// layerUserHook 用户自定义钩子闸门：工具执行前跑用户命令（子进程协议），
+// deny 即拦截（拒绝理由回填给模型）。钩子故障不阻断（service 层已兜底放行）。
+func (r *Runner) layerUserHook(tc *toolCallCtx) *llm.Message {
+	if r.hooks.HooksBeforeTool == nil {
+		return nil
+	}
+	if ok, reason := r.hooks.HooksBeforeTool(tc.ctx, tc.call.Name, tc.call.Arguments); !ok {
+		return r.refused(tc, RefusedUserHook, reason)
 	}
 	return nil
 }

@@ -27,6 +27,7 @@ func Migrate(db *gorm.DB) error {
 		&domain.SkillDO{},
 		&domain.AgentProfileDO{},
 		&domain.UserCommandDO{},
+		&domain.UserHookDO{},
 		&domain.McpServerDO{},
 		&domain.KnowledgeDocDO{},
 		&domain.KnowledgeChunkDO{},

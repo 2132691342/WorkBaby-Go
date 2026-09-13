@@ -207,7 +207,7 @@ function toggle(b: RenderBlock): void {
   localOpen.value = next
 }
 
-// ===== ZCode 式动词叙事：一行 = 动词 + 目标 + 增删徽标 =====
+// ===== 动词叙事：一行 = 动词 + 目标 + 增删徽标 =====
 /** 迹线动词（i18n key tool.verb.*）。 */
 function unitVerb(b: RenderBlock): string {
   return t(`tool.verb.${traceKind(b.call?.name ?? b.result?.name)}`)
@@ -282,7 +282,7 @@ watch(
         </slot>
       </div>
 
-      <!-- 工具单元：tool_call 与 result 配对，ZCode 式动词迹线（动词 + 目标 + Δ徽标）+ 展开区。
+      <!-- 工具单元：tool_call 与 result 配对，动词迹线（动词 + 目标 + Δ徽标）+ 展开区。
            流式期 running → 头部 spinner；成功 → 绿勾；refused → 黄 X；error → 红方块 + 执行失败。 -->
       <div v-else-if="b.kind === 'tool_call' && b.call" class="wb-block-tool wb-tool" :class="{ open: isOpen(b), err: isError(b) }">
         <button
@@ -463,7 +463,7 @@ watch(
   height: 13px;
   color: var(--wb-muted);
 }
-/* ZCode 动词叙事：动词弱色、目标文件名亮色、目录淡色 mono */
+/* 动词叙事：动词弱色、目标文件名亮色、目录淡色 mono */
 .wb-tool-verb {
   font-size: 12px;
   color: var(--wb-muted);

@@ -614,7 +614,7 @@ function executed(cmd: SlashCommand): void {
 
 /**
  * /goal 目标命令：无参查看当前目标；pause/resume/clear 直操作；
- * 其余文本整体作为目标描述设定（ZCode 同款语义）。
+ * 其余文本整体作为目标描述设定。
  */
 async function handleGoalCommand(args?: string): Promise<void> {
   const id = chat.currentID

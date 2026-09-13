@@ -382,7 +382,7 @@ export const useSettingsStore = defineStore('settings', () => {
       const font = (g.appearance?.fontMono as string) || 'JetBrains Mono'
       codeFont.value = font
       applyCodeFontToDom(font)
-      // 后端未存过主题时回退 dark：ZCode 式改版后暗色是默认外观
+      // 后端未存过主题时回退 dark（暗色为默认外观）
       applyTheme((g.theme as string) || 'dark')
     } catch {
       backgroundUrl.value = null

@@ -7,7 +7,7 @@ import { t } from '@/i18n'
 import { ArrowRight } from '@/components/common/icons'
 
 /**
- * 设置中心（ZCode 式全页布局）：左侧三组导航 + 右侧内容区，路由 query 同步直达。
+ * 设置中心：左侧三组导航 + 右侧内容区，路由 query 同步直达。
  *
  * <p>功能页全部收进设置：原侧栏的 记忆 / 知识库 / 技能 / MCP / 工具 / 工作流 /
  * 仪表盘 / 运行 / 任务 / 文件 / 文件夹 / 文档 / 桌宠 都成为这里的一个 section，
@@ -29,11 +29,13 @@ type SettingsTab =
   | 'skills'
   | 'subagents'
   | 'commands'
+  | 'hooks'
   | 'mcp'
   | 'tools'
   | 'workflows'
   | 'memory'
   | 'kdocs'
+  | 'wiki'
   | 'dashboard'
   | 'runs'
   | 'tasks'
@@ -60,11 +62,13 @@ const groups: { labelKey: string; items: SectionItem[] }[] = [
       { id: 'skills', labelKey: 'nav.skills' },
       { id: 'subagents', labelKey: 'nav.subagents' },
       { id: 'commands', labelKey: 'nav.commands' },
+      { id: 'hooks', labelKey: 'nav.hooks' },
       { id: 'mcp', labelKey: 'nav.mcp' },
       { id: 'tools', labelKey: 'nav.tools' },
       { id: 'workflows', labelKey: 'nav.workflows' },
       { id: 'memory', labelKey: 'nav.memory' },
-      { id: 'kdocs', labelKey: 'nav.knowledge' }
+      { id: 'kdocs', labelKey: 'nav.knowledge' },
+      { id: 'wiki', labelKey: 'nav.wiki' }
     ]
   },
   {
@@ -93,6 +97,8 @@ const sectionComponents: Record<SettingsTab, Component> = {
   skills: defineAsyncComponent(() => import('@/components/skills/SkillsView.vue')),
   subagents: defineAsyncComponent(() => import('@/components/agents/SubagentsView.vue')),
   commands: defineAsyncComponent(() => import('@/components/commands/CommandsView.vue')),
+  hooks: defineAsyncComponent(() => import('@/components/hooks/HooksView.vue')),
+  wiki: defineAsyncComponent(() => import('@/components/wiki/WikiView.vue')),
   mcp: defineAsyncComponent(() => import('@/components/mcp/McpServersView.vue')),
   tools: defineAsyncComponent(() => import('@/components/tools/ToolsView.vue')),
   workflows: defineAsyncComponent(() => import('@/components/workflows/WorkflowsView.vue')),
@@ -145,7 +151,7 @@ watch(
 
 <template>
   <div class="wb-ui flex h-full min-h-0">
-    <!-- 左导航（ZCode 设置式三组） -->
+    <!-- 左导航（基础设置 / Agent 能力 / 数据与统计 三组） -->
     <aside class="set-nav">
       <button class="set-back" @click="backToWorkspace">
         <component :is="ArrowRight" class="h-3.5 w-3.5 rotate-180" />

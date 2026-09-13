@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 带 行号 gutter 的 unified diff 视图（ZCode 式）：旧/新两侧行号 + 红绿底色行。
+ * 带行号 gutter 的 unified diff 视图：旧/新两侧行号 + 红绿底色行。
  *
  * <p>行号解析在 blocks.parseDiffRows（hunk 头取种子逐行推进；非标准 diff 只标新侧序号）。
  * InlineDiffCard（文件变更卡）与 MessageBlocksRenderer（工具展开体）共用，保证同一份 diff

@@ -4,7 +4,7 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
  * 路由表：Wails 单 HTML 资源下 history 模式无法 fallback，统一用 hash 路由。
  * 鉴权由 Wails 绑定承载，路由层不做守卫。
  *
- * <p>ZCode 式信息架构：外壳左栏只保留任务主链路（聊天 / 自动化 / 设置），
+ * <p>信息架构：外壳左栏只保留任务主链路（聊天 / 自动化 / 设置），
  * 功能页全部收进设置中心 —— 旧路由（/memory /skills …）重定向到 /settings?tab=x，
  * 命令面板与历史书签里的深链仍然可达。
  */

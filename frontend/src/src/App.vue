@@ -27,7 +27,7 @@ import { openPalette } from '@/composables/useCommandPalette'
 import { bootstrapServer } from '@/api/bootstrap'
 
 /**
- * 应用外壳（ZCode 式极简布局）：
+ * 应用外壳（极简布局）：
  * 自绘标题栏（frameless）+ 极简左栏（新建任务 / 搜索 / 自动化 + 任务列表 + 底部设置）+ RouterView。
  *
  * <p>样式全部来自 wb-ui.css 设计系统层（.win / .titlebar / .side / .rail-* …）。
@@ -44,7 +44,7 @@ const ready = ref(false)
 const booting = ref(true)
 /** 桌宠独立窗口路由：跳过 AppShell。 */
 const isPetDesktop = computed(() => route.path === '/pet/desktop')
-/** 左栏整体收起（Ctrl+B；ZCode 式全隐而不是图标条）。 */
+/** 左栏整体收起（Ctrl+B；全隐而不是图标条）。 */
 const collapsed = ref(false)
 /** 本机会话令牌换取失败（后端未就绪 / 端口不对）时的错误提示。 */
 const bootError = ref<string | null>(null)

@@ -6,7 +6,7 @@ import { useChatStore } from '@/stores/chat'
 import { useToast } from '@/composables/useToast'
 
 /**
- * 目标模式状态卡（对标 ZCode /goal）：悬于聊天区右上角，展示目标描述、
+ * 目标模式状态卡：悬于聊天区右上角，展示目标描述、
  * 自动推进轮数与下一步动作；暂停/完成态颜色区分，支持暂停 / 清除。
  * 目标由 /goal 斜杠命令管理，状态经 chat:goal 事件与权威拉取双通道同步。
  */

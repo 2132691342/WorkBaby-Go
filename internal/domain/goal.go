@@ -1,6 +1,6 @@
 package domain
 
-// SessionGoal 会话目标（对标 ZCode 目标模式）：一句话可校验的目标 +
+// SessionGoal 会话目标：一句话可校验的目标 +
 // 每轮结束自动校验是否达成，未达成则携带下一步动作自动续跑。
 type SessionGoal struct {
 	Text        string `json:"text"`                   // 目标描述（越具体、越可校验越好）

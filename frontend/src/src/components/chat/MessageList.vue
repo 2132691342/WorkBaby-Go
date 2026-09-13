@@ -41,7 +41,7 @@ const quickPrompts: { title: string; text: string; icon: unknown }[] = [
 
 const emit = defineEmits<{
   useQuickPrompt: [text: string]
-  /** 划选引用：把选中的对话文字作为引用追加到输入框（ZCode 式划选追问）。 */
+  /** 划选引用：把选中的对话文字作为引用追加到输入框。 */
   quote: [text: string]
   /** 划选引用 → 辅助对话：选中文字带到右栏辅助会话提问（不打断主任务）。 */
   'quote-side': [text: string]
@@ -181,7 +181,7 @@ function isNearCurrent(i: number): boolean {
   return i >= total - 1 - NEAR_WINDOW && i <= total - 1
 }
 
-// ===== 划选引用（ZCode 式划选追问）=====
+// ===== 划选引用 =====
 // 选中对话里的任意文字 → 选区旁浮出「添加到当前任务」→ 以引用块追加进输入框。
 const quoteBar = ref<{ x: number; y: number; text: string } | null>(null)
 

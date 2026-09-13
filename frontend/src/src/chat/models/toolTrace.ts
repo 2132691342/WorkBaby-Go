@@ -1,5 +1,5 @@
 /**
- * 工具调用 → ZCode 式「动词叙事」迹线模型。
+ * 工具调用 → 「动词叙事」迹线模型。
  *
  * <p>一行工具迹线 = 动词（查阅/编辑/终端/委派…）+ 目标（文件名粗体 + 目录淡色 / 命令 / 查询词）
  * + 增删徽标（+N -N，仅文件改动）。与 toolVisuals 的图标映射互补：那套回答「这是什么工具」，
@@ -100,7 +100,7 @@ export function traceTarget(argsJson: string | undefined): TraceTarget | null {
     if (typeof v !== 'string' || !v.trim()) continue
     const one = oneLine(v, 96)
     if (!one) continue
-    // 文件路径 → 文件名为主、目录为辅（ZCode 迹线的「app.go internal/bootstrap/」形态）
+    // 文件路径 → 文件名为主、目录为辅（「app.go internal/bootstrap/」形态）
     // Windows 反斜杠与 POSIX 斜杠都拆；含空格的路径不拆（拆了反而难读）
     if (k === 'path' || k === 'file_path') {
       const sep = Math.max(one.lastIndexOf('/'), one.lastIndexOf('\\'))

@@ -14,10 +14,13 @@
 | 流程 | 可视化 DAG 工作流（LLM / 工具 / 条件 / HTTP / 人工输入 / 通知节点），定时触发，对话里 `run_workflow` 直接调 |
 | 扩展 | MCP Server 接入外部工具；Skill 注入方法论与脚本；子 Agent 委派（上下文/预算/工具三重隔离） |
 | 陪伴 | 桌宠与聊天同形象同状态；邮件 / Webhook 通知通道；后台任务中心 |
+| 工作面板 | 右栏 Git / 终端 / 浏览器三面板：分支切换与 diff、每会话持久 shell、托管浏览器远程视图（原生 CDP 驱动本机 Edge/Chrome，与 `browser_*` 工具共用实例） |
+| 仓库导读 | 扫描工作区生成确定性导读：语言统计、入口文件、目录树（每文件一句话摘要）、目录页与文件页 |
+| 生命周期钩子 | run_start / before_tool / after_tool / run_end 触发用户命令子进程（stdin 收 JSON 载荷、stdout 出 JSON 决策），`before_tool` 的 deny 拦截工具调用 |
 
 ## 技术栈
 
-**Go 1.25** · Wails v2（WebView2 壳）· gin · GORM + SQLite（WAL + FTS5）· Viper · slog
+**Go 1.25** · Wails v2（WebView2 壳）· gin · GORM + SQLite（WAL + FTS5）· Viper · slog · gorilla/websocket（原生 CDP）
 **Vue 3 + TypeScript + Vite** · Element Plus · Pinia · Tailwind 4 设计 token
 
 ## 架构：单进程双主机

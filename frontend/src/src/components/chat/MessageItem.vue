@@ -93,7 +93,7 @@ const fileChanges = computed(() => {
   return chat.fileChanges.filter((c) => c.run_id === props.message.run_id)
 })
 
-// ===== 变更聚合条（ZCode 式）：Σ 增删 + 折叠 + 全部撤销 =====
+// ===== 变更聚合条：Σ 增删 + 折叠 + 全部撤销 =====
 const changesOpen = ref(false)
 const undoing = ref(false)
 
@@ -372,7 +372,7 @@ async function forkFrom(): Promise<void> {
       </div>
     </div>
 
-    <!-- 本轮文件变更（chat:file-change 按 run_id 关联）：ZCode 式聚合条——
+    <!-- 本轮文件变更（chat:file-change 按 run_id 关联）：聚合条——
          一行「N 个文件已更改 +Σ -Σ」+ 全部撤销；点开就地看每张 diff 卡（懒加载 diff / 单文件回滚）。
          聚合条默认折叠：改动多时不再把消息流撑成一排卡片。 -->
     <div v-if="!isUser && fileChanges.length > 0 && !editing" class="mt-2 w-full">

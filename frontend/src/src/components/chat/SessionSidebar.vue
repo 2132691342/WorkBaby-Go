@@ -12,14 +12,14 @@ import { formatRelativeTime } from '@/utils/time'
  *
  * 树形血缘：parent_id 相同的会话挂在同一个父节点下；根会话按时段分组。
  * 缩进深度 = 父级缩进 + 1；子节点不可换行或换组，仅作为父的「分支」展示。
- * 归档视图：默认隐藏 archived 会话，切到归档视图只看它们（ZCode 式归档列表）。
+ * 归档视图：默认隐藏 archived 会话，切到归档视图只看它们。
  */
 const props = defineProps<{
   sessions: Session[]
   currentID: string | null
   loading: boolean
   creating?: boolean
-  /** 平铺模式：不按时段分组，单列直排（ZCode 式列表）。 */
+  /** 平铺模式：不按时段分组，单列直排。 */
   flat?: boolean
 }>()
 
@@ -258,7 +258,7 @@ watch(searchLower, () => {
         <template #prefix><el-icon><Search /></el-icon></template>
       </el-input>
 
-      <!-- 归档视图切换：ZCode 式归档列表（默认隐藏 archived 会话） -->
+      <!-- 归档视图切换（默认隐藏 archived 会话） -->
       <button
         type="button"
         class="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] transition-colors"

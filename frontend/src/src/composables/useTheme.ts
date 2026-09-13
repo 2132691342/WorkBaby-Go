@@ -29,7 +29,7 @@ export interface BackgroundSettings {
   extractedPrimary: string | null  // 用户上传图提取的主色
 }
 
-// v2 键：ZCode 式改版把默认外观切成 dark，换键让存量用户的旧 light 偏好一次性让位给新默认
+// v2 键：默认外观切成 dark，换键让存量用户的旧 light 偏好一次性让位给新默认
 const THEME_KEY = 'workbaby.theme.v2'
 const BG_KEY = 'workbaby.background'
 
@@ -70,7 +70,7 @@ export function useTheme() {
   }
 
   /**
-   * 初始化主题：localStorage 优先；无记录默认 dark（ZCode 式夜间基调为默认外观）。
+   * 初始化主题：localStorage 优先；无记录默认 dark。
    * 不跟随系统 prefers-color-scheme，避免 WebView2 继承 Windows 深色模式造成启动时黑白跳变。
    */
   function initTheme(): void {

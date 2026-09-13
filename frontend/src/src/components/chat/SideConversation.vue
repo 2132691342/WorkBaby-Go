@@ -1,14 +1,15 @@
 <script setup lang="ts">
 /**
- * 辅助对话面板（ZCode「辅助对话」对标）：右栏与主任务并行、互不打断的独立小会话。
+ * 辅助对话面板：右栏与主任务并行、互不打断的独立小会话。
  *
- * <p>空态是启动页四卡（辅助对话可用；审查/终端/浏览器为后续版本占位）；
+ * <p>空态是启动页四卡（辅助对话可用；审查卡内置审查流；终端/浏览器卡切到对应面板）；
  * 进入会话后：继承主会话历史作模型上下文（界面上从空白开始），可调工具、走审批、
  * 可从主对话划选带引用过来。面板关闭 / 主任务删除即终止，不进任务列表。
  */
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Bot, Send, Loader2, Square, MessageSquare, ScrollText, Terminal, Globe } from '@/components/common/icons'
+import { Bot, Send, Loader2, Square, MessageSquare, ScrollText, Terminal, Globe, ArrowLeft } from '@/components/common/icons'
+import { apiGet } from '@/api/client'
 import { useSideChatStore } from '@/stores/sideChat'
 import { useChatStore } from '@/stores/chat'
 import { t } from '@/i18n'
@@ -24,6 +25,11 @@ const { sideSession, messages, loading, streaming, streamingBlocks, streamingCon
 const props = defineProps<{
   /** 面板是否可见：可见（或主会话变化）时才拉取/恢复辅助会话，避免启动期竞态。 */
   visible: boolean
+}>()
+
+const emit = defineEmits<{
+  /** 启动页卡片跳转：切换右侧面板 tab（终端 / 浏览器）。 */
+  'open-tab': [tab: 'terminal' | 'browser']
 }>()
 
 const listEl = ref<HTMLElement | null>(null)
@@ -78,6 +84,50 @@ async function startSide(): Promise<void> {
   await focusInput()
 }
 
+/** 审查流状态：加载未提交 diff → 以审查提示词发起辅助对话。 */
+const reviewMode = ref(false)
+const reviewLoading = ref(false)
+const reviewDiff = ref('')
+const reviewError = ref('')
+const reviewStaged = ref(false)
+
+const reviewLines = computed(() => (reviewDiff.value ? reviewDiff.value.split('\n').length : 0))
+
+async function openReview(): Promise<void> {
+  reviewMode.value = true
+  reviewError.value = ''
+  reviewDiff.value = ''
+  await loadReview()
+}
+
+async function loadReview(): Promise<void> {
+  if (!chat.currentID) return
+  reviewLoading.value = true
+  try {
+    const r = await apiGet<{ diff: string }>(
+      `/api/v1/git/diff?session_id=${encodeURIComponent(chat.currentID)}&path=&staged=${reviewStaged.value}`
+    )
+    reviewDiff.value = r.diff ?? ''
+    if (!reviewDiff.value) reviewError.value = t('review.empty')
+  } catch (e) {
+    reviewError.value = t('review.notAvailable')
+    reviewDiff.value = ''
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
+/** 发起 AI 审查：把 diff 塞进审查提示词，走辅助对话执行（可调工具、可追问）。 */
+async function sendReview(): Promise<void> {
+  if (!chat.currentID || !reviewDiff.value) return
+  // 上下文预算保护：diff 过大只带前段
+  const capped = reviewDiff.value.length > 60000 ? reviewDiff.value.slice(0, 60000) + '\n…(diff 过长已截断)' : reviewDiff.value
+  const prompt = `${t('review.promptIntro')}\n\n\`\`\`diff\n${capped}\n\`\`\`\n\n${t('review.promptOutro')}`
+  reviewMode.value = false
+  await side.ensure(chat.currentID)
+  void side.send(prompt)
+}
+
 function submit(): void {
   const text = inputText.value
   if (!text.trim() || streaming.value) return
@@ -99,8 +149,45 @@ function isUser(m: Message): boolean {
 </script>
 
 <template>
-  <!-- 启动页：四卡（ZCode 空面板形态）。仅辅助对话可用，其余为后续版本占位 -->
-  <div v-if="!sideSession" class="flex h-full flex-col items-center justify-center gap-3 p-4">
+  <!-- 审查流：diff 源选择 + 发起 AI 审查（执行过程落在辅助对话） -->
+  <div v-if="reviewMode" class="flex h-full flex-col p-4 text-xs">
+    <div class="mb-3 flex items-center gap-2">
+      <button type="button" class="btn btn-sm" @click="reviewMode = false">
+        <ArrowLeft class="ic ic-sm" />
+      </button>
+      <span class="text-sm font-semibold text-wb-ink">{{ t('review.title') }}</span>
+    </div>
+    <p class="mb-2 text-[11px] text-wb-muted">{{ t('review.hint') }}</p>
+    <div class="mb-3 flex items-center gap-3">
+      <label class="flex cursor-pointer items-center gap-1 text-wb-ink">
+        <input v-model="reviewStaged" type="radio" :value="false" @change="loadReview">
+        {{ t('review.unstaged') }}
+      </label>
+      <label class="flex cursor-pointer items-center gap-1 text-wb-ink">
+        <input v-model="reviewStaged" type="radio" :value="true" @change="loadReview">
+        {{ t('review.staged') }}
+      </label>
+    </div>
+    <div class="min-h-0 flex-1 overflow-y-auto rounded-lg border border-wb-border bg-wb-surface-2 p-2">
+      <p v-if="reviewLoading" class="text-[11px] text-wb-muted">{{ t('ui.status.loading') }}</p>
+      <p v-else-if="reviewError" class="text-[11px] text-wb-warning">{{ reviewError }}</p>
+      <pre v-else class="max-h-full overflow-y-auto whitespace-pre-wrap break-all font-mono text-[10.5px] leading-4 text-wb-ink">{{ reviewDiff }}</pre>
+    </div>
+    <div class="mt-2 flex items-center justify-between">
+      <span class="text-[11px] text-wb-muted">{{ reviewLines }} lines</span>
+      <button
+        type="button"
+        class="btn btn-primary btn-sm"
+        :disabled="reviewLoading || !reviewDiff"
+        @click="sendReview"
+      >
+        {{ t('review.launch') }}
+      </button>
+    </div>
+  </div>
+
+  <!-- 启动页：四卡（辅助对话可用；审查卡内置审查流；终端/浏览器卡切面板） -->
+  <div v-else-if="!sideSession" class="flex h-full flex-col items-center justify-center gap-3 p-4">
     <p class="text-base font-semibold text-wb-ink">{{ t('side.openTitle') }}</p>
     <p class="mb-1 text-xs text-wb-muted">{{ t('side.openHint') }}</p>
     <div class="grid w-full max-w-[22rem] grid-cols-3 gap-2">
@@ -108,15 +195,15 @@ function isUser(m: Message): boolean {
         <MessageSquare class="h-5 w-5" />
         <span>{{ t('side.title') }}</span>
       </button>
-      <button type="button" class="side-start-card opacity-45" disabled :title="t('side.comingSoon')">
+      <button type="button" class="side-start-card" :title="t('review.hint')" @click="openReview">
         <ScrollText class="h-5 w-5" />
         <span>{{ t('side.review') }}</span>
       </button>
-      <button type="button" class="side-start-card opacity-45" disabled :title="t('side.comingSoon')">
+      <button type="button" class="side-start-card" @click="emit('open-tab', 'terminal')">
         <Terminal class="h-5 w-5" />
         <span>{{ t('side.terminal') }}</span>
       </button>
-      <button type="button" class="side-start-card opacity-45" disabled :title="t('side.comingSoon')">
+      <button type="button" class="side-start-card" @click="emit('open-tab', 'browser')">
         <Globe class="h-5 w-5" />
         <span>{{ t('side.browser') }}</span>
       </button>

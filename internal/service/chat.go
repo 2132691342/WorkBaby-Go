@@ -58,6 +58,13 @@ type ChatService struct {
 	caps        *capability.Registry                // 能力注册表：上下文装配 / 工具暴露 / run 后沉淀三条通道
 	skillSync   func(context.Context, string) error // 技能目录同步钩子（run 前按会话工作区叠加）；nil = 不启用
 	tempClear   func(runID string)                  // run 级临时态清理钩子（三层 State 的 temp 作用域）；nil = 不启用
+	hookRunner  *UserHookService                    // 用户钩子执行器（run_start/before_tool/after_tool/run_end）；nil = 不启用
+}
+
+// WithHookRunner 注入用户钩子执行器（子进程协议）；nil = 不启用。
+func (s *ChatService) WithHookRunner(h *UserHookService) *ChatService {
+	s.hookRunner = h
+	return s
 }
 
 // WithTempStateClearer 注入 run 级临时态清理钩子（run 结束后调用一次）。
@@ -307,6 +314,24 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 	if len(deferredDefs) > 0 {
 		r = r.WithDeferredTools(deferredDefs)
 	}
+	// 用户钩子（子进程协议）：before_tool 拦截闸门 + after_tool 观察缝；
+	// run_start / run_end 在本次调用首尾异步触发
+	if s.hookRunner != nil {
+		r = r.WithHooksBeforeTool(func(hctx context.Context, toolName string, args json.RawMessage) (bool, string) {
+			return s.hookRunner.BeforeTool(hctx, ses.ID, runID, toolName, args)
+		})
+		r = r.WithAfterToolCall(func(_ context.Context, toolName string, _ json.RawMessage, res *tool.ToolResult) {
+			outcome := "ok"
+			switch {
+			case res.Refused:
+				outcome = "refused"
+			case res.Err != nil:
+				outcome = "error"
+			}
+			s.hookRunner.AfterTool(ses.ID, runID, toolName, outcome)
+		})
+		s.hookRunner.RunStart(ses.ID, runID)
+	}
 	// 补充输入能力注入 ctx：request_input 工具暂停 run 问用户
 	if s.approval != nil {
 		ctx = tool.WithInputRequester(ctx, s.approval)
@@ -327,6 +352,10 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 	elapsed := time.Since(runStart).Milliseconds()
 
 	s.persistUsage(ctx, ses, runID, assistantMsgID, res)
+	// run 收尾钩子（异步；终止原因回传给用户命令）
+	if s.hookRunner != nil {
+		s.hookRunner.RunEnd(ses.ID, runID, string(res.Reason))
+	}
 
 	if res.Err != nil {
 		pkg.L.Error("chat run failed",

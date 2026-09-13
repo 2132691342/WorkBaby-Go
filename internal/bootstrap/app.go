@@ -49,6 +49,7 @@ type App struct {
 	SkillRepo            *repo.SkillRepo
 	AgentProfileRepo     *repo.AgentProfileRepo
 	UserCommandRepo      *repo.UserCommandRepo
+	UserHookRepo         *repo.UserHookRepo
 	McpRepo              *repo.McpServerRepo
 }
 
@@ -91,6 +92,7 @@ func New(db *gorm.DB) *App {
 		SkillRepo:            repo.NewSkillRepo(db),
 		AgentProfileRepo:     repo.NewAgentProfileRepo(db),
 		UserCommandRepo:      repo.NewUserCommandRepo(db),
+		UserHookRepo:         repo.NewUserHookRepo(db),
 		McpRepo:              repo.NewMcpServerRepo(db),
 	}
 }

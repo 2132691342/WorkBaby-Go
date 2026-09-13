@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 自定义子智能体管理视图（ZCode「子智能体」对标）。
+ * 自定义子智能体管理视图。
  *
  * <p>每个条目 = 人设 system prompt + 工具 allow/deny 策略 + 记忆开关 + 轮次预算；
  * 保存即写入 harness 注册表，主 Agent 可经 delegate_task 按名委派，也可 /agent 切换为会话主 Agent。

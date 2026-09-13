@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 自定义斜杠命令管理（ZCode「命令」对标）：保存常用提示词为命令，
+ * 自定义斜杠命令管理：保存常用提示词为命令，
  * / 面板选中即灌入输入框（$ARGUMENTS 占位就地编辑）。
  */
 import { onMounted, ref } from 'vue'

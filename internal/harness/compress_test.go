@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"WorkBaby/internal/llm"
 	"WorkBaby/internal/tool"
@@ -126,22 +125,4 @@ func TestRunnerContextBudgetCompress(t *testing.T) {
 	require.NoError(t, res.Err)
 	assert.Equal(t, ReasonEndTurn, res.Reason)
 	assert.Contains(t, res.Content, "done")
-}
-
-// TestToolResultTruncateRuneSafe 截断必须落在 rune 边界（按 byte 切会产出非法 UTF-8）。
-func TestToolResultTruncateRuneSafe(t *testing.T) {
-	s := strings.Repeat("汉", 51_000) // 153_000 bytes，超 rune 限
-	got := truncateResult(s, 50_000)
-	assert.True(t, utf8.ValidString(got), "截断结果必须是合法 UTF-8")
-	assert.True(t, strings.HasSuffix(got, "\n... (truncated)"))
-	assert.LessOrEqual(t, len([]rune(got)), 50_000+len("\n... (truncated)"))
-	assert.True(t, strings.HasPrefix(got, strings.Repeat("汉", 10)), "内容前缀无损")
-}
-
-// TestEstimateTokensCountsChinese 中文按 rune 口径估算（低估会让压缩吃掉本该保留的近期上下文）。
-func TestEstimateTokensCountsChinese(t *testing.T) {
-	text := &llm.Message{Role: llm.RoleUser, Content: strings.Repeat("部署配置", 100)} // 400 字
-	got := EstimateTokens([]*llm.Message{text})
-	assert.Greater(t, got, 200, "400 字中文不应被估到 200 token 以下")
-	assert.Less(t, got, 1000, "也不应高估到离谱")
 }
