@@ -152,6 +152,11 @@ func (s *ChatService) buildSystem(ctx context.Context, ses *domain.ChatSessionDO
 	for _, piece := range s.caps.PreloadAll(ctx, preload) {
 		asm.Add(piece)
 	}
+	// 项目指令（AGENTS.md）：用户全局 + 工作区两份，先全局后工作区（ZCode 同序）。
+	// 指令文件承载稳定约定（技术栈 / 规范 / 验证方式），每轮 run 都注入 system。
+	for _, p := range agentsMdPieces(ses) {
+		asm.Add(p)
+	}
 	// 历史归档摘要：/compact 归档掉的早期轮次的确定性摘要（模型据此知道
 	// 被剔除的历史讲了什么，而不是凭空失忆）
 	if sum := archiveSummary(ses); sum != "" {

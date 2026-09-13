@@ -1,121 +1,244 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch, defineAsyncComponent, type Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useAdminStore } from '@/stores/admin'
 import { t } from '@/i18n'
-import { Settings as SettingsIcon } from '@/components/common/icons'
-import ProviderSettings from '@/components/settings/tabs/ProviderSettings.vue'
-import ChannelSettings from '@/components/settings/tabs/ChannelSettings.vue'
-import SearchSettings from '@/components/settings/tabs/SearchSettings.vue'
-import AppearanceSettings from '@/components/settings/tabs/AppearanceSettings.vue'
-import AdvancedSettings from '@/components/settings/tabs/AdvancedSettings.vue'
-import AboutSettings from '@/components/settings/tabs/AboutSettings.vue'
+import { ArrowRight } from '@/components/common/icons'
 
 /**
- * 设置中心视图：tab 导航 + 路由 query 同步（/settings?tab=about 直达指定 tab）。
- * 6 个 tab 组件在 settings/tabs/：模型 / 通道 / 搜索 / 外观 / 高级 / 关于。
+ * 设置中心（ZCode 式全页布局）：左侧三组导航 + 右侧内容区，路由 query 同步直达。
+ *
+ * <p>功能页全部收进设置：原侧栏的 记忆 / 知识库 / 技能 / MCP / 工具 / 工作流 /
+ * 仪表盘 / 运行 / 任务 / 文件 / 文件夹 / 文档 / 桌宠 都成为这里的一个 section，
+ * 旧路由（/memory 等）重定向到 /settings?tab=x，外壳左栏只保留任务主链路。
+ * section 组件按需异步加载（首次点击才拉取 chunk）。
  */
-type SettingsTab = 'models' | 'channels' | 'search' | 'appearance' | 'advanced' | 'about'
+
+interface SectionItem {
+  id: SettingsTab
+  labelKey: string
+}
+
+type SettingsTab =
+  | 'models'
+  | 'appearance'
+  | 'advanced'
+  | 'channels'
+  | 'search'
+  | 'skills'
+  | 'subagents'
+  | 'commands'
+  | 'mcp'
+  | 'tools'
+  | 'workflows'
+  | 'memory'
+  | 'kdocs'
+  | 'dashboard'
+  | 'runs'
+  | 'tasks'
+  | 'files'
+  | 'folders'
+  | 'docs'
+  | 'pet'
+  | 'about'
+
+const groups: { labelKey: string; items: SectionItem[] }[] = [
+  {
+    labelKey: 'settings.group.basic',
+    items: [
+      { id: 'models', labelKey: 'settings.tab.models' },
+      { id: 'appearance', labelKey: 'settings.tab.appearance' },
+      { id: 'advanced', labelKey: 'settings.tab.advanced' },
+      { id: 'channels', labelKey: 'settings.tab.channels' },
+      { id: 'search', labelKey: 'settings.tab.search' }
+    ]
+  },
+  {
+    labelKey: 'settings.group.agent',
+    items: [
+      { id: 'skills', labelKey: 'nav.skills' },
+      { id: 'subagents', labelKey: 'nav.subagents' },
+      { id: 'commands', labelKey: 'nav.commands' },
+      { id: 'mcp', labelKey: 'nav.mcp' },
+      { id: 'tools', labelKey: 'nav.tools' },
+      { id: 'workflows', labelKey: 'nav.workflows' },
+      { id: 'memory', labelKey: 'nav.memory' },
+      { id: 'kdocs', labelKey: 'nav.knowledge' }
+    ]
+  },
+  {
+    labelKey: 'settings.group.data',
+    items: [
+      { id: 'dashboard', labelKey: 'nav.dashboard' },
+      { id: 'runs', labelKey: 'nav.runs' },
+      { id: 'tasks', labelKey: 'nav.tasks' },
+      { id: 'files', labelKey: 'nav.files' },
+      { id: 'folders', labelKey: 'nav.folders' },
+      { id: 'docs', labelKey: 'nav.docs' },
+      { id: 'pet', labelKey: 'nav.pet' },
+      { id: 'about', labelKey: 'settings.tab.about' }
+    ]
+  }
+]
+
+/** section 组件登记表：id → 异步组件（首次激活才加载 chunk）。 */
+const sectionComponents: Record<SettingsTab, Component> = {
+  models: defineAsyncComponent(() => import('@/components/settings/tabs/ProviderSettings.vue')),
+  appearance: defineAsyncComponent(() => import('@/components/settings/tabs/AppearanceSettings.vue')),
+  advanced: defineAsyncComponent(() => import('@/components/settings/tabs/AdvancedSettings.vue')),
+  channels: defineAsyncComponent(() => import('@/components/settings/tabs/ChannelSettings.vue')),
+  search: defineAsyncComponent(() => import('@/components/settings/tabs/SearchSettings.vue')),
+  about: defineAsyncComponent(() => import('@/components/settings/tabs/AboutSettings.vue')),
+  skills: defineAsyncComponent(() => import('@/components/skills/SkillsView.vue')),
+  subagents: defineAsyncComponent(() => import('@/components/agents/SubagentsView.vue')),
+  commands: defineAsyncComponent(() => import('@/components/commands/CommandsView.vue')),
+  mcp: defineAsyncComponent(() => import('@/components/mcp/McpServersView.vue')),
+  tools: defineAsyncComponent(() => import('@/components/tools/ToolsView.vue')),
+  workflows: defineAsyncComponent(() => import('@/components/workflows/WorkflowsView.vue')),
+  memory: defineAsyncComponent(() => import('@/components/memory/MemoryCenterView.vue')),
+  kdocs: defineAsyncComponent(() => import('@/components/knowledge/KnowledgeDocsView.vue')),
+  dashboard: defineAsyncComponent(() => import('@/components/dashboard/DashboardView.vue')),
+  runs: defineAsyncComponent(() => import('@/components/runs/RunsView.vue')),
+  tasks: defineAsyncComponent(() => import('@/components/tasks/TasksView.vue')),
+  files: defineAsyncComponent(() => import('@/components/files/FilesView.vue')),
+  folders: defineAsyncComponent(() => import('@/components/folders/FoldersView.vue')),
+  docs: defineAsyncComponent(() => import('@/components/docs/DocsView.vue')),
+  pet: defineAsyncComponent(() => import('@/components/pet/PetSpaceView.vue'))
+}
 
 const settings = useSettingsStore()
 const adminStore = useAdminStore()
 const route = useRoute()
 const router = useRouter()
 
-const tabs: { id: SettingsTab; labelKey: string }[] = [
-  { id: 'models', labelKey: 'settings.tab.models' },
-  { id: 'channels', labelKey: 'settings.tab.channels' },
-  { id: 'search', labelKey: 'settings.tab.search' },
-  { id: 'appearance', labelKey: 'settings.tab.appearance' },
-  { id: 'advanced', labelKey: 'settings.tab.advanced' },
-  { id: 'about', labelKey: 'settings.tab.about' }
-]
-
-/** 当前激活 tab：优先路由 query（settings?tab=about），默认 models；el-tabs v-model 直驱。 */
+/** 当前激活 section：路由 query（settings?tab=memory）为真相源。 */
 const activeTab = ref<SettingsTab>('models')
+const activeComponent = computed(() => sectionComponents[activeTab.value])
 
-/** el-tabs 切换 → 同步路由 query（settings?tab=xxx，支持刷新直达）。 */
-function onTabChange(name: string | number): void {
-  void router.replace({ query: { ...route.query, tab: String(name) } })
+function onTabChange(id: SettingsTab): void {
+  activeTab.value = id
+  void router.replace({ query: { ...route.query, tab: id } })
+}
+
+function backToWorkspace(): void {
+  void router.push('/chat')
 }
 
 onMounted(async () => {
   const q = route.query.tab
-  if (q && tabs.some((x) => x.id === q)) activeTab.value = q as SettingsTab
+  if (typeof q === 'string' && q in sectionComponents) activeTab.value = q as SettingsTab
   void settings.load()
   void adminStore.load()
 })
+
+// 深链 / 命令面板在设置页已挂载时改 query（settings?tab=x）也要跟随切换
+watch(
+  () => route.query.tab,
+  (q) => {
+    if (typeof q === 'string' && q in sectionComponents && q !== activeTab.value) {
+      activeTab.value = q as SettingsTab
+    }
+  }
+)
 </script>
 
 <template>
-  <div class="scroll wb-ui">
-    <div class="wrap wrap-md">
-      <!-- Hero（原型 20 屏） -->
-      <header class="hero">
-        <div class="tile"><SettingsIcon class="ic" /></div>
-        <div>
-          <h1>{{ t('settings.title') }}</h1>
-          <p>{{ t('settings.subtitle') }}</p>
-        </div>
-      </header>
+  <div class="wb-ui flex h-full min-h-0">
+    <!-- 左导航（ZCode 设置式三组） -->
+    <aside class="set-nav">
+      <button class="set-back" @click="backToWorkspace">
+        <component :is="ArrowRight" class="h-3.5 w-3.5 rotate-180" />
+        <span>{{ t('settings.backToWorkspace') }}</span>
+      </button>
 
-      <div v-if="settings.error" class="alert a-info">
+      <nav class="set-nav-scroll">
+        <div v-for="g in groups" :key="g.labelKey" class="set-group">
+          <h4>{{ t(g.labelKey) }}</h4>
+          <button
+            v-for="item in g.items"
+            :key="item.id"
+            class="set-item"
+            :class="{ 'is-active': activeTab === item.id }"
+            @click="onTabChange(item.id)"
+          >
+            {{ t(item.labelKey) }}
+          </button>
+        </div>
+      </nav>
+    </aside>
+
+    <!-- 内容区 -->
+    <div class="flex min-w-0 flex-1 flex-col">
+      <div v-if="settings.error" class="alert a-info mx-6 mt-4">
         {{ settings.error }}
       </div>
-
-      <!-- ===== el-tabs 全局导航 ===== -->
-      <el-tabs v-model="activeTab" class="settings-tabs" @tab-change="onTabChange">
-        <el-tab-pane :label="t('settings.tab.models')" name="models">
-          <ProviderSettings />
-        </el-tab-pane>
-
-        <el-tab-pane :label="t('settings.tab.channels')" name="channels">
-          <ChannelSettings />
-        </el-tab-pane>
-
-        <el-tab-pane :label="t('settings.tab.search')" name="search">
-          <SearchSettings />
-        </el-tab-pane>
-
-        <el-tab-pane :label="t('settings.tab.appearance')" name="appearance">
-          <AppearanceSettings />
-        </el-tab-pane>
-
-        <el-tab-pane :label="t('settings.tab.advanced')" name="advanced">
-          <AdvancedSettings />
-        </el-tab-pane>
-
-        <el-tab-pane :label="t('settings.tab.about')" name="about">
-          <AboutSettings />
-        </el-tab-pane>
-      </el-tabs>
+      <component :is="activeComponent" :key="activeTab" class="min-h-0 flex-1" />
     </div>
   </div>
 </template>
 
 <style scoped>
-/* ElementPlus tabs 与 wb 主题融合 + 密度收紧 */
-.settings-tabs :deep(.el-tabs__nav-wrap::after) {
-  background-color: var(--wb-border);
+.set-nav {
+  width: 216px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--wb-border);
+  background: var(--wb-side, var(--wb-surface));
 }
-.settings-tabs :deep(.el-tabs__item) {
+.set-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 12px 4px;
+  padding: 0 8px;
+  height: 28px;
+  border-radius: var(--wb-radius, 8px);
   color: var(--wb-muted);
-  padding: 0 14px;
-  height: 38px;
-  line-height: 38px;
+  font-size: 12px;
 }
-.settings-tabs :deep(.el-tabs__item.is-active) {
-  color: var(--wb-primary);
+.set-back:hover {
+  background: var(--wb-surface-hover);
+  color: var(--wb-ink);
 }
-.settings-tabs :deep(.el-tabs__active-bar) {
-  background-color: var(--wb-primary);
+.set-nav-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 8px 12px;
 }
-/* 稀疏内容页（通道/搜索）不再被 tabs 默认留白撑高 */
-.settings-tabs :deep(.el-tabs__header) {
-  margin-bottom: 12px;
+.set-group {
+  margin-bottom: 10px;
 }
-.settings-tabs :deep(.el-tabs__content) {
-  padding-top: 0;
+.set-group h4 {
+  padding: 0 8px;
+  margin-bottom: 2px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--wb-muted);
+  opacity: 0.85;
+}
+.set-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  height: 28px;
+  border-radius: var(--wb-radius, 8px);
+  color: var(--wb-ink);
+  font-size: 12px;
+  text-align: left;
+  transition: background 0.12s;
+}
+.set-item:hover {
+  background: var(--wb-surface-hover);
+}
+.set-item.is-active {
+  background: var(--wb-primary-soft);
+  color: var(--wb-primary-strong);
+  font-weight: 600;
 }
 </style>

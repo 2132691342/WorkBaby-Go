@@ -24,14 +24,14 @@ var paramsSchema = json.RawMessage(`{
 	"type": "object",
 	"required": ["task"],
 	"properties": {
-		"agent": {"type": "string", "description": "子 Agent 名：coding（工程）/ research（检索）/ writer（写作）/ default（通用）；未知回退 default"},
+		"agent": {"type": "string", "description": "子 Agent 名：内置 coding（工程）/ research（检索）/ writer（写作）/ default（通用），或设置页定义的自定义子智能体名；未知回退 default"},
 		"task":  {"type": "string", "description": "交给子 Agent 的完整任务描述，需自包含（子 Agent 看不到当前对话）"}
 	}
 }`)
 
 func (t *Tool) Name() string { return "delegate_task" }
 func (t *Tool) Description() string {
-	return "把可独立完成的大块任务委派给专用子 Agent（coding/research/writer）。子任务独立执行且只回传摘要，适合调研、批量检索、独立编码等不污染主上下文的工作。"
+	return "把可独立完成的大块任务委派给子 Agent（内置 coding/research/writer，或设置页定义的自定义子智能体）。子任务独立执行且只回传摘要，适合调研、批量检索、独立编码等不污染主上下文的工作。"
 }
 func (t *Tool) Schema() tool.ToolSchema {
 	return tool.ToolSchema{Name: t.Name(), Description: t.Description(), Parameters: paramsSchema}

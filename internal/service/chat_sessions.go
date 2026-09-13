@@ -45,6 +45,8 @@ func toSessionRESP(s *domain.ChatSessionDO) domain.ChatSessionRESP {
 		LastMessageAt:  s.LastMessageAt,
 		MetadataJSON:   s.MetadataJSON,
 		Status:         s.Status,
+		Pinned:         s.Pinned,
+		Kind:           s.Kind,
 		PermissionMode: s.PermissionMode,
 		ParentID:       s.ParentID,
 		BranchPoint:    s.BranchPoint,
@@ -185,6 +187,39 @@ func (s *ChatService) SetSessionPermission(ctx context.Context, id, mode string)
 		row.PermissionMode = ""
 	} else {
 		row.PermissionMode = string(tool.ParseSessionMode(v))
+	}
+	if err := s.sessions.Update(ctx, row); err != nil {
+		return nil, err
+	}
+	r := toSessionRESP(row)
+	return &r, nil
+}
+
+// SetSessionPinned 置顶/取消置顶（仅写库 + 排序，不影响进行中的 run）。
+func (s *ChatService) SetSessionPinned(ctx context.Context, id string, pinned bool) (*domain.ChatSessionRESP, error) {
+	row, err := s.sessions.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	row.Pinned = pinned
+	if err := s.sessions.Update(ctx, row); err != nil {
+		return nil, err
+	}
+	r := toSessionRESP(row)
+	return &r, nil
+}
+
+// SetSessionArchived 归档/取消归档（status 在 active/archived 间切换；归档自动取消置顶）。
+func (s *ChatService) SetSessionArchived(ctx context.Context, id string, archived bool) (*domain.ChatSessionRESP, error) {
+	row, err := s.sessions.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if archived {
+		row.Status = domain.SessionStatusArchived
+		row.Pinned = false
+	} else {
+		row.Status = domain.SessionStatusActive
 	}
 	if err := s.sessions.Update(ctx, row); err != nil {
 		return nil, err

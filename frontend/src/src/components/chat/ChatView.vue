@@ -4,7 +4,7 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Trash2, Eraser, FolderOpen, Pencil, Sparkles, ListTree, RefreshCw, Crosshair, X, Archive, Square } from '@/components/common/icons'
+import { Trash2, Eraser, FolderOpen, Pencil, Sparkles, ListTree, RefreshCw, Crosshair, X, Archive, Square, MessageSquare } from '@/components/common/icons'
 import { Sunny } from '@element-plus/icons-vue'
 import { useChatStore, backendModeToPermission, type PermissionLevel } from '@/stores/chat'
 import { useTrustStore } from '@/stores/trust'
@@ -14,9 +14,12 @@ import { useFocusMode } from '@/composables/useFocusMode'
 import { useTheme } from '@/composables/useTheme'
 import { t } from '@/i18n'
 import MessageList from '@/components/chat/MessageList.vue'
+import GoalCard from '@/components/chat/GoalCard.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import PetCompanion from '@/components/pet/PetCompanion.vue'
 import WorkspacePanel from '@/components/chat/WorkspacePanel.vue'
+import SideConversation from '@/components/chat/SideConversation.vue'
+import { useSideChatStore } from '@/stores/sideChat'
 import WorkspacePickerDialog from '@/components/chat/WorkspacePickerDialog.vue'
 import FileChangesPanel from '@/components/chat/FileChangesPanel.vue'
 import TaskCenterPanel from '@/components/chat/TaskCenterPanel.vue'
@@ -40,13 +43,15 @@ const {
   streamingStats,
   error,
   contextUsage,
-  fileChanges
+  fileChanges,
+  goal
 } = storeToRefs(chat)
 
 const showWorkspace = ref(false)
 const showPicker = ref(false)
-/** 右侧面板当前激活的 tab（workspace / changes / tasks）。 */
-const rightTab = ref<'workspace' | 'changes' | 'tasks'>('workspace')
+/** 右侧面板当前激活的 tab（workspace / changes / tasks / side）。 */
+const rightTab = ref<'workspace' | 'changes' | 'tasks' | 'side'>('workspace')
+const side = useSideChatStore()
 
 /** ChatInput 实例引用：用于把示例 prompt 灌进去。 */
 const chatInputRef = ref<InstanceType<typeof ChatInput> | null>(null)
@@ -318,6 +323,16 @@ function onQuickPrompt(text: string): void {
   chatInputRef.value?.setDraft(text)
 }
 
+/** 划选引用：把选中的对话文字以引用块追加进输入框（ZCode 式划选追问）。 */
+function onQuoteSelection(text: string): void {
+  chatInputRef.value?.appendText(`> ${text}\n`)
+}
+
+/** 划选「在辅助对话中提问」：打开右栏面板，引用块预填进辅助输入框。 */
+function onQuoteSide(text: string): void {
+  openSidePanel(`> ${text}\n`)
+}
+
 /** 工作区文件树「添加到聊天」：插入文件的<b>绝对路径</b>引用（相对路径解析依赖工作区语义，易歧义）。 */
 function onAttachWorkspaceFile(path: string): void {
   chatInputRef.value?.appendText(path.replace(/\/$/, ''))
@@ -400,13 +415,20 @@ async function onChangePermission(level: PermissionLevel): Promise<void> {
 }
 
 /** 切右侧面板 tab：点已激活的 tab 收起面板；否则切到目标 tab 并展开。 */
-function toggleTab(tab: 'workspace' | 'changes' | 'tasks'): void {
+function toggleTab(tab: 'workspace' | 'changes' | 'tasks' | 'side'): void {
   if (showWorkspace.value && rightTab.value === tab) {
     showWorkspace.value = false
     return
   }
   rightTab.value = tab
   showWorkspace.value = true
+}
+
+/** 打开辅助对话面板（/side 命令与划选「在辅助对话中提问」共用入口）。 */
+function openSidePanel(prefill?: string): void {
+  rightTab.value = 'side'
+  showWorkspace.value = true
+  if (prefill) side.draft = prefill
 }
 
 /** header「更多」菜单分发：压缩 / 清空 / 删除（低频危险操作统一入口）。 */
@@ -521,6 +543,16 @@ function onHeaderCommand(cmd: string): void {
             <el-icon><ListTree /></el-icon>
           </el-button>
         </el-tooltip>
+        <el-tooltip :content="t('side.title')" placement="bottom">
+          <el-button
+            :type="rightTab === 'side' ? 'primary' : 'default'"
+            text
+            circle
+            @click="toggleTab('side')"
+          >
+            <el-icon><MessageSquare /></el-icon>
+          </el-button>
+        </el-tooltip>
         <el-tooltip :content="t('chat.workspace')" placement="bottom">
           <el-button
             :type="rightTab === 'workspace' ? 'primary' : 'default'"
@@ -594,11 +626,15 @@ function onHeaderCommand(cmd: string): void {
 
     <!-- 主区：消息流 + 输入（左） | 工作区文件树面板（右，可折叠） -->
     <div class="flex min-h-0 flex-1">
-      <div class="flex min-w-0 flex-1 flex-col">
+      <div class="flex min-w-0 flex-1 flex-col" style="position: relative">
+        <!-- 目标模式状态卡（/goal 设定后出现；暂停/完成态常驻可恢复） -->
+        <GoalCard v-if="goal && goal.status !== 'done'" :goal="goal" />
         <MessageList
           :messages="messages"
           :streaming="streaming"
           @use-quick-prompt="onQuickPrompt"
+          @quote="onQuoteSelection"
+          @quote-side="onQuoteSide"
         />
 
         <!-- 桌宠陪伴体：抠好的形象浮在输入框上方，跟随会话状态 -->
@@ -625,6 +661,7 @@ function onHeaderCommand(cmd: string): void {
           @send-queued="(text) => chat.sendMessage(text)"
           @regenerate="onRegenerate"
           @compact="onOpenCompact"
+          @side="openSidePanel()"
           @pick-workspace="showPicker = true"
           @change-permission="onChangePermission"
         />
@@ -632,11 +669,13 @@ function onHeaderCommand(cmd: string): void {
 
       <aside
         v-if="showWorkspace"
-        class="flex w-72 shrink-0 flex-col border-l border-wb-border bg-wb-surface"
+        class="flex shrink-0 flex-col border-l border-wb-border bg-wb-surface"
+        :class="rightTab === 'side' ? 'w-[26rem]' : 'w-72'"
       >
         <div class="flex shrink-0 items-center border-b border-wb-border px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-wb-muted">
           <span v-if="rightTab === 'changes'">{{ t('changes.title') }}</span>
           <span v-else-if="rightTab === 'tasks'">{{ t('tasks.title') }}</span>
+          <span v-else-if="rightTab === 'side'">{{ t('side.title') }}</span>
           <span v-else>{{ t('chat.workspace') }}</span>
           <button
             type="button"
@@ -650,6 +689,7 @@ function onHeaderCommand(cmd: string): void {
         <div class="min-h-0 flex-1">
           <FileChangesPanel v-if="rightTab === 'changes'" />
           <TaskCenterPanel v-else-if="rightTab === 'tasks'" />
+          <SideConversation v-else-if="rightTab === 'side'" :visible="showWorkspace && rightTab === 'side'" />
           <WorkspacePanel
             v-else
             :session_id="currentID"

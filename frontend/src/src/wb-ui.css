@@ -76,7 +76,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 0 2px 0 10px;
-  background: var(--wb-surface-2);
+  background: var(--wb-side, var(--wb-surface-2));
   border-bottom: 1px solid var(--wb-border);
   user-select: none;
 }
@@ -142,12 +142,13 @@ body {
   flex: none;
   display: flex;
   flex-direction: column;
-  background: var(--wb-surface);
+  background: var(--wb-side, var(--wb-surface));
   border-right: 1px solid var(--wb-border);
   transition: width 0.18s ease;
 }
+/* 折叠态整栏隐藏（ZCode 式 Ctrl+B 收起侧栏） */
 .side.collapsed {
-  width: 58px;
+  display: none;
 }
 .side-brand {
   height: 46px;
@@ -240,19 +241,6 @@ body {
   color: var(--wb-muted);
   font-variant-numeric: tabular-nums;
 }
-.side.collapsed .nav-item {
-  justify-content: center;
-  padding: 0;
-}
-.side.collapsed .nav-item span:not(.ic) {
-  display: none;
-}
-.side.collapsed .side-brand b,
-.side.collapsed .side-brand small,
-.side.collapsed .nav-group h4,
-.side.collapsed .nav-item .cnt {
-  display: none;
-}
 /* 侧栏会话区（60% 菜单 / 40% 会话历史） */
 .side-sessions {
   flex: 1 1 40%;
@@ -280,9 +268,6 @@ body {
   min-height: 0;
   overflow-y: auto;
 }
-.side.collapsed .side-sessions {
-  display: none;
-}
 .side-foot {
   flex: none;
   border-top: 1px solid var(--wb-border);
@@ -305,11 +290,86 @@ body {
   background: var(--wb-surface-hover);
   color: var(--wb-ink);
 }
-.side.collapsed .side-foot {
-  flex-direction: column;
+.side-foot .fi.is-active {
+  color: var(--wb-primary-strong);
 }
-.side.collapsed .side-foot .fi span:not(.ic) {
-  display: none;
+
+/* ===== 极简左栏（ZCode 式）：快捷动作 + 任务列表 ===== */
+.rail-actions {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 8px 4px;
+}
+.rail-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: var(--wb-radius, 8px);
+  color: var(--wb-ink);
+  font-size: 12px;
+  text-align: left;
+  transition: background 0.12s;
+}
+.rail-btn:hover {
+  background: var(--wb-surface-hover);
+}
+.rail-btn.is-active {
+  background: var(--wb-primary-soft);
+  color: var(--wb-primary-strong);
+  font-weight: 600;
+}
+.rail-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.rail-ic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wb-muted);
+}
+.rail-btn.is-active .rail-ic {
+  color: var(--wb-primary);
+}
+.rail-kbd {
+  font-size: 9.5px;
+  color: var(--wb-muted);
+  opacity: 0.75;
+  font-family: var(--font-mono);
+}
+.rail-collapse {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--wb-muted);
+}
+.rail-collapse:hover {
+  background: var(--wb-surface-hover);
+  color: var(--wb-ink);
+}
+.rail-list {
+  flex: 1;
+  min-height: 0;
+}
+/* 标题栏工作区 chip（ZCode 式 folder 徽标） */
+.titlebar .tb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--wb-surface-hover);
+  color: var(--wb-muted);
+  font-size: 10.5px;
 }
 
 /* ================= 主区 ================= */
@@ -1803,6 +1863,134 @@ kbd.chip {
 }
 .mod {
   color: var(--wb-warning);
+}
+
+/* ================= 变更聚合条（ZCode 式） ================= */
+/* 一轮的文件变更折叠成一行：N 个文件已更改 +Σ -Σ + 全部撤销；点开就地看 diff 卡 */
+.wb-chgbar {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--wb-mint) 4%, transparent);
+  overflow: hidden;
+}
+.wb-chgbar-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--wb-ink);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.wb-chgbar-main:hover {
+  background: var(--wb-surface-hover);
+}
+.wb-chgbar-title {
+  font-weight: 500;
+}
+.wb-chgbar-main .add,
+.wb-chgbar-main .del {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.wb-chgbar-chev {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--wb-muted);
+  transition: transform 0.18s ease;
+}
+.wb-chgbar-chev.is-open {
+  transform: rotate(180deg);
+}
+.wb-chgbar-undo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 0 10px;
+  border: 0;
+  border-left: 1px solid var(--wb-border);
+  background: transparent;
+  color: var(--wb-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.wb-chgbar-undo:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--wb-danger) 8%, transparent);
+  color: var(--wb-danger);
+}
+.wb-chgbar-undo:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ================= 时间线系统分隔线 ================= */
+/* 系统级事件（上下文已压缩 / 模型切换）：居中一行弱化叙事，区别于用户/助手消息 */
+.wb-sys-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wb-sysline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  color: var(--wb-muted);
+  font-size: 11px;
+  user-select: none;
+  border: 0;
+  background: transparent;
+}
+.wb-sysline::before,
+.wb-sysline::after {
+  content: '';
+  height: 1px;
+  width: 56px;
+  background: var(--wb-border);
+}
+/* 带交接纪要的分隔线可点击展开 */
+.wb-sysline.is-clickable {
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.wb-sysline.is-clickable:hover {
+  color: var(--wb-ink);
+}
+.wb-sys-act {
+  font-size: 10.5px;
+  color: var(--wb-primary-strong);
+}
+/* 展开的纪要块：折叠轮次的逐行叙事，限高内滚 */
+.wb-sys-detail {
+  margin: 0 auto;
+  max-width: 620px;
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--wb-border);
+  border-radius: 8px;
+  background: var(--wb-surface-2);
+  padding: 8px 12px;
+}
+.wb-sys-line {
+  margin: 0;
+  padding: 1px 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--wb-muted);
 }
 
 /* ================= 工作流 ================= */

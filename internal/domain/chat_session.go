@@ -10,6 +10,15 @@ const (
 	SessionStatusArchived SessionStatus = "archived"
 )
 
+// SessionKind 会话类别：normal 主会话（默认，进侧栏列表）；
+// side 辅助对话（右栏并行小会话，ParentID 指向主会话并继承其历史，不进侧栏）。
+type SessionKind string
+
+const (
+	SessionKindNormal SessionKind = "normal"
+	SessionKindSide   SessionKind = "side"
+)
+
 // ChatSessionDO 会话持久化实体。
 type ChatSessionDO struct {
 	ID          string `gorm:"primaryKey;size:64"  json:"id"`
@@ -23,8 +32,12 @@ type ChatSessionDO struct {
 	// 与 workspace_id（逻辑文件夹树关联 id，历史字段）语义无关。
 	WorkspacePath string        `gorm:"size:512"             json:"workspace_path"`
 	Status        SessionStatus `gorm:"size:16"              json:"status"`
-	MessageCount  int           `gorm:"default:0"            json:"message_count"`
-	LastMessageAt int64         `gorm:"default:0"            json:"last_message_at"`
+	// Kind 会话类别（normal/side）；side 会话被侧栏列表过滤，仅在辅助对话面板中呈现。
+	Kind SessionKind `gorm:"size:16;default:'normal';index" json:"kind"`
+	// Pinned 置顶：侧栏列表最前（排序 pinned DESC → last_message_at DESC）。
+	Pinned        bool  `gorm:"default:false" json:"pinned"`
+	MessageCount  int   `gorm:"default:0"            json:"message_count"`
+	LastMessageAt int64 `gorm:"default:0"            json:"last_message_at"`
 	// ParentID / BranchPoint 构成会话树血缘：分叉出的会话记住来源会话与分叉点 seq。
 	// 根会话 ParentID 为空、BranchPoint 为 0；分叉可递归，前端据此递归建树。
 	// PermissionMode 会话级工具权限模式（restricted/default/auto_edit/yolo；空 = 跟随系统设置）。
@@ -60,6 +73,16 @@ type ChatSessionPermissionREQ struct {
 	Mode string `json:"mode"`
 }
 
+// SessionPinREQ 置顶/取消置顶入参。
+type SessionPinREQ struct {
+	Pinned bool `json:"pinned"`
+}
+
+// SessionArchiveREQ 归档/取消归档入参（status 在 active/archived 间切换；归档自动取消置顶）。
+type SessionArchiveREQ struct {
+	Archived bool `json:"archived"`
+}
+
 // ChatSessionModelREQ 切换会话使用的 Provider/模型（切换后输入框参数与温度展示跟随该模型配置）。
 // ProviderID 与 Model 至少提供一个；只给 Model 时按名字回查 provider。
 type ChatSessionModelREQ struct {
@@ -87,6 +110,8 @@ type ChatSessionRESP struct {
 	LastMessageAt  int64         `json:"last_message_at"`
 	MetadataJSON   string        `json:"metadata_json"`
 	Status         SessionStatus `json:"status"`
+	Kind           SessionKind   `json:"kind"`
+	Pinned         bool          `json:"pinned"`
 	PermissionMode string        `json:"permission_mode"`
 	ParentID       string        `json:"parent_id"`
 	BranchPoint    int64         `json:"branch_point"`

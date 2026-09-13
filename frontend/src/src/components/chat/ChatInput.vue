@@ -70,6 +70,8 @@ const emit = defineEmits<{
   regenerate: []
   /** 用户点击上下文占用 popover 内的「压缩历史」按钮。 */
   compact: []
+  /** /side：请求打开右侧辅助对话面板（命令不作为消息发送）。 */
+  side: []
   /** 工作区切换（弹 WorkspacePickerDialog）。 */
   'pick-workspace': []
   /** 权限级别切换。 */
@@ -400,6 +402,21 @@ function submit(): void {
   if (!canSend.value) return
   const text = draft.value.trim()
   if (!text && attachments.value.length === 0) return
+  // /goal 目标命令在前端拦截执行（不走消息链路）；其余斜杠消息原样发送
+  const goalMatch = /^\/goal(?:\s+([\s\S]+))?$/.exec(text)
+  if (goalMatch) {
+    draft.value = ''
+    resetHeight()
+    void handleGoalCommand(goalMatch[1])
+    return
+  }
+  // /side 辅助对话：打开右栏面板，命令不作为消息发送
+  if (/^\/(?:side|btw)\s*$/.test(text)) {
+    draft.value = ''
+    resetHeight()
+    emit('side')
+    return
+  }
   if (slashOpen.value && /^\/\w*\s*$/.test(draft.value)) {
     return
   }
@@ -595,6 +612,41 @@ function executed(cmd: SlashCommand): void {
   showCmdFeedback(`/${cmd.id} · ${detail}`)
 }
 
+/**
+ * /goal 目标命令：无参查看当前目标；pause/resume/clear 直操作；
+ * 其余文本整体作为目标描述设定（ZCode 同款语义）。
+ */
+async function handleGoalCommand(args?: string): Promise<void> {
+  const id = chat.currentID
+  if (!id) {
+    toast.warning(t('chat.noSession'))
+    return
+  }
+  const arg = (args ?? '').trim()
+  try {
+    if (!arg) {
+      // 无参 = 查看当前目标
+      if (!chat.goal) {
+        toast.info(t('chat.goal.none'))
+      } else {
+        showCmdFeedback(`🎯 ${chat.goal.text} · ${t('chat.goal.round', chat.goal.round, chat.goal.max_rounds || 20)}`)
+      }
+      return
+    }
+    if (arg === 'pause' || arg === 'resume' || arg === 'clear') {
+      await chat.updateGoal(id, arg)
+      toast.success(t('chat.goal.' + (arg === 'clear' ? 'cleared' : arg === 'pause' ? 'paused' : 'resumed')))
+      executed({ id: 'goal' } as SlashCommand)
+      return
+    }
+    await chat.updateGoal(id, 'set', arg)
+    toast.success(t('chat.goal.set'))
+    executed({ id: 'goal' } as SlashCommand)
+  } catch (e) {
+    toast.error(t('chat.operationFailed'), e instanceof Error ? e.message : String(e))
+  }
+}
+
 function pickSlash(cmd: SlashCommand): void {
   slashOpen.value = false
   // 全部命令统一双保险反馈：toast（右下角气泡）+ 输入框内联反馈条。
@@ -652,16 +704,27 @@ function pickSlash(cmd: SlashCommand): void {
       okAsync()
       break
     case 'trust': {
-      // 循环切换权限档位（confirm → auto → full），替代无动作提示
-      const cycle: PermissionLevel[] = ['confirm', 'auto', 'full']
+      // 循环切换执行模式（计划 → 需确认 → 自动 → 完全访问），替代无动作提示
+      const cycle: PermissionLevel[] = ['restricted', 'confirm', 'auto', 'full']
       const idx = cycle.indexOf(permissionLevel.value)
       const next = cycle[(idx + 1) % cycle.length]
-      const labelKey = PERMISSION_ITEMS.find((p) => p.value === next)?.labelKey ?? 'chat.perm.auto'
+      const labelKey = PERMISSION_ITEMS.find((p) => p.value === next)?.labelKey ?? 'chat.perm.confirm'
       emit('change-permission', next)
       toast.success(t('slash.trustHint', t(labelKey)))
       showCmdFeedback(`/trust · ${t(labelKey)}`)
       break
     }
+    case 'goal':
+      // 目标命令：留 "/goal " 前缀让用户接着输入描述，Enter 时 submit 拦截执行
+      draft.value = '/goal '
+      void nextTick(() => textareaRef.value?.focus())
+      okSync()
+      break
+    case 'side':
+      // 辅助对话：打开右栏面板，命令本身不作为消息发送
+      emit('side')
+      okSync()
+      break
     case 'context':
       window.dispatchEvent(new Event('workbaby:open-context'))
       okSync()
@@ -675,6 +738,13 @@ function pickSlash(cmd: SlashCommand): void {
       okAsync()
       break
     default:
+      // 自定义命令：提示词模板灌入输入框（$ARGUMENTS 占位由用户就地编辑）
+      if (cmd.prompt) {
+        draft.value = cmd.prompt
+        void nextTick(() => textareaRef.value?.focus())
+        okSync()
+        break
+      }
       // 后端命令：默认清空 + 提示。后端暂无专用接口的命令不会出现在面板
       toast.info(t('slash.picked', `/${cmd.id}`))
       showCmdFeedback(`/${cmd.id}`)

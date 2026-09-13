@@ -148,6 +148,9 @@ type CompressBoundary struct {
 	CutoffAt     int64    `json:"cutoff_at"`  // 压缩发生时间（ms）
 	RemovedMsgs  int      `json:"removed_msgs"`
 	RecoveryRefs []string `json:"recovery_refs,omitempty"` // 被折叠内容里的 tool_call_id 锚点
+	// Summary 压缩器产出的交接摘要（auto 压缩器为六段纪要；micro 为空）。
+	// 随边界下发前端：压缩分隔线据此展开「被折叠的轮次做了什么」。
+	Summary string `json:"summary,omitempty"`
 }
 
 // CompressorKey 压缩器标识（写进边界的 filter_key，用于区分是确定性折叠还是 LLM 摘要）。

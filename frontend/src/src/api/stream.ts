@@ -120,7 +120,9 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
           state: p.error ? 'error' : 'success',
           agent: p.agent ?? '',
           // 后端计量的真实执行耗时；缺失时 decoder 退回本地 started_at 差值
-          duration_ms: typeof p.duration_ms === 'number' ? p.duration_ms : undefined
+          duration_ms: typeof p.duration_ms === 'number' ? p.duration_ms : undefined,
+          // 工具结构化结果（knowledge_search 命中列表等）：来源卡直接消费
+          data: (p.data ?? undefined) as Record<string, unknown> | undefined
         }
       }
     case 'chat:subagent-start':
@@ -191,7 +193,8 @@ export function mapSSEEvent(name: string, data: unknown): ChatStreamEvent | null
         data: {
           removed_messages: p.removed_messages ?? 0,
           filter_key: p.filter_key ? String(p.filter_key) : '',
-          recovery_refs: Array.isArray(p.recovery_refs) ? p.recovery_refs.map(String) : []
+          recovery_refs: Array.isArray(p.recovery_refs) ? p.recovery_refs.map(String) : [],
+          summary: p.summary ? String(p.summary) : ''
         }
       }
     case 'chat:context-trimmed':

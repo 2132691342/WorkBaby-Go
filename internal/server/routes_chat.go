@@ -53,6 +53,25 @@ func registerChatRoutes(v1 *gin.RouterGroup, h *api.Handler) {
 		v, err := h.SetSessionPermission(c.Param("id"), req)
 		unwrap(c, v, err)
 	})
+	// 置顶 / 归档（侧栏管理；归档自动取消置顶）
+	v1.POST("/chat/sessions/:id/pin", func(c *gin.Context) {
+		var req domain.SessionPinREQ
+		if err := BindJSON(c, &req); err != nil {
+			Fail(c, err)
+			return
+		}
+		v, err := h.SetSessionPinned(c.Param("id"), req)
+		unwrap(c, v, err)
+	})
+	v1.POST("/chat/sessions/:id/archive", func(c *gin.Context) {
+		var req domain.SessionArchiveREQ
+		if err := BindJSON(c, &req); err != nil {
+			Fail(c, err)
+			return
+		}
+		v, err := h.SetSessionArchived(c.Param("id"), req)
+		unwrap(c, v, err)
+	})
 	v1.POST("/chat/sessions/:id/model", func(c *gin.Context) {
 		var req domain.ChatSessionModelREQ
 		if err := BindJSON(c, &req); err != nil {
@@ -69,6 +88,28 @@ func registerChatRoutes(v1 *gin.RouterGroup, h *api.Handler) {
 			return
 		}
 		Fail(c, h.SetSessionAgent(c.Param("id"), req))
+	})
+	v1.GET("/chat/sessions/:id/goal", func(c *gin.Context) {
+		v, err := h.GetSessionGoal(c.Param("id"))
+		unwrap(c, v, err)
+	})
+	v1.POST("/chat/sessions/:id/goal", func(c *gin.Context) {
+		var req domain.GoalREQ
+		if err := BindJSON(c, &req); err != nil {
+			Fail(c, err)
+			return
+		}
+		v, err := h.SetSessionGoal(c.Param("id"), req)
+		unwrap(c, v, err)
+	})
+	// 辅助对话（右栏并行小会话）：GET 返回已有的（null = 无），POST 幂等确保（无则建）
+	v1.GET("/chat/sessions/:id/side", func(c *gin.Context) {
+		v, err := h.GetSideConversation(c.Param("id"))
+		unwrap(c, v, err)
+	})
+	v1.POST("/chat/sessions/:id/side", func(c *gin.Context) {
+		v, err := h.EnsureSideConversation(c.Param("id"))
+		unwrap(c, v, err)
 	})
 	v1.POST("/chat/sessions/:id/delete", func(c *gin.Context) { Fail(c, h.DeleteSession(c.Param("id"))) })
 	v1.POST("/chat/sessions/delete-batch", func(c *gin.Context) {
@@ -223,7 +264,27 @@ func registerChatRoutes(v1 *gin.RouterGroup, h *api.Handler) {
 		Fail(c, h.RevokeApprovalGrant(c.Param("id")))
 	})
 	// 斜杠命令：元数据（命令面板）+ 需后端能力的动作
-	v1.GET("/chat/commands", func(c *gin.Context) { OK(c, h.ListChatCommands()) })
+	v1.GET("/chat/commands", func(c *gin.Context) {
+		v, err := h.ListChatCommands()
+		unwrap(c, v, err)
+	})
+	// 自定义斜杠命令（保存的提示词模板）：面板合并展示 + 设置页管理
+	v1.GET("/chat/commands/custom", func(c *gin.Context) {
+		v, err := h.ListCustomCommands()
+		unwrap(c, v, err)
+	})
+	v1.POST("/chat/commands/custom", func(c *gin.Context) {
+		var req domain.UserCommandREQ
+		if err := BindJSON(c, &req); err != nil {
+			Fail(c, err)
+			return
+		}
+		v, err := h.UpsertCustomCommand(req)
+		unwrap(c, v, err)
+	})
+	v1.POST("/chat/commands/custom/:name/delete", func(c *gin.Context) {
+		Fail(c, h.DeleteCustomCommand(c.Param("name")))
+	})
 	v1.POST("/chat/sessions/:id/compact", func(c *gin.Context) {
 		var req domain.CompactREQ
 		if err := BindJSON(c, &req); err != nil {

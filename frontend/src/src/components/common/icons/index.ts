@@ -91,6 +91,7 @@ import {
   Terminal,
   Webhook,
   Mail,
+  Pin,
 } from './custom'
 
 /**
@@ -152,6 +153,7 @@ export {
   Activity,
   Archive,
   AtSign,
+  Pin,
   Bot,
   Braces,
   Brain,

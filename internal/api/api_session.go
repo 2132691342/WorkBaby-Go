@@ -48,6 +48,24 @@ func (h *Handler) SetSessionPermission(id string, req domain.ChatSessionPermissi
 	return *s, nil
 }
 
+// SetSessionPinned 置顶/取消置顶。
+func (h *Handler) SetSessionPinned(id string, req domain.SessionPinREQ) (domain.ChatSessionRESP, error) {
+	s, err := h.chatSvc.SetSessionPinned(h.ctx, id, req.Pinned)
+	if err != nil {
+		return domain.ChatSessionRESP{}, err
+	}
+	return *s, nil
+}
+
+// SetSessionArchived 归档/取消归档。
+func (h *Handler) SetSessionArchived(id string, req domain.SessionArchiveREQ) (domain.ChatSessionRESP, error) {
+	s, err := h.chatSvc.SetSessionArchived(h.ctx, id, req.Archived)
+	if err != nil {
+		return domain.ChatSessionRESP{}, err
+	}
+	return *s, nil
+}
+
 // SetSessionModel 切换会话使用的 Provider/模型（参数展示与后续 run 跟随所选模型）。
 func (h *Handler) SetSessionModel(id string, req domain.ChatSessionModelREQ) (domain.ChatSessionRESP, error) {
 	s, err := h.chatSvc.UpdateSessionModel(h.ctx, id, &req)

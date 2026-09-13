@@ -159,7 +159,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const fontScale = ref(1)
   const backgroundUrl = ref<string | null>(null)
   const codeFont = ref<string>('JetBrains Mono')
-  const theme = ref<string>('light')
+  const theme = ref<string>('dark')
   const error = ref<string | null>(null)
   const loading = ref(false)
 
@@ -382,7 +382,8 @@ export const useSettingsStore = defineStore('settings', () => {
       const font = (g.appearance?.fontMono as string) || 'JetBrains Mono'
       codeFont.value = font
       applyCodeFontToDom(font)
-      applyTheme((g.theme as string) || 'light')
+      // 后端未存过主题时回退 dark：ZCode 式改版后暗色是默认外观
+      applyTheme((g.theme as string) || 'dark')
     } catch {
       backgroundUrl.value = null
     }

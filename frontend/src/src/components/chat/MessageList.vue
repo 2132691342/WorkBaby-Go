@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
-import { ChevronDown, Settings } from '@/components/common/icons'
+import { ChevronDown, Settings, Archive } from '@/components/common/icons'
 import type { Message } from '@/types/api'
 import { t } from '@/i18n'
 import { Sparkles, FileText, Code2, Clock, BookOpen } from '@/components/common/icons'
@@ -39,8 +39,12 @@ const quickPrompts: { title: string; text: string; icon: unknown }[] = [
   }
 ]
 
-defineEmits<{
+const emit = defineEmits<{
   useQuickPrompt: [text: string]
+  /** 划选引用：把选中的对话文字作为引用追加到输入框（ZCode 式划选追问）。 */
+  quote: [text: string]
+  /** 划选引用 → 辅助对话：选中文字带到右栏辅助会话提问（不打断主任务）。 */
+  'quote-side': [text: string]
 }>()
 
 /**
@@ -176,6 +180,54 @@ function isNearCurrent(i: number): boolean {
   // 流式 + 最近添加 → 最后一条附近；空消息阶段（流开但还没首 token）放空也无所谓
   return i >= total - 1 - NEAR_WINDOW && i <= total - 1
 }
+
+// ===== 划选引用（ZCode 式划选追问）=====
+// 选中对话里的任意文字 → 选区旁浮出「添加到当前任务」→ 以引用块追加进输入框。
+const quoteBar = ref<{ x: number; y: number; text: string } | null>(null)
+
+/** 压缩纪要展开态与逐行拆分（六段纪要 [目标]/[进度]… 每行一条）。 */
+const sysOpen = ref(false)
+const compressedLines = computed(() =>
+  (chat.compressionNotice?.summary ?? '').split('\n').map((l) => l.trim()).filter(Boolean)
+)
+
+function onSelectionChange(): void {
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed || !scrollEl.value) {
+    quoteBar.value = null
+    return
+  }
+  const text = sel.toString().replace(/\s+/g, ' ').trim()
+  // 过短或过长都不浮出（引用是「追问锚点」，不是全文复制）
+  if (text.length < 2 || text.length > 500 || !scrollEl.value.contains(sel.anchorNode)) {
+    quoteBar.value = null
+    return
+  }
+  const rect = sel.getRangeAt(0).getBoundingClientRect()
+  const host = scrollEl.value.getBoundingClientRect()
+  quoteBar.value = {
+    x: Math.min(rect.left - host.left + rect.width / 2, host.width - 80),
+    y: rect.top - host.top - 34,
+    text
+  }
+}
+
+function onQuotePick(): void {
+  if (!quoteBar.value) return
+  emit('quote', quoteBar.value.text)
+  quoteBar.value = null
+  window.getSelection()?.removeAllRanges()
+}
+
+function onQuoteSidePick(): void {
+  if (!quoteBar.value) return
+  emit('quote-side', quoteBar.value.text)
+  quoteBar.value = null
+  window.getSelection()?.removeAllRanges()
+}
+
+onMounted(() => document.addEventListener('selectionchange', onSelectionChange))
+onBeforeUnmount(() => document.removeEventListener('selectionchange', onSelectionChange))
 </script>
 
 <template>
@@ -250,6 +302,28 @@ function isNearCurrent(i: number): boolean {
         </div>
       </div>
 
+      <!-- 上下文自动压缩分隔线：压缩发生在会话流中间，用居中系统行标记「这里之前的历史已被折叠」，
+           下次发送或切会话清除。auto 压缩器带交接纪要 → 行可展开，逐行看「被折叠的轮次做了什么」。 -->
+      <div v-if="chat.compressionNotice" class="wb-sys-wrap">
+        <component
+          :is="chat.compressionNotice.summary ? 'button' : 'div'"
+          :type="chat.compressionNotice.summary ? 'button' : undefined"
+          class="wb-sysline"
+          :class="{ 'is-clickable': !!chat.compressionNotice.summary }"
+          @click="chat.compressionNotice.summary && (sysOpen = !sysOpen)"
+        >
+          <Archive class="h-3 w-3" />
+          <span>{{ t('chat.compressedSeparator', chat.compressionNotice.removed) }}</span>
+          <template v-if="chat.compressionNotice.summary">
+            <span class="wb-sys-act">{{ sysOpen ? t('chat.compressedHide') : t('chat.compressedView') }}</span>
+            <ChevronDown class="h-3 w-3 transition-transform" :class="sysOpen ? 'rotate-180' : ''" />
+          </template>
+        </component>
+        <div v-if="sysOpen && chat.compressionNotice.summary" class="wb-sys-detail">
+          <p v-for="(line, li) in compressedLines" :key="li" class="wb-sys-line">{{ line }}</p>
+        </div>
+      </div>
+
       <!-- 流式中的 assistant 气泡 -->
       <div v-if="streaming" class="flex justify-start">
         <AssistantAvatar class="mr-3" speaking />
@@ -289,6 +363,20 @@ function isNearCurrent(i: number): boolean {
       />
     </div>
 
+    <!-- 划选引用浮层：选中对话文字后出现在选区上方（追问 / 辅助对话两个动作） -->
+    <div
+      v-if="quoteBar"
+      class="quote-bar"
+      :style="{ left: quoteBar.x + 'px', top: quoteBar.y + 'px' }"
+    >
+      <button type="button" class="quote-bar-btn" @mousedown.prevent @click="onQuotePick">
+        {{ t('chat.quoteAdd') }}
+      </button>
+      <button type="button" class="quote-bar-btn is-side" @mousedown.prevent @click="onQuoteSidePick">
+        {{ t('side.quoteAsk') }}
+      </button>
+    </div>
+
     <!-- 滚动到底部按钮：fixed 定位确保不被 overflow 容器裁剪，bottom-24 抬到 composer 上方（不重叠） -->
     <el-button
       v-if="!pinned"
@@ -318,5 +406,36 @@ function isNearCurrent(i: number): boolean {
 /* 轮首（user 消息）是一轮的锚点：跳转定位时留出顶部余量，标题不被滚动位置压住 */
 .wb-msg-item-lead {
   scroll-margin-top: 1.5rem;
+}
+/* 划选引用浮层：小工具条（两个动作：追加到当前任务 / 辅助对话提问），
+   Mousedown prevent 防止点击时清掉选区 */
+.quote-bar {
+  position: absolute;
+  z-index: 30;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--wb-border-strong);
+  background: var(--wb-surface);
+  box-shadow: var(--wb-shadow-lg);
+  white-space: nowrap;
+}
+.quote-bar-btn {
+  border: 0;
+  background: transparent;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: var(--wb-ink);
+  font-size: 11px;
+  cursor: pointer;
+}
+.quote-bar-btn:hover {
+  background: var(--wb-surface-hover);
+  color: var(--wb-primary-strong);
+}
+.quote-bar-btn.is-side:hover {
+  color: var(--wb-mint);
 }
 </style>

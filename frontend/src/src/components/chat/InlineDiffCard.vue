@@ -5,7 +5,8 @@ import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
 import { useDialog } from '@/composables/useDialog'
 import { useToast } from '@/composables/useToast'
-import { diffLineClass, parseDiffLines } from '@/chat/models/blocks'
+import DiffView from '@/components/chat/DiffView.vue'
+import { parseDiffRows } from '@/chat/models/blocks'
 import type { FileChange, FileChangeDetail } from '@/types/api'
 
 /**
@@ -46,7 +47,7 @@ async function toggle(): Promise<void> {
   }
 }
 
-const diffLines = computed(() => (detail.value?.diff ? parseDiffLines(detail.value.diff) : []))
+const diffRows = computed(() => (detail.value?.diff ? parseDiffRows(detail.value.diff).length : 0))
 
 /** 动作 → 展示标签（与 FileChangesPanel 同一套 i18n 键，口径一致）。 */
 const actionLabel = computed(() => t(`changes.action.${props.change.action}`))
@@ -95,12 +96,11 @@ async function rollback(): Promise<void> {
 
     <div v-if="open" class="wb-diffcard-bd">
       <p v-if="loading" class="wb-diffcard-hint">{{ t('common.loading') }}</p>
-      <pre v-else-if="diffLines.length > 0" class="wb-diffcard-diff"><span
-        v-for="(ln, li) in diffLines"
-        :key="li"
-        :class="diffLineClass(ln.type)"
-      >{{ ln.text }}
-</span></pre>
+      <DiffView
+        v-else-if="diffRows > 0"
+        :diff="detail?.diff ?? ''"
+        :max-height="288"
+      />
       <p v-else class="wb-diffcard-hint">{{ t('changes.diffEmpty') }}</p>
     </div>
   </div>
@@ -220,18 +220,6 @@ async function rollback(): Promise<void> {
   padding: 8px 10px;
   font-size: 11px;
   color: var(--wb-muted);
-}
-/* diff 正文：等宽 + 限高内滚，长文件不把整条消息撑爆 */
-.wb-diffcard-diff {
-  max-height: 18rem;
-  overflow: auto;
-  overscroll-behavior: contain;
-  margin: 0;
-  padding: 6px 0;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.6;
-  white-space: pre;
 }
 @keyframes wb-diffcard-in {
   from {

@@ -8,13 +8,16 @@
 import { computed, ref, watch } from 'vue'
 import { Brain, Sparkles, Loader2, Square, Check, X, ChevronDown } from '@/components/common/icons'
 import { t } from '@/i18n'
-import { looksLikeDiff, parseDiffLines, diffLineClass } from '@/chat/models/blocks'
+import { looksLikeDiff } from '@/chat/models/blocks'
 import { toolIcon, toolLabel } from '@/chat/models/toolVisuals'
+import { traceIcon, traceKind, traceTarget, traceDelegateAgent, countDiffLines } from '@/chat/models/toolTrace'
 import type { ResolvedBlock } from '@/chat/models/blocks'
 import type { StreamingBlock } from '@/chat/models/streamingBlocks'
 import type { UiNode } from '@/components/genui/GenUiRenderer.vue'
 import GenUiRenderer from '@/components/genui/GenUiRenderer.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import DiffView from '@/components/chat/DiffView.vue'
+import KnowledgeHits, { type KnowledgeHit } from '@/components/chat/KnowledgeHits.vue'
 
 const props = defineProps<{
   /** 历史块序列（来自 chat.models.blocks）。 */
@@ -49,7 +52,7 @@ interface RenderBlock {
   /** tool_call 块。 */
   call?: { id: string; name: string; arguments: string }
   /** tool_result 块。 */
-  result?: { toolCallId: string; name: string; content: string; error?: string; durationMs?: number; refused?: boolean; uiHint?: string }
+  result?: { toolCallId: string; name: string; content: string; error?: string; durationMs?: number; refused?: boolean; uiHint?: string; data?: Record<string, unknown> | null }
   /** skill 块。 */
   skill?: Record<string, unknown>
   /** artifact 块。 */
@@ -80,7 +83,8 @@ const renderBlocks = computed<RenderBlock[]>(() => {
           error: typeof b.data.error === 'string' ? b.data.error : undefined,
           durationMs: typeof b.data.duration_ms === 'number' ? b.data.duration_ms : undefined,
           refused: b.data.refused === true,
-          uiHint: typeof b.data.ui_hint === 'string' ? b.data.ui_hint : undefined
+          uiHint: typeof b.data.ui_hint === 'string' ? b.data.ui_hint : undefined,
+          data: (b.data.data ?? null) as Record<string, unknown> | null
         }
       } else if (b.kind === 'skill' && b.data) {
         rb.skill = b.data
@@ -108,7 +112,8 @@ const renderBlocks = computed<RenderBlock[]>(() => {
           content: b.text,
           error: typeof b.data?.error === 'string' ? b.data.error : undefined,
           durationMs: b.durationMs,
-          refused: b.state === 'refused'
+          refused: b.state === 'refused',
+          data: (b.data?.data ?? null) as Record<string, unknown> | null
         }
         rb.running = b.state === 'running'
       } else if (b.kind === 'skill') {
@@ -183,34 +188,6 @@ function isError(b: RenderBlock): boolean {
   return !!b.result?.error && !b.result.refused
 }
 
-/** 工具调用 args → 一行摘要（沿用 TaskTimeline.argSummary 口径：从 JSON 提取 path/command/url/query 等关键字段）。
- *  返回空表示不显示摘要（工具头部只展示名字）。 */
-function argSummary(b: RenderBlock): string {
-  if (!b.call?.arguments) return ''
-  // 子 Agent 委派卡有专属渲染，跳过摘要
-  if (b.call.name === 'delegate_task') return ''
-  let o: Record<string, unknown>
-  try {
-    o = JSON.parse(b.call.arguments) as Record<string, unknown>
-  } catch {
-    return oneLine(b.call.arguments, 56)
-  }
-  const preferred = ['path', 'file_path', 'command', 'url', 'query', 'pattern', 'name', 'task', 'input', 'content']
-  for (const k of preferred) {
-    const v = o[k]
-    if (typeof v === 'string' && v.trim()) return oneLine(v, 56)
-  }
-  for (const v of Object.values(o)) {
-    if (typeof v === 'string' && v.trim()) return oneLine(v, 56)
-  }
-  return ''
-}
-
-function oneLine(s: string, max: number): string {
-  const one = s.replace(/\s+/g, ' ').trim()
-  return one.length > max ? `${one.slice(0, max)}…` : one
-}
-
 /** 工具结果的内容展示：识别行列表（file_list / doc_reader 等多行输出）按行渲染；其余按原文。 */
 function toolResultLines(content: string): string[] {
   if (!content) return []
@@ -228,6 +205,37 @@ function toggle(b: RenderBlock): void {
   const next = new Map(localOpen.value)
   next.set(key, !isOpen(b))
   localOpen.value = next
+}
+
+// ===== ZCode 式动词叙事：一行 = 动词 + 目标 + 增删徽标 =====
+/** 迹线动词（i18n key tool.verb.*）。 */
+function unitVerb(b: RenderBlock): string {
+  return t(`tool.verb.${traceKind(b.call?.name ?? b.result?.name)}`)
+}
+/** 迹线图标（按动词类别，弱化具体工具差异）。 */
+function unitIcon(b: RenderBlock) {
+  return traceIcon(b.call?.name ?? b.result?.name)
+}
+/** 迹线目标：文件名为主 / 命令 / 查询词（从 args 结构化提取）。 */
+function unitTarget(b: RenderBlock) {
+  return b.call ? traceTarget(b.call.arguments) : null
+}
+/** 委派行的子代理名。 */
+function unitAgent(b: RenderBlock): string {
+  return b.call?.name === 'delegate_task' ? traceDelegateAgent(b.call.arguments) : ''
+}
+/** 增删徽标：结果内容是 diff 时统计 +/- 行数（无增删返回 null 不显示）。 */
+function unitDelta(b: RenderBlock): { added: number; removed: number } | null {
+  const content = b.result?.content
+  if (!content || !(b.result?.uiHint === 'diff' || looksLikeDiff(content))) return null
+  const c = countDiffLines(content)
+  return c.added > 0 || c.removed > 0 ? c : null
+}
+
+/** 知识库检索的结构化命中（data.hits；缺失/形状不符返回空数组走原始文本渲染）。 */
+function knowledgeHits(b: RenderBlock): KnowledgeHit[] {
+  const hits = b.result?.data?.hits
+  return Array.isArray(hits) ? (hits as KnowledgeHit[]) : []
 }
 
 // ===== 思考面板：thinking 块在流式中自动展开；其他默认折叠 =====
@@ -274,8 +282,8 @@ watch(
         </slot>
       </div>
 
-      <!-- 工具单元：tool_call 与 result 配对，单一头部 + 展开区。
-           流式期 running → 头部 spinner；成功 → 绿勾；refused → 黄 X；error → 红方块。 -->
+      <!-- 工具单元：tool_call 与 result 配对，ZCode 式动词迹线（动词 + 目标 + Δ徽标）+ 展开区。
+           流式期 running → 头部 spinner；成功 → 绿勾；refused → 黄 X；error → 红方块 + 执行失败。 -->
       <div v-else-if="b.kind === 'tool_call' && b.call" class="wb-block-tool wb-tool" :class="{ open: isOpen(b), err: isError(b) }">
         <button
           type="button"
@@ -290,33 +298,54 @@ watch(
             <Square v-else-if="b.result && b.result.error" class="wb-fail" />
             <Square v-else class="wb-pend" />
           </span>
-          <component :is="toolIcon(b.call.name)" class="wb-ic text-wb-primary-strong" />
-          <span class="wb-tool-nm" :title="b.call.name">{{ toolLabel(b.call.name) }}</span>
-          <!-- 关键参数摘要（path / command / url / query ...）—— 不展开也能看到工具在干啥 -->
-          <span v-if="argSummary(b)" class="wb-tool-arg" :title="argSummary(b)">{{ argSummary(b) }}</span>
+          <component :is="unitIcon(b)" class="wb-ic" />
+          <span class="wb-tool-verb">{{ unitVerb(b) }}</span>
+          <!-- 委派：目标是子代理名 + 一行任务 -->
+          <template v-if="b.call.name === 'delegate_task'">
+            <span class="wb-tool-tgt-main">{{ unitAgent(b) }}</span>
+            <span v-if="unitTarget(b)?.main" class="wb-tool-tgt-sub" :title="unitTarget(b)!.main">{{ unitTarget(b)!.main }}</span>
+          </template>
+          <!-- 常规：文件名粗体 + 目录淡色 / 命令 / 查询词 -->
+          <template v-else-if="unitTarget(b)">
+            <span class="wb-tool-tgt-main">{{ unitTarget(b)!.main }}</span>
+            <span v-if="unitTarget(b)!.sub" class="wb-tool-tgt-sub">{{ unitTarget(b)!.sub }}</span>
+          </template>
+          <span v-if="!unitTarget(b)" class="wb-tool-nm" :title="b.call.name">{{ toolLabel(b.call.name) }}</span>
+          <span v-if="unitDelta(b)" class="wb-tool-delta">
+            <span v-if="unitDelta(b)!.added" class="add">+{{ unitDelta(b)!.added }}</span>
+            <span v-if="unitDelta(b)!.removed" class="del">-{{ unitDelta(b)!.removed }}</span>
+          </span>
           <span v-if="b.result?.durationMs != null" class="wb-tool-ms">
             {{ (b.result.durationMs / 1000).toFixed(1) }}s
           </span>
+          <span v-if="isError(b)" class="wb-tool-failed">{{ t('chat.execFailed') }}</span>
+          <ChevronDown v-if="isExpandable(b)" class="wb-tool-chev" :class="{ rotate: isOpen(b) }" />
         </button>
         <div v-if="isOpen(b) && (b.call.arguments || b.result?.content)" class="wb-tool-bd">
           <p v-if="b.call.arguments" class="wb-tool-lb">args</p>
           <pre v-if="b.call.arguments" class="wb-tool-pre"><code>{{ b.call.arguments }}</code></pre>
-          <p v-if="b.result?.content" class="wb-tool-lb">result</p>
-          <!-- 多行结果按行展示（file_list / doc_reader 等） -->
-          <ul v-if="b.result?.content && toolResultLines(b.result.content).length > 1" class="wb-tool-lines">
-            <li v-for="(ln, li) in toolResultLines(b.result.content)" :key="li">
-              <span v-if="b.result && b.result.name === 'file_list'" class="wb-tool-line-path">📄</span>
-              <span v-else-if="b.result && b.result.name === 'file_glob'" class="wb-tool-line-path">🔍</span>
-              <code>{{ ln }}</code>
-            </li>
-          </ul>
-          <pre v-else-if="b.result?.content && (b.result.uiHint === 'diff' || looksLikeDiff(b.result.content))" class="wb-tool-pre"><span
-              v-for="(ln, li) in parseDiffLines(b.result.content)"
-              :key="li"
-              :class="diffLineClass(ln.type)"
-            >{{ ln.text }}
-</span></pre>
-          <pre v-else-if="b.result?.content" class="wb-tool-pre">{{ b.result.content }}</pre>
+          <template v-if="b.result?.content">
+            <p class="wb-tool-lb">result</p>
+            <!-- 知识库检索：结构化命中 → 来源卡（可展开全文），替代文本墙 -->
+            <KnowledgeHits
+              v-if="b.result.name === 'knowledge_search' && knowledgeHits(b).length > 0"
+              :hits="knowledgeHits(b)"
+            />
+            <!-- 多行结果按行展示（file_list / doc_reader 等） -->
+            <ul v-else-if="b.result?.content && toolResultLines(b.result.content).length > 1 && !(b.result.uiHint === 'diff' || looksLikeDiff(b.result.content))" class="wb-tool-lines">
+              <li v-for="(ln, li) in toolResultLines(b.result.content)" :key="li">
+                <span v-if="b.result && b.result.name === 'file_list'" class="wb-tool-line-path">📄</span>
+                <span v-else-if="b.result && b.result.name === 'file_glob'" class="wb-tool-line-path">🔍</span>
+                <code>{{ ln }}</code>
+              </li>
+            </ul>
+            <DiffView
+              v-else-if="b.result?.content && (b.result.uiHint === 'diff' || looksLikeDiff(b.result.content))"
+              :diff="b.result.content"
+              :max-height="224"
+            />
+            <pre v-else-if="b.result?.content" class="wb-tool-pre">{{ b.result.content }}</pre>
+          </template>
         </div>
       </div>
 
@@ -432,6 +461,56 @@ watch(
 .wb-ic {
   width: 13px;
   height: 13px;
+  color: var(--wb-muted);
+}
+/* ZCode 动词叙事：动词弱色、目标文件名亮色、目录淡色 mono */
+.wb-tool-verb {
+  font-size: 12px;
+  color: var(--wb-muted);
+}
+.wb-tool-tgt-main {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--wb-ink);
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-tool-tgt-sub {
+  font-size: 10.5px;
+  color: var(--wb-muted);
+  font-family: var(--font-mono);
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-tool-delta {
+  display: inline-flex;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.wb-tool-delta .add {
+  color: var(--wb-mint);
+}
+.wb-tool-delta .del {
+  color: var(--wb-danger);
+}
+.wb-tool-failed {
+  font-size: 10.5px;
+  color: var(--wb-danger);
+}
+.wb-tool-chev {
+  width: 11px;
+  height: 11px;
+  color: var(--wb-muted);
+  transition: transform 0.18s ease;
+}
+.wb-tool-chev.rotate {
+  transform: rotate(180deg);
 }
 .wb-tool-nm {
   font-size: 11.5px;
@@ -503,15 +582,6 @@ watch(
   flex: none;
   font-size: 10px;
   opacity: 0.7;
-}
-.wb-tool-arg {
-  font-size: 10.5px;
-  color: var(--wb-muted);
-  font-family: ui-monospace, monospace;
-  max-width: 28rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .wb-tool.err .wb-tool-hd {
   background: color-mix(in srgb, var(--wb-danger) 8%, transparent);

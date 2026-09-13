@@ -6,6 +6,7 @@ import type {
   ChatStreamEvent,
   FileChange,
   PendingApproval,
+  SessionGoal,
   SkillHit,
   TodoStateRESP
 } from '@/types/api'
@@ -56,7 +57,7 @@ export interface StreamEventUpdate {
   /** 流式块增量（按事件到达顺序）；与 appendContent/addTool/updateTool 并发维护 streamingBlocks。 */
   blockAppend?: { kind: 'thinking' | 'text'; text: string }
   blockToolCall?: { id: string; name: string; arguments?: string; agent?: string; activity?: string }
-  blockToolResult?: { id: string; name: string; content?: string; error?: string; duration_ms?: number; refused?: boolean }
+  blockToolResult?: { id: string; name: string; content?: string; error?: string; duration_ms?: number; refused?: boolean; data?: Record<string, unknown> | null }
   blockSkill?: { name: string; source?: string; description?: string; tools?: string[]; injected_chars?: number }
   blockArtifact?: { name: string; data: Record<string, unknown> }
   blockGenUi?: UiNode
@@ -87,12 +88,15 @@ export interface StreamEventUpdate {
   pushFileChange?: FileChange
   /** 工件登记事件（file_write 旁路自动 upsert）。 */
   pushArtifact?: Artifact
-  /** 自动上下文压缩（chat:compressed）：告知用户历史已被折叠，不是内容丢了。 */
-  setCompressed?: { removed_messages: number; filter_key?: string; recovery_refs?: string[] }
+  /** 自动上下文压缩（chat:compressed）：告知用户历史已被折叠，不是内容丢了。
+   *  summary 是压缩器产出的交接纪要（auto 六段摘要；micro 为空），分隔线展开可见。 */
+  setCompressed?: { removed_messages: number; filter_key?: string; recovery_refs?: string[]; summary?: string }
   /** 上下文按预算裁剪（chat:context-trimmed）：system 段被丢，回答质量下降需可解释。 */
   setContextTrimmed?: { dropped_segments: string[]; budget_runes: number }
   /** 越界告警（chat:warn）：副作用落到了 .workbaby/ 之外，强制 toast 提示用户清理。 */
   setWarn?: { kind: string; message: string; rel_path: string; path: string }
+  /** 会话目标状态推送（chat:goal）；null = 目标已清除。 */
+  setGoal?: SessionGoal | null
   /** 后台任务生命周期事件（task:created/started/done）。 */
   upsertTask?: BackgroundTask
   /** 子 Agent 生命周期（subagent_start/done/error）：按 id 合并状态，不整体替换。 */
@@ -141,27 +145,28 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
         blockToolCall: { id: d.id, name: d.name, arguments: d.arguments, agent: d.agent, activity: d.activity }
       }
     }
-    case 'tool_result': {
-      if (!data || typeof data !== 'object') return null
-      const d = data as { id: string; name: string; output: string; state: string; agent?: string; duration_ms?: number; refused?: boolean }
-      const update: StreamEventUpdate = {
-        updateTool: {
-          id: d.id,
-          name: d.name,
-          result: d.output,
-          success: d.state === 'success',
-          agent: d.agent || undefined,
-          duration_ms: d.duration_ms
-        },
-        blockToolResult: {
-          id: d.id,
-          name: d.name,
-          content: d.output,
-          error: d.state !== 'success' && !d.refused ? d.output : undefined,
-          duration_ms: d.duration_ms,
-          refused: d.refused === true
-        }
-      }
+        case 'tool_result': {
+          if (!data || typeof data !== 'object') return null
+          const d = data as { id: string; name: string; output: string; state: string; agent?: string; duration_ms?: number; refused?: boolean; data?: Record<string, unknown> }
+          const update: StreamEventUpdate = {
+            updateTool: {
+              id: d.id,
+              name: d.name,
+              result: d.output,
+              success: d.state === 'success',
+              agent: d.agent || undefined,
+              duration_ms: d.duration_ms
+            },
+            blockToolResult: {
+              id: d.id,
+              name: d.name,
+              content: d.output,
+              error: d.state !== 'success' && !d.refused ? d.output : undefined,
+              duration_ms: d.duration_ms,
+              refused: d.refused === true,
+              data: d.data ?? null
+            }
+          }
       // 修复：gen_ui 工具结果同步解析 UiTree（避免 store 二次解析）
       if (d.name === 'gen_ui' && d.output) {
         try {
@@ -205,6 +210,11 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
           const d = data as { state?: TodoStateRESP }
           return d.state ? { setTodo: d.state } : null
         }
+        case 'goal': {
+          if (!data || typeof data !== 'object') return null
+          const d = data as { goal?: SessionGoal | null }
+          return { setGoal: d.goal ?? null }
+        }
         case 'file_change': {
           if (!data || typeof data !== 'object') return null
           const d = data as { change?: FileChange }
@@ -222,12 +232,13 @@ export function decodeStreamEvent(event: ChatStreamEvent, now: number = Date.now
         }
         case 'compressed': {
           if (!data || typeof data !== 'object') return null
-          const d = data as { removed_messages?: number; filter_key?: string; recovery_refs?: string[] }
+          const d = data as { removed_messages?: number; filter_key?: string; recovery_refs?: string[]; summary?: string }
           return {
             setCompressed: {
               removed_messages: d.removed_messages ?? 0,
               filter_key: d.filter_key ?? '',
-              recovery_refs: Array.isArray(d.recovery_refs) ? d.recovery_refs : []
+              recovery_refs: Array.isArray(d.recovery_refs) ? d.recovery_refs : [],
+              summary: typeof d.summary === 'string' ? d.summary : ''
             }
           }
         }
@@ -395,7 +406,8 @@ export function applyStreamUpdate(
         content: tr.content,
         error: tr.error,
         durationMs: tr.duration_ms,
-        refused: tr.refused
+        refused: tr.refused,
+        data: tr.data ?? null
       })
     }
     if (update.blockSkill) {

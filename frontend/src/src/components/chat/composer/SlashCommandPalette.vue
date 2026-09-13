@@ -20,7 +20,8 @@ import {
   Bot,
   Shield,
   Cpu,
-  Sparkles
+  Sparkles,
+  MessageSquare
 } from '@/components/common/icons'
 import { t } from '@/i18n'
 
@@ -43,8 +44,10 @@ export interface SlashCommand {
   args?: string
   /** 是否纯前端命令（无后端接口）。 */
   clientOnly?: boolean
-  /** 命令分组（session/model/agent/system）。 */
+  /** 命令分组（session/model/agent/system/custom）。 */
   group?: string
+  /** 自定义命令的提示词模板（group=custom；选中即灌入输入框）。 */
+  prompt?: string
 }
 
 const props = defineProps<{
@@ -79,11 +82,12 @@ const LOCAL_COMMANDS: SlashCommand[] = [
   { id: 'context', labelKey: 'slash.context', descKey: 'slash.contextDesc', icon: Cpu, group: 'system' },
   { id: 'help', labelKey: 'slash.help', descKey: 'slash.helpDesc', icon: Sparkles, group: 'system' },
   { id: 'agent', labelKey: 'slash.agent', descKey: 'slash.agentDesc', icon: Bot, group: 'agent' },
-  { id: 'trust', labelKey: 'slash.trust', descKey: 'slash.trustDesc', icon: Shield, group: 'agent' }
+  { id: 'trust', labelKey: 'slash.trust', descKey: 'slash.trustDesc', icon: Shield, group: 'agent' },
+  { id: 'side', labelKey: 'slash.side', descKey: 'slash.sideDesc', icon: MessageSquare, group: 'agent' }
 ]
 
 /** 后端命令 → SlashCommand（无 descKey/labelKey，用直接的 desc 字符串透传）。 */
-function backendToSlash(cmd: { name: string; args: string; desc: string; group: string; client_only: boolean }): SlashCommand {
+function backendToSlash(cmd: { name: string; args: string; desc: string; group: string; client_only: boolean; prompt?: string }): SlashCommand {
   const icon = groupIcon(cmd.group)
   return {
     id: cmd.name,
@@ -94,7 +98,8 @@ function backendToSlash(cmd: { name: string; args: string; desc: string; group: 
     clientOnly: cmd.client_only,
     group: cmd.group,
     label: cmd.name,
-    desc: cmd.desc
+    desc: cmd.desc,
+    prompt: cmd.prompt
   } as SlashCommand
 }
 

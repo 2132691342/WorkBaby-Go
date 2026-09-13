@@ -1,30 +1,16 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, RouterView } from 'vue-router'
 import { EventsOn, WindowMinimise, WindowToggleMaximise, Quit } from '@/wailsjs/runtime/runtime'
 import { init as initI18n, setLocale, t, currentLocale } from '@/i18n'
 import {
-  MessageSquare,
-  GitBranch,
-  ListTree,
-  Clock,
-  BookOpen,
-  ScrollText,
-  Settings,
   Bot,
-  Brain,
-  LayoutDashboard,
-  LayoutGrid,
-  Server,
-  Zap,
-  File,
-  Folder,
-  Wrench,
-  Radio,
-  PawPrint,
-  ArrowRight,
   Plus,
-  Activity
+  Search,
+  Clock,
+  Settings,
+  Folder,
+  ArrowRight
 } from '@/components/common/icons'
 import { storeToRefs } from 'pinia'
 import { UploadFile } from '@/wailsjs/go/main/App'
@@ -41,11 +27,13 @@ import { openPalette } from '@/composables/useCommandPalette'
 import { bootstrapServer } from '@/api/bootstrap'
 
 /**
- * 应用外壳（照 prd/WorkBaby-UI-Prototype.html 还原）：
- * 自绘标题栏（frameless）+ 侧栏（主导航 / 资源 / 工作区 / 系统四组 + 折叠）+ RouterView。
+ * 应用外壳（ZCode 式极简布局）：
+ * 自绘标题栏（frameless）+ 极简左栏（新建任务 / 搜索 / 自动化 + 任务列表 + 底部设置）+ RouterView。
  *
- * <p>样式全部来自 wb-ui.css 设计系统层（.win / .titlebar / .side / .nav-item …）。
- * 会话列表归聊天页自持（原型 .ses 列），外壳不再常驻；`/pet/desktop` 独立窗口跳过外壳。
+ * <p>样式全部来自 wb-ui.css 设计系统层（.win / .titlebar / .side / .rail-* …）。
+ * 功能页（记忆 / 知识库 / 技能 / MCP / 工具 / 工作流 / 统计 / 运行 / 文件 …）
+ * 全部收进设置中心（/settings 左导航多 tab），旧路由重定向，外壳只保留任务主链路。
+ * `/pet/desktop` 独立窗口跳过外壳。
  * 启动即进（去账号化）：bootstrapServer 成功才挂载业务视图，失败给可见错误态。
  */
 const route = useRoute()
@@ -56,6 +44,7 @@ const ready = ref(false)
 const booting = ref(true)
 /** 桌宠独立窗口路由：跳过 AppShell。 */
 const isPetDesktop = computed(() => route.path === '/pet/desktop')
+/** 左栏整体收起（Ctrl+B；ZCode 式全隐而不是图标条）。 */
 const collapsed = ref(false)
 /** 本机会话令牌换取失败（后端未就绪 / 端口不对）时的错误提示。 */
 const bootError = ref<string | null>(null)
@@ -64,63 +53,24 @@ const bootError = ref<string | null>(null)
 const settings = useSettingsStore()
 const { backgroundUrl } = storeToRefs(settings)
 
-// 会话（侧栏下半区常驻：新建 + 历史）
+// 任务列表（左栏主体）
 const dialog = useDialog()
 const chat = useChatStore()
 const { sessions, currentID, loadingSessions } = storeToRefs(chat)
+/** 任务列表展示模式：分组（按时间）/ 平铺。 */
+const listFlat = ref(false)
 
-interface NavItem {
-  id: string
-  to: string
-  labelKey: string
-  icon: Component
-  /** 角标计数（可选；当前仅聊天接线会话数）。 */
-  count?: () => number
-}
+/** 标题栏主标题：当前任务名；设置页显示「设置」。 */
+const tbTitle = computed(() => {
+  if (route.path.startsWith('/settings')) return t('settings.title')
+  const cur = sessions.value.find((s) => s.id === currentID.value)
+  return cur?.name || 'WorkBaby'
+})
 
-const mainNav: NavItem[] = [
-  { id: 'home', to: '/home', labelKey: 'nav.overview', icon: LayoutGrid },
-  { id: 'chat', to: '/chat', labelKey: 'nav.chat', icon: MessageSquare, count: () => sessions.value.length },
-  { id: 'workflows', to: '/workflows', labelKey: 'nav.workflows', icon: GitBranch },
-  { id: 'tasks', to: '/tasks', labelKey: 'nav.tasks', icon: ListTree },
-  { id: 'cron', to: '/cron', labelKey: 'nav.cron', icon: Clock },
-  { id: 'dashboard', to: '/dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard },
-  { id: 'runs', to: '/runs', labelKey: 'nav.runs', icon: Activity }
-]
-
-const resourceNav: NavItem[] = [
-  { id: 'memory', to: '/memory', labelKey: 'nav.memory', icon: Brain },
-  { id: 'kdocs', to: '/kdocs', labelKey: 'nav.knowledge', icon: BookOpen },
-  { id: 'skills', to: '/skills', labelKey: 'nav.skills', icon: Zap },
-  { id: 'mcp', to: '/mcp', labelKey: 'nav.mcp', icon: Server }
-]
-
-const workspaceNav: NavItem[] = [
-  { id: 'files', to: '/files', labelKey: 'nav.files', icon: File },
-  { id: 'folders', to: '/folders', labelKey: 'nav.folders', icon: Folder },
-  { id: 'tools', to: '/tools', labelKey: 'nav.tools', icon: Wrench },
-  { id: 'channels', to: '/channels', labelKey: 'nav.channels', icon: Radio },
-  { id: 'pet', to: '/pet', labelKey: 'nav.pet', icon: PawPrint }
-]
-
-const systemNav: NavItem[] = [
-  { id: 'docs', to: '/docs', labelKey: 'nav.docs', icon: ScrollText },
-  { id: 'settings', to: '/settings', labelKey: 'nav.settings', icon: Settings }
-]
-
-/** 全局快捷键（Ctrl+N 新建会话 / Ctrl+K 命令面板 / Ctrl+/ 聚焦输入框 / Ctrl+Shift+P 命令面板
- *  / Ctrl+B 折叠侧栏 / Ctrl+Shift+F 焦点模式 — M3-4 快捷键体系）。 */
+// 全局快捷键（Ctrl+N 新建任务 / Ctrl+K 命令面板 / Ctrl+/ 聚焦输入框 / Ctrl+Shift+P 命令面板
+// / Ctrl+B 收起左栏 / Ctrl+Shift+F 焦点模式 — M3-4 快捷键体系）
 const { registerShortcut, clearAll: clearAllShortcuts } = useShortcuts()
 const focusMode = useFocusMode()
-
-/** 当前高亮导航项：/home 精确匹配，其余支持子路由（chat/:id），取最长前缀命中。 */
-const activePath = computed(() => {
-  const all = [...mainNav, ...resourceNav, ...workspaceNav, ...systemNav]
-  const hits = all.filter((i) =>
-    i.to === '/home' ? route.path === '/home' : route.path === i.to || route.path.startsWith(i.to + '/')
-  )
-  return hits.sort((a, b) => b.to.length - a.to.length)[0]?.to ?? ''
-})
 
 function navTo(to: string): void {
   void router.push(to)
@@ -157,12 +107,15 @@ function onReady(): void {
   chat.loadSessions()
 }
 
-// ===== 会话区操作（侧栏常驻） =====
+// ===== 任务列表操作（左栏常驻） =====
 const creating = ref(false)
 async function onCreateSession(): Promise<void> {
   creating.value = true
   try {
-    await chat.createSession(chat.selectedModelID)
+    const s = await chat.createSession(chat.selectedModelID)
+    if (route.name !== 'chat' && route.name !== 'chat-session') {
+      await router.push(`/chat/${s.id}`)
+    }
   } finally {
     creating.value = false
   }
@@ -197,17 +150,13 @@ async function onDeleteBatch(ids: string[]): Promise<void> {
   }
 }
 
-async function switchLang(lang: string | number | boolean): Promise<void> {
-  await setLocale(String(lang))
-}
-
-/** 侧栏底部语言快切：中 / EN 一键互换。 */
+/** 左栏底部语言快切：中 / EN 一键互换。 */
 async function toggleLang(): Promise<void> {
-  await switchLang(currentLocale.value === 'zh-CN' ? 'en-US' : 'zh-CN')
+  await setLocale(currentLocale.value === 'zh-CN' ? 'en-US' : 'zh-CN')
 }
 
 /** 桌宠模式：进入独立页前的路由记忆（pet:hide 后回到这里）。 */
-const savedMainRoute = ref('/home')
+const savedMainRoute = ref('/chat')
 watch(
   () => route.fullPath,
   (p) => {
@@ -304,7 +253,6 @@ async function recoverBoot(): Promise<void> {
   }
 }
 
-/** Ctrl+N：新建会话并跳转聊天页。 */
 async function onNewSessionShortcut(): Promise<void> {
   try {
     const s = await chat.createSession(chat.selectedModelID)
@@ -350,17 +298,20 @@ async function onNewSessionShortcut(): Promise<void> {
     </div>
   </div>
 
-  <!-- 应用外壳：titlebar + side + main -->
+  <!-- 应用外壳：titlebar + 极简左栏 + main -->
   <div v-else-if="ready" class="wb-ui win">
     <AppBackground :background-url="backgroundUrl" />
 
-    <!-- 自绘标题栏（frameless 拖拽区） -->
+    <!-- 自绘标题栏（frameless 拖拽区）：任务名 + 工作区 chip -->
     <div class="titlebar" style="--wails-draggable: drag">
       <div class="tb-mark">
         <Bot class="h-2.5 w-2.5" />
       </div>
-      <span class="tb-name">WorkBaby</span>
-      <span class="tb-path">{{ route.path }}</span>
+      <span class="tb-name truncate" :title="tbTitle">{{ tbTitle }}</span>
+      <span class="tb-chip">
+        <Folder class="h-3 w-3" />
+        WorkBaby
+      </span>
       <span class="tb-sp" />
       <div class="winctl" style="--wails-draggable: no-drag">
         <span title="最小化" @click="minWindow">
@@ -376,106 +327,60 @@ async function onNewSessionShortcut(): Promise<void> {
     </div>
 
     <div class="win-body">
-      <!-- 侧栏：四组导航 + 底部折叠 / 语言 / 设置 -->
-      <aside class="side" :class="{ collapsed }">
+      <!-- 极简左栏：快捷动作 + 任务列表 + 底部设置 -->
+      <aside v-show="!collapsed" class="side">
         <div class="side-brand">
           <div class="logo"><Bot class="h-4 w-4" /></div>
           <div>
             <b>WorkBaby</b>
             <small>{{ t('nav.localIdentityHint') }}</small>
           </div>
+          <button class="rail-collapse" :title="t('nav.collapseRail')" @click="collapsed = true">
+            <component :is="ArrowRight" class="h-3 w-3" />
+          </button>
         </div>
 
-        <nav class="side-nav">
-          <div class="nav-group">
-            <h4>{{ t('nav.navMain') }}</h4>
-            <button
-              v-for="item in mainNav"
-              :key="item.id"
-              class="nav-item"
-              :class="{ 'is-active': activePath === item.to }"
-              @click="navTo(item.to)"
-            >
-              <component :is="item.icon" class="ic" />
-              <span>{{ t(item.labelKey) }}</span>
-              <span v-if="item.count && item.count() > 0" class="cnt">{{ item.count() }}</span>
-            </button>
-          </div>
-
-          <div class="nav-group">
-            <h4>{{ t('nav.resources') }}</h4>
-            <button
-              v-for="item in resourceNav"
-              :key="item.id"
-              class="nav-item"
-              :class="{ 'is-active': activePath === item.to }"
-              @click="navTo(item.to)"
-            >
-              <component :is="item.icon" class="ic" />
-              <span>{{ t(item.labelKey) }}</span>
-            </button>
-          </div>
-
-          <div class="nav-group">
-            <h4>{{ t('nav.workspace') }}</h4>
-            <button
-              v-for="item in workspaceNav"
-              :key="item.id"
-              class="nav-item"
-              :class="{ 'is-active': activePath === item.to }"
-              @click="navTo(item.to)"
-            >
-              <component :is="item.icon" class="ic" />
-              <span>{{ t(item.labelKey) }}</span>
-            </button>
-          </div>
-
-          <div class="nav-group">
-            <h4>{{ t('nav.system') }}</h4>
-            <button
-              v-for="item in systemNav"
-              :key="item.id"
-              class="nav-item"
-              :class="{ 'is-active': activePath === item.to }"
-              @click="navTo(item.to)"
-            >
-              <component :is="item.icon" class="ic" />
-              <span>{{ t(item.labelKey) }}</span>
-            </button>
-          </div>
-        </nav>
-
-        <!-- 会话区（侧栏 40%：新建 + 历史，全页面常驻） -->
-        <div class="side-sessions">
-          <div class="ses-head">
-            <h3>{{ t('nav.sessions') }}</h3>
-            <button class="btn-icon" :title="t('chat.newSession')" @click="onCreateSession">
-              <Plus class="ic ic-sm" />
-            </button>
-          </div>
-          <SessionSidebar
-            class="ses-list"
-            :sessions="sessions"
-            :currentID="currentID"
-            :loading="loadingSessions"
-            :creating="creating"
-            @select="onSelectSession"
-            @create="onCreateSession"
-            @remove="onRemoveSession"
-            @delete-batch="onDeleteBatch"
-          />
+        <!-- 快捷动作：新建任务 / 搜索 / 自动化 -->
+        <div class="rail-actions">
+          <button class="rail-btn" :disabled="creating" @click="onCreateSession">
+            <span class="rail-ic"><Plus class="h-3.5 w-3.5" /></span>
+            <span class="flex-1 text-left">{{ t('nav.newTask') }}</span>
+            <kbd class="rail-kbd">Ctrl+N</kbd>
+          </button>
+          <button class="rail-btn" @click="openPalette">
+            <span class="rail-ic"><Search class="h-3.5 w-3.5" /></span>
+            <span class="flex-1 text-left">{{ t('nav.search') }}</span>
+            <kbd class="rail-kbd">Ctrl+K</kbd>
+          </button>
+          <button class="rail-btn" :class="{ 'is-active': route.path.startsWith('/cron') }" @click="navTo('/cron')">
+            <span class="rail-ic"><Clock class="h-3.5 w-3.5" /></span>
+            <span class="flex-1 text-left">{{ t('nav.automation') }}</span>
+          </button>
         </div>
+
+        <!-- 任务列表（分组 / 平铺由列表头切换） -->
+        <SessionSidebar
+          class="rail-list"
+          :sessions="sessions"
+          :currentID="currentID"
+          :loading="loadingSessions"
+          :creating="creating"
+          :flat="listFlat"
+          @select="onSelectSession"
+          @create="onCreateSession"
+          @remove="onRemoveSession"
+          @delete-batch="onDeleteBatch"
+          @toggle-flat="listFlat = !listFlat"
+          @pin="(id, pinned) => void chat.pinSession(id, pinned)"
+          @archive="(id, archived) => void chat.archiveSession(id, archived)"
+        />
 
         <div class="side-foot">
-          <button class="fi" :title="t('nav.collapseRail')" @click="collapsed = !collapsed">
-            <component :is="ArrowRight" class="ic ic-sm" :class="collapsed ? '' : 'rotate-180'" />
-            <span>{{ t('nav.collapseRail') }}</span>
-          </button>
           <button class="fi" :title="currentLocale === 'zh-CN' ? 'English' : '中文'" @click="toggleLang">
             <span class="ic ic-sm font-semibold">{{ currentLocale === 'zh-CN' ? 'EN' : '中' }}</span>
             <span>{{ currentLocale === 'zh-CN' ? 'EN' : '中文' }}</span>
           </button>
-          <button class="fi" @click="navTo('/settings')">
+          <button class="fi" :class="{ 'is-active': route.path.startsWith('/settings') }" @click="navTo('/settings')">
             <Settings class="ic ic-sm" />
             <span>{{ t('nav.settings') }}</span>
           </button>

@@ -56,7 +56,12 @@
 | POST | /chat/sessions/:id/todos/:itemID/toggle | 勾选待办 |
 | POST | /chat/sessions/:id/compact | 压缩归档历史 |
 | GET | /chat/sessions/:id/usage/context | 上下文占用分段 |
-| GET | /chat/commands | 可用斜杠命令 |
+| GET | /chat/commands | 可用斜杠命令（内置 + 自定义合并；custom 项带 prompt 模板） |
+| GET/POST | /chat/commands/custom | 自定义命令列表 / 按 name upsert |
+| POST | /chat/commands/custom/:name/delete | 删除自定义命令 |
+| POST | /chat/sessions/:id/pin | 置顶/取消置顶 |
+| POST | /chat/sessions/:id/archive | 归档/取消归档（status 切换；归档自动取消置顶） |
+| GET/POST | /chat/sessions/:id/side | 辅助对话（GET 返回已有或 null；POST 幂等确保） |
 
 ### 流式运行
 

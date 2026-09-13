@@ -25,6 +25,8 @@ func Migrate(db *gorm.DB) error {
 		&domain.MemoryProcedureDO{},
 		&domain.InboxItemDO{},
 		&domain.SkillDO{},
+		&domain.AgentProfileDO{},
+		&domain.UserCommandDO{},
 		&domain.McpServerDO{},
 		&domain.KnowledgeDocDO{},
 		&domain.KnowledgeChunkDO{},

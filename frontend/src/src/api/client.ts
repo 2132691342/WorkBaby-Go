@@ -14,6 +14,7 @@ const KNOWN_PREFIXES = [
   '/api/v1/settings',
   '/api/v1/kv/',
   '/api/v1/skills',
+  '/api/v1/agent-profiles',
   '/api/v1/mcp/',
   '/api/v1/tools',
   '/api/v1/workflows',

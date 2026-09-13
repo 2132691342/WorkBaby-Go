@@ -37,6 +37,17 @@ func (r *runRegistry) delete(sessionID string) {
 	delete(r.runs, sessionID)
 }
 
+// deleteIf 仅当当前注册的 runID 与期望一致时才注销。
+// 目标模式自动续跑会在旧 run 尾部直接拉起新 run：旧 goroutine 的 defer
+// 若无条件 delete，会把新 run 的取消句柄一起删掉（停止按钮失灵）。
+func (r *runRegistry) deleteIf(sessionID, runID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.runs[sessionID]; ok && e.runID == runID {
+		delete(r.runs, sessionID)
+	}
+}
+
 // lookup 返回该会话当前活动 run 的 runID；无活动 run 返回 false。
 func (r *runRegistry) lookup(sessionID string) (string, bool) {
 	r.mu.Lock()

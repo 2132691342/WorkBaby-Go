@@ -21,6 +21,8 @@
 
 Persona = 各自定位 + 共享方法论段（先探查、先计划、最小改动、用工具验证结果、失败改道、不确定就问、成果必须可核验）。
 
+自定义子智能体（设置页「子智能体」CRUD，agent_profiles 表）与内置表同构：`AgentProfileService.Sync` 把 enabled 行物化成 Definition 整表替换进 harness 注册表（`harness.SetCustomAgents`），`Agent(name)` 查找顺序为内置 → 自定义 → 回退 default。delegate_task 委派、会话 /agent 切换、后台任务提交共用这一注册表；写操作（创建/启停/删除）即时重同步，下次 run 起生效。内置名（default/coding/research/writer）为保留名。
+
 ## 2. 上下文装配（ContextAssembler）
 
 - ContextPiece：Key（语义标识）/ Title / Body / Priority。

@@ -272,6 +272,68 @@ export function diffLineClass(type: DiffLine['type']): string {
   }
 }
 
+/** 带行号的 diff 行（DiffView 渲染用）：hunk 头解析出两侧起始行号后逐行推进。 */
+export interface DiffRow {
+  type: DiffLine['type']
+  text: string
+  /** 旧文件行号（del / ctx 有值；hunk 头与文件头为 null）。 */
+  oldNo: number | null
+  /** 新文件行号（add / ctx 有值）。 */
+  newNo: number | null
+}
+
+/**
+ * unified diff → 带行号行序列。
+ *
+ * <p>行号从 `@@ -a,b +c,d @@` hunk 头取种子逐行推进；无 hunk 头的非标准 diff
+ * （模型手写的简化 +/- 块）退化为只标新侧序号，保证不显示错位行号。
+ * `+++/---` 文件头行保留但无行号。
+ */
+export function parseDiffRows(content: string): DiffRow[] {
+  const lines = content.split('\n')
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  const out: DiffRow[] = []
+  let oldNo = 0
+  let newNo = 0
+  let sawHunk = false
+  let newOnlySeq = 0
+  for (const text of lines) {
+    if (text.startsWith('@@')) {
+      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(text)
+      if (m) {
+        oldNo = Number(m[1])
+        newNo = Number(m[2])
+        sawHunk = true
+      }
+      out.push({ type: 'hunk', text, oldNo: null, newNo: null })
+      continue
+    }
+    if (text.startsWith('+++ ') || text.startsWith('--- ')) {
+      out.push({ type: 'ctx', text, oldNo: null, newNo: null })
+      continue
+    }
+    if (text.startsWith('+')) {
+      newOnlySeq = sawHunk ? newNo : newOnlySeq + 1
+      out.push({ type: 'add', text, oldNo: null, newNo: newOnlySeq })
+      if (sawHunk) newNo++
+      continue
+    }
+    if (text.startsWith('-')) {
+      out.push({ type: 'del', text, oldNo: sawHunk ? oldNo : null, newNo: null })
+      if (sawHunk) oldNo++
+      continue
+    }
+    out.push({ type: 'ctx', text, oldNo: sawHunk ? oldNo : null, newNo: sawHunk ? newNo : ++newOnlySeq })
+    if (sawHunk) {
+      oldNo++
+      newNo++
+    } else {
+      newOnlySeq++
+    }
+  }
+  return out
+}
+
 /**
  * 流式累积的工具状态 → 持久化块形状（流式终态兜底）。
  *

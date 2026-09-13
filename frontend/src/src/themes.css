@@ -17,6 +17,7 @@
   --wb-surface-2: #fafaf8;
   --wb-surface-hover: #f0f0ed;
   --wb-surface-solid: #ffffff;
+  --wb-side: #f0efec;
   --wb-primary: #4f46e5;
   --wb-primary-strong: #4338ca;
   --wb-primary-soft: rgba(79, 70, 229, 0.10);
@@ -61,28 +62,31 @@
   --color-wb-info: var(--wb-info);
 }
 
-/* ---- dark：深炭底 + 靛蓝（Studio 夜间） ---- */
+/* ---- dark：中性炭灰（ZCode 夜间基调）----
+ * 层级靠明度：rail(#191919) → 主区(#202020) → 卡片(#262626) → 悬浮(#2f2f2f)，
+ * 全中性灰不带蓝相，主色靛蓝只留给交互态与用户气泡。 */
 [data-theme='dark'] {
-  --wb-bg: #101114;
-  --wb-surface: #1a1b1f;
-  --wb-surface-2: #202126;
-  --wb-surface-hover: #26272d;
-  --wb-surface-solid: #1a1b1f;
-  --wb-primary: #6366f1;
-  --wb-primary-strong: #818cf8;
-  --wb-primary-soft: rgba(99, 102, 241, 0.14);
-  --wb-mint: #2ec4a0;
+  --wb-bg: #202020;
+  --wb-surface: #262626;
+  --wb-surface-2: #2b2b2b;
+  --wb-surface-hover: #303030;
+  --wb-surface-solid: #262626;
+  --wb-side: #191919;
+  --wb-primary: #6d6af0;
+  --wb-primary-strong: #8f8cff;
+  --wb-primary-soft: rgba(109, 106, 240, 0.16);
+  --wb-mint: #3ecf8e;
   --wb-lavender: #a78bfa;
-  --wb-sky: #38bdf8;
-  --wb-lemon: #f59e0b;
-  --wb-success: #2ec4a0;
-  --wb-warning: #f59e0b;
+  --wb-sky: #4cc2ff;
+  --wb-lemon: #f5a623;
+  --wb-success: #3ecf8e;
+  --wb-warning: #f5a623;
   --wb-danger: #f87171;
-  --wb-info: #38bdf8;
-  --wb-ink: #e7e8ea;
-  --wb-muted: #9ca0a8;
-  --wb-border: rgba(231, 232, 234, 0.10);
-  --wb-border-strong: rgba(231, 232, 234, 0.20);
+  --wb-info: #4cc2ff;
+  --wb-ink: #e6e6e6;
+  --wb-muted: #949494;
+  --wb-border: rgba(255, 255, 255, 0.07);
+  --wb-border-strong: rgba(255, 255, 255, 0.14);
   --wb-radius-sm: 6px;
   --wb-radius: 8px;
   --wb-radius-lg: 12px;

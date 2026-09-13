@@ -28,7 +28,19 @@ const showSubmit = ref(false)
 const newPrompt = ref('')
 const newAgent = ref('default')
 
-const agentOptions = ['default', 'coding', 'research', 'writer']
+const agentOptions = ref<string[]>(['default', 'coding', 'research', 'writer'])
+
+/** 内置 + 启用中的自定义子智能体（后台任务按 Agent 提交，与 delegate_task 同一注册表）。 */
+onMounted(async () => {
+  try {
+    const { apiGet } = await import('@/api/client')
+    const rows = await apiGet<Array<{ name: string; enabled: boolean }>>('/api/v1/agent-profiles')
+    const custom = rows.filter((r) => r.enabled).map((r) => r.name)
+    agentOptions.value = ['default', 'coding', 'research', 'writer', ...custom]
+  } catch {
+    // 拉取失败保持内置四项；自定义子智能体属增强能力，不阻断任务面板
+  }
+})
 
 const tasksView = computed(() => tasks.value)
 

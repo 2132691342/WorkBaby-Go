@@ -70,6 +70,10 @@ metadata_json: string | null
 status: string
 /** 会话级工具权限模式（restricted/default/auto_edit/yolo）；空 = 跟随全局设置 */
 permission_mode: string | null
+/** 会话类别（normal 主会话 / side 辅助对话；辅助对话不进侧栏，只在右栏辅助面板呈现） */
+kind: string | null
+/** 置顶：侧栏列表最前 */
+pinned: boolean
 /** 分叉来源会话 ID；根会话为空 */
 parent_id: string | null
 /** 分叉点消息 seq；根会话为 0 */
@@ -327,6 +331,17 @@ export interface ApprovalGrant {
   created_at: number
 }
 
+/** 会话目标（目标模式）：每轮结束自动校验，未达成携带下一步动作自动续跑。 */
+export interface SessionGoal {
+  text: string
+  status: 'active' | 'paused' | 'done' | string
+  round: number
+  max_rounds: number
+  next_step?: string
+  done_because?: string
+  updated_at: number
+}
+
 /** Provider 熔断/就绪状态（GET /api/v1/ai-provider/circuit-status）。 */
 export interface CircuitState {
   id: string
@@ -418,8 +433,10 @@ export interface SlashCommand {
   name: string
   args: string
   desc: string
-  group: 'session' | 'model' | 'agent' | 'system' | string
+  group: 'session' | 'model' | 'agent' | 'system' | 'custom' | string
   client_only: boolean
+  /** 自定义命令的提示词模板（group=custom；选中即灌入输入框）。 */
+  prompt?: string
 }
 
 /** 命令列表出参。 */
@@ -710,6 +727,54 @@ export interface SkillZipResult {
   imported: string[]
   skipped: string[]
   failed: Array<{ path: string; error: string }>
+}
+
+// ===== Agent Profiles（自定义子智能体） =====
+
+/** 自定义子智能体（GET /api/v1/agent-profiles 返回 AgentProfileRESP）。 */
+export interface AgentProfile {
+  id: string
+  name: string
+  description: string | null
+  system_prompt: string | null
+  tools_allow: string[] | null
+  tools_deny: string[] | null
+  memory_enable: boolean
+  max_turns: number
+  enabled: boolean
+  created_at: number
+  updated_at: number
+}
+
+/** 自定义子智能体创建/更新请求体（POST /api/v1/agent-profiles，按 name upsert）。 */
+export interface AgentProfileReq {
+  name: string
+  description?: string
+  system_prompt?: string
+  tools_allow?: string[]
+  tools_deny?: string[]
+  memory_enable?: boolean
+  max_turns?: number
+  enabled?: boolean
+}
+
+// ===== User Commands（自定义斜杠命令） =====
+
+/** 自定义斜杠命令（GET /api/v1/chat/commands/custom）。 */
+export interface UserCommand {
+  id: string
+  name: string
+  prompt: string
+  description: string | null
+  created_at: number
+  updated_at: number
+}
+
+/** 自定义斜杠命令创建/更新请求体（按 name upsert）。 */
+export interface UserCommandReq {
+  name: string
+  prompt: string
+  description?: string
 }
 
 // ===== MCP Servers =====

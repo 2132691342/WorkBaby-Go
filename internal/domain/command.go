@@ -8,8 +8,10 @@ type SlashCommand struct {
 	Name       string `json:"name"`        // 不含斜杠，如 "compact"
 	Args       string `json:"args"`        // 参数提示，无参数为空串
 	Desc       string `json:"desc"`        // 一句话说明（面板副标题）
-	Group      string `json:"group"`       // 分组：session / model / agent / system
+	Group      string `json:"group"`       // 分组：session / model / agent / system / custom
 	ClientOnly bool   `json:"client_only"` // 纯前端执行，无需后端接口
+	// Prompt 自定义命令的提示词模板（仅 group=custom；选中即灌入输入框）。
+	Prompt string `json:"prompt,omitempty"`
 }
 
 // CommandListRESP 命令列表出参。

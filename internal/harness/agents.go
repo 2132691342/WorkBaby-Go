@@ -1,5 +1,7 @@
 package harness
 
+import "sync"
+
 // 内置 Agent 定义表。
 //
 // chat / workflow / cron 以 name 引用同一个 Definition：一次定义、随处运行，
@@ -53,12 +55,44 @@ func DefaultAgents() []Definition {
 	}
 }
 
-// Agent 按名取内置 Agent；未知名回退 default（运行时按名引用不硬失败）。
+// Agent 按名取 Agent：内置表优先，其后自定义子智能体；未知名回退 default（按名引用不硬失败）。
 func Agent(name string) Definition {
 	for _, d := range DefaultAgents() {
 		if d.Name == name {
 			return d
 		}
 	}
+	for _, d := range CustomAgents() {
+		if d.Name == name {
+			return d
+		}
+	}
 	return DefaultAgents()[0]
+}
+
+// customMu 保护自定义子智能体注册表；写方是 AgentProfileService（启动同步 + CRUD 后重同步）。
+var customMu sync.RWMutex
+
+// customAgents 当前生效的自定义子智能体（仅 enabled）。
+var customAgents []Definition
+
+// SetCustomAgents 整表替换自定义子智能体注册表（builtin 名在同步侧被拒，这里不再校验）。
+func SetCustomAgents(defs []Definition) {
+	customMu.Lock()
+	defer customMu.Unlock()
+	customAgents = defs
+}
+
+// CustomAgents 返回当前注册的自定义子智能体快照。
+func CustomAgents() []Definition {
+	customMu.RLock()
+	defer customMu.RUnlock()
+	out := make([]Definition, len(customAgents))
+	copy(out, customAgents)
+	return out
+}
+
+// AllAgents 内置 + 自定义（设置页 / 会话切换 / 命令面板的完整可选集）。
+func AllAgents() []Definition {
+	return append(DefaultAgents(), CustomAgents()...)
 }

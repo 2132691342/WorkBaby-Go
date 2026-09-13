@@ -48,6 +48,14 @@ func NewAutoCompressor(provider llm.Provider, model string) *AutoCompressor {
 	return &AutoCompressor{provider: provider, model: model}
 }
 
+// LastSummary 返回最近一次成功的交接摘要（无则空串）。
+// runner 在压缩边界事件里随行下发，前端据此展示「被折叠的轮次做了什么」。
+func (a *AutoCompressor) LastSummary() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cachedSummary
+}
+
 // Compress 实现 Compressor（无 ctx 入口）：自带超时 ctx 走 CompressCtx。
 func (a *AutoCompressor) Compress(msgs []*llm.Message, budgetTokens int) []*llm.Message {
 	ctx, cancel := context.WithTimeout(context.Background(), autoSummarizeWait+5*time.Second)
@@ -200,7 +208,7 @@ func serializeForSummary(m *llm.Message) string {
 
 // estimateOne 单条消息 token 估算（与 EstimateTokens 完全同口径：CJK 计权 +
 // tool_calls 计入 + 消息固定开销）。口径不一会让 Auto 压缩的尾部保留量失准
-//（中文按字符/4 会低估数倍，摘要吞掉本该保留的近期上下文）。
+// （中文按字符/4 会低估数倍，摘要吞掉本该保留的近期上下文）。
 func estimateOne(m *llm.Message) int {
 	if m == nil {
 		return 0

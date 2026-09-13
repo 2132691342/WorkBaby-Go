@@ -15,6 +15,7 @@ func (s *Server) registerRoutes() {
 	registerWorkspaceRoutes(v1, h)
 	registerProviderRoutes(v1, h)
 	registerSkillRoutes(v1, h)
+	registerAgentRoutes(v1, h)
 	registerWorkflowRoutes(v1, h)
 	registerKnowledgeRoutes(v1, h)
 	registerChannelRoutes(v1, h)

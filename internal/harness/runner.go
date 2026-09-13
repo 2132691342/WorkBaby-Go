@@ -328,7 +328,7 @@ type RunResult struct {
 	Err         error
 	// Timings 分段耗时归因：回答「这次 run 慢在哪」。
 	Timings RunTimings
-	}
+}
 
 // RunMessages 跑一个多轮 ReAct 循环；返回完整 content/thinking 与 usage。
 //
@@ -413,8 +413,11 @@ func (r *Runner) runLoop(ctx context.Context, runID, sessionID, assistantMessage
 				msgs = r.compressor.Compress(msgs, budget)
 			}
 			// 压缩证据化：按实际差异发边界（谁被移出上下文、涉及哪些 tool_call_id 锚点），
-			// 上游据此提示用户并可对账「哪一轮被折叠」。
+			// 上游据此提示用户并可对账「哪一轮被折叠」；auto 压缩器随行下发交接摘要。
 			if boundary, changed := CompressDiff(CompressorKey(r.compressor), before, msgs); changed {
+				if a, ok := r.compressor.(*AutoCompressor); ok {
+					boundary.Summary = a.LastSummary()
+				}
 				r.sink.Emit(Event{Kind: EventCompressed, RunID: runID, SessionID: sessionID, Turn: turn, Payload: boundary})
 			}
 			tim.CompressMs += time.Since(compressStart).Milliseconds()

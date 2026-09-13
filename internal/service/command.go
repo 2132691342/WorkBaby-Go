@@ -28,10 +28,12 @@ func BuiltinCommands() []domain.SlashCommand {
 		{Name: "context", Desc: "查看当前上下文占用分段（system / 历史 / 工具）", Group: "session"},
 		// 跨会话恢复
 		{Name: "resume", Args: "<会话ID|关键词>", Desc: "跨会话快速恢复（关键词搜 title / content / all）", Group: "session"},
+		// 目标模式：设定后每轮自动校验、未达标自动续跑（详见 goal.go）
+		{Name: "goal", Args: "[<目标描述>|pause|resume|clear]", Desc: "查看/设定/暂停/恢复/清除当前会话目标；设定后每轮自动校验是否达成并续跑", Group: "session"},
 		// 模型与 Agent
 		{Name: "model", Args: "<模型名>", Desc: "切换当前会话模型", Group: "model", ClientOnly: true},
 		{Name: "agent", Args: "<default|coding|research|writer>", Desc: "切换当前 Agent（工具集与记忆策略随之切换）", Group: "agent", ClientOnly: true},
-		{Name: "trust", Args: "<default|auto-edit|yolo>", Desc: "切换工具权限模式（默认 / 自动放行本地写 / 全部放行）", Group: "agent", ClientOnly: true},
+		{Name: "trust", Args: "<plan|default|auto-edit|yolo>", Desc: "切换执行模式（计划=只读出方案 / 需确认 / 自动编辑 / 完全访问）", Group: "agent", ClientOnly: true},
 		// 工具开关
 		{Name: "tasks", Desc: "打开后台任务中心", Group: "system", ClientOnly: true},
 		{Name: "export", Desc: "导出当前会话为 Markdown", Group: "session", ClientOnly: true},
@@ -122,16 +124,16 @@ func (s *ChatService) SetSessionAgent(ctx context.Context, sessionID, agentName 
 	if agentName == "" {
 		delete(meta, sessionMetaKeyAgentName)
 	} else {
-		// 仅允许内置 Agent（harness.Agent 会回退 default，但写库前先校验避免歧义）
+		// 内置 + 自定义子智能体均可切换（harness.Agent 会回退 default，但写库前先校验避免歧义）
 		known := false
-		for _, d := range harness.DefaultAgents() {
+		for _, d := range harness.AllAgents() {
 			if d.Name == agentName {
 				known = true
 				break
 			}
 		}
 		if !known {
-			return pkg.New(5008, "未知 Agent（仅支持 default/coding/research/writer）", agentName)
+			return pkg.New(5008, "未知 Agent", agentName)
 		}
 		meta[sessionMetaKeyAgentName] = agentName
 	}
@@ -149,6 +151,7 @@ func SessionAgent(ses *domain.ChatSessionDO) string {
 	}
 	return ""
 }
+
 // pinCompactInstructions 把保留指示写进会话元数据（后续 run 装配期注入 system 段）。
 func (s *ChatService) pinCompactInstructions(ctx context.Context, ses *domain.ChatSessionDO, ins string) bool {
 	meta := readSessionMeta(ses)
@@ -167,8 +170,8 @@ func estimateTokensFromChars(chars int) int { return chars / 4 }
 const (
 	compactScanLimit   = 1000
 	compactKeepRecent  = 20
-	compactDigestLines = 40   // 归档摘要最多行数（超出部分以「…」收尾）
-	compactDigestWidth = 60   // 每行摘要取内容前缀的 rune 数
+	compactDigestLines = 40 // 归档摘要最多行数（超出部分以「…」收尾）
+	compactDigestWidth = 60 // 每行摘要取内容前缀的 rune 数
 )
 
 // archiveDigestLine 归档摘要的一行：role + 内容前缀（确定性、无 LLM）。

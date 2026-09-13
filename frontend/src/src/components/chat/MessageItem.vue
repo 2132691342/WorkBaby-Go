@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useClipboard } from '@vueuse/core'
-import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, ChevronDown, Paperclip, Wrench } from '@/components/common/icons'
+import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, ChevronDown, Paperclip, RotateCcw, Wrench } from '@/components/common/icons'
 import type { Message, MessageAttachment } from '@/types/api'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
@@ -92,6 +92,46 @@ const fileChanges = computed(() => {
   if (!props.message.run_id) return []
   return chat.fileChanges.filter((c) => c.run_id === props.message.run_id)
 })
+
+// ===== 变更聚合条（ZCode 式）：Σ 增删 + 折叠 + 全部撤销 =====
+const changesOpen = ref(false)
+const undoing = ref(false)
+
+/** 本轮总增删（跨文件求和，聚合条一眼看工作量）。 */
+const turnDelta = computed(() =>
+  fileChanges.value.reduce(
+    (acc, c) => ({ added: acc.added + (c.added_lines || 0), removed: acc.removed + (c.removed_lines || 0) }),
+    { added: 0, removed: 0 }
+  )
+)
+
+/** 还能撤销的变更数（已回滚的排除）。 */
+const rollbackableCount = computed(() => fileChanges.value.filter((c) => !c.rolled_back).length)
+
+/** 全部撤销：逐个回滚可撤销项；部分失败不吞——明确报出剩余数（回滚非原子，逐项推进）。 */
+async function rollbackAll(): Promise<void> {
+  if (undoing.value) return
+  const ok = await dialog.confirm({
+    title: t('changes.rollbackTitle'),
+    content: t('changes.rollbackAllConfirm', rollbackableCount.value),
+    danger: true
+  })
+  if (!ok) return
+  undoing.value = true
+  let done = 0
+  let failed = 0
+  try {
+    for (const c of fileChanges.value) {
+      if (c.rolled_back) continue
+      if (await chat.rollbackFileChange(c.id)) done++
+      else failed++
+    }
+  } finally {
+    undoing.value = false
+  }
+  if (failed === 0) toast.success(t('changes.rolledBackAll', done))
+  else toast.error(t('changes.rollbackPartial', done, failed))
+}
 
 /** 消息时间统一走 utils/time。 */
 const fmtTime = formatRelativeTime
@@ -332,17 +372,32 @@ async function forkFrom(): Promise<void> {
       </div>
     </div>
 
-    <!-- 本轮文件变更（chat:file-change 按 run_id 关联）：内联 diff 卡，
-         折叠态一行看清「改了哪个文件、增删多少」，点开就地看 diff / 回滚（Cursor 风格）。
-         不再让用户为了看一眼 diff 而离开当前阅读上下文去侧栏。 -->
-    <div v-if="!isUser && fileChanges.length > 0 && !editing" class="mt-2 w-full space-y-1.5">
-      <div class="flex items-center gap-1.5 text-[11px] font-medium text-wb-ink">
-        <FileText class="h-3.5 w-3.5 text-wb-mint" />
-        {{ t('changes.title') }}
-        <span class="text-wb-muted">·</span>
-        <span class="text-wb-muted">{{ fileChanges.length }} {{ t('changes.files') }}</span>
+    <!-- 本轮文件变更（chat:file-change 按 run_id 关联）：ZCode 式聚合条——
+         一行「N 个文件已更改 +Σ -Σ」+ 全部撤销；点开就地看每张 diff 卡（懒加载 diff / 单文件回滚）。
+         聚合条默认折叠：改动多时不再把消息流撑成一排卡片。 -->
+    <div v-if="!isUser && fileChanges.length > 0 && !editing" class="mt-2 w-full">
+      <div class="wb-chgbar">
+        <button type="button" class="wb-chgbar-main" @click="changesOpen = !changesOpen">
+          <FileText class="h-3.5 w-3.5 shrink-0 text-wb-mint" />
+          <span class="wb-chgbar-title">{{ t('changes.filesChanged', fileChanges.length) }}</span>
+          <span v-if="turnDelta.added" class="add">+{{ turnDelta.added }}</span>
+          <span v-if="turnDelta.removed" class="del">-{{ turnDelta.removed }}</span>
+          <ChevronDown class="wb-chgbar-chev" :class="{ 'is-open': changesOpen }" />
+        </button>
+        <button
+          v-if="rollbackableCount > 0"
+          type="button"
+          class="wb-chgbar-undo"
+          :disabled="undoing"
+          @click="rollbackAll"
+        >
+          <RotateCcw class="h-3 w-3" />
+          {{ t('changes.undoAll') }}
+        </button>
       </div>
-      <InlineDiffCard v-for="chg in fileChanges" :key="chg.id" :change="chg" />
+      <div v-if="changesOpen" class="mt-1.5 space-y-1.5">
+        <InlineDiffCard v-for="chg in fileChanges" :key="chg.id" :change="chg" />
+      </div>
     </div>
 
     <!-- 用量元信息：悬浮看精确值；为空隐藏 -->

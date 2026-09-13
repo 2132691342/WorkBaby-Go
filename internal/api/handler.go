@@ -89,8 +89,10 @@ type Handler struct {
 	approvalSvc   *service.ApprovalService
 	memSvc        *memory.Service
 	memProxy      *service.MemoryService
-	inboxSvc      *service.InboxService      // 回写收件箱（run 终局候选 → 人审 → 合入）
+	inboxSvc      *service.InboxService // 回写收件箱（run 终局候选 → 人审 → 合入）
 	skillSvc      *service.SkillService
+	agentSvc      *service.AgentProfileService
+	commandSvc    *service.UserCommandService
 	mcpSvc        *service.McpService
 	knowledgeSvc  *service.KnowledgeService
 	workflowSvc   *service.WorkflowService
@@ -450,6 +452,15 @@ func (h *Handler) Startup(ctx context.Context) error {
 	if err := h.skillSvc.SyncGlobal(ctx); err != nil {
 		pkg.L.Warn("sync global skills dir failed", "dir", globalSkillDir, "err", err.Error())
 	}
+
+	// 自定义子智能体：agent_profiles 表物化进 harness 注册表（delegate_task / 会话切换消费）
+	h.agentSvc = service.NewAgentProfileService(h.app.AgentProfileRepo)
+	if err := h.agentSvc.Sync(ctx); err != nil {
+		pkg.L.Warn("sync agent profiles failed", "err", err.Error())
+	}
+
+	// 自定义斜杠命令：user_commands 表（/ 面板与设置页共用）
+	h.commandSvc = service.NewUserCommandService(h.app.UserCommandRepo)
 
 	// MCP：外部工具源；启动失败只标记 unready，不阻断
 	mcpRepo := h.app.McpRepo

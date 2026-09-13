@@ -145,7 +145,8 @@ func (s *ChatService) SendStream(ctx context.Context, sessionID, content string,
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.runs.set(ses.ID, ids.RunID, cancel)
 	go func() {
-		defer s.runs.delete(ses.ID)
+		// deleteIf：目标模式自动续跑会在旧 run 尾部拉起新 run，无条件 delete 会误删新注册
+		defer s.runs.deleteIf(ses.ID, ids.RunID)
 		s.runLLM(runCtx, ses, ids.RunID, ids.AssistantMsgID, content, params, harness.Agent(agentName), false)
 	}()
 
@@ -198,6 +199,16 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 	if err != nil {
 		s.failRun(ctx, runID, ses.ID, assistantMsgID, err)
 		return harness.RunResult{Reason: harness.ReasonError, Err: err}
+	}
+	// 辅助对话：主会话历史按预算前置拼接（有界 + 对齐 user 轮次），追问不用重复交代背景
+	parentMsgs, err := s.sideParentMessages(ctx, ses, s.providerVision(ctx, ses.ProviderID))
+	if err != nil {
+		s.failRun(ctx, runID, ses.ID, assistantMsgID, err)
+		return harness.RunResult{Reason: harness.ReasonError, Err: err}
+	}
+	if len(parentMsgs) > 0 {
+		llmMsgs = append(parentMsgs, llmMsgs...)
+		pkg.L.Debug("side parent prefix", "sessionID", ses.ID, "prefixMsgs", len(parentMsgs))
 	}
 
 	// system 装配（真实请求口径，与 ContextUsage 透视同源——见 buildSystem）
@@ -420,6 +431,8 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 	if s.tempClear != nil {
 		s.tempClear(runID)
 	}
+	// 目标模式：活动目标在 run 正常收尾后自动校验，未达标携带下一步动作续跑
+	s.maybeContinueGoal(ctx, ses, runID, res)
 	return res
 }
 

@@ -25,6 +25,7 @@ import type {
   Message as ApiMessage,
   Page,
   Session,
+  SessionGoal,
   SkillHit,
   SlashCommand,
   TodoStateRESP
@@ -110,6 +111,8 @@ export const useChatStore = defineStore('chat', () => {
   // ===== P2 扩展状态 =====
   /** 会话计划状态（todo 工具共享；流式增量由 chat:todo 事件推送）。 */
   const todoState = ref<TodoStateRESP | null>(null)
+  /** 会话目标（目标模式）：流式增量由 chat:goal 推送，切会话时权威拉取。 */
+  const goal = ref<SessionGoal | null>(null)
   /** 会话文件变更列表（流式增量由 chat:file-change 事件推送）。 */
   const fileChanges = ref<FileChange[]>([])
   /** 会话工件列表（流式增量由 chat:artifact 事件推送）。 */
@@ -129,6 +132,8 @@ export const useChatStore = defineStore('chat', () => {
   const runStartedAt = ref<number | null>(null)
   /** 本轮 run 的终止耗时（仅在收到 stopped 时冻结）。 */
   const stopElapsedMs = ref<number | null>(null)
+  /** 上下文自动压缩通知（chat:compressed）：时间线分隔线「N 条历史已折叠」+ 可展开纪要；下次发送或切会话清除。 */
+  const compressionNotice = ref<{ removed: number; summary: string } | null>(null)
   /** 本轮流是否由用户主动取消。 */
   const userCancelled = ref(false)
   /** 当前展示的审批（队列首项，只读）：单值 UI 与既有调用签名保持兼容。 */
@@ -269,6 +274,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function selectSession(id: string): Promise<void> {
     currentID.value = id
+    compressionNotice.value = null
     await loadMessages(id)
     // 模型选择器跟随会话绑定的 provider：切到历史会话时，顶部徽标与参数展示要与实际运行模型一致
     const s = sessions.value.find((x) => x.id === id)
@@ -279,6 +285,7 @@ export const useChatStore = defineStore('chat', () => {
     await Promise.allSettled([
       loadEffectiveParams(id),
       loadTodoState(id),
+      loadGoal(id),
       loadFileChanges(id),
       loadArtifacts(id),
       loadContextUsage(id),
@@ -325,6 +332,28 @@ export const useChatStore = defineStore('chat', () => {
     } catch {
       todoState.value = null
     }
+  }
+
+  /** 拉取会话目标（切会话/刷新后的权威数据源）。 */
+  async function loadGoal(sessionID: string): Promise<void> {
+    try {
+      const r = await apiGet<{ session_id: string; goal: SessionGoal | null }>(
+        `/api/v1/chat/sessions/${sessionID}/goal`
+      )
+      goal.value = r.goal ?? null
+    } catch {
+      goal.value = null
+    }
+  }
+
+  /** 目标操作：set/replace/pause/resume/clear；后端落库并广播 chat:goal。 */
+  async function updateGoal(sessionID: string, action: string, text?: string): Promise<SessionGoal | null> {
+    const r = await apiPost<{ session_id: string; goal: SessionGoal | null }>(
+      `/api/v1/chat/sessions/${sessionID}/goal`,
+      { action, text: text ?? '' }
+    )
+    goal.value = r.goal ?? null
+    return goal.value
   }
 
   /** 拉取会话文件变更列表（侧栏变更面板数据源）。 */
@@ -555,6 +584,22 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /** 置顶/取消置顶：本地即时更新（后端同序返回权威行）。 */
+  async function pinSession(id: string, pinned: boolean): Promise<void> {
+    const s = await apiPost<Session>(`/api/v1/chat/sessions/${id}/pin`, { pinned })
+    sessions.value = sessions.value.map((x) => (x.id === id ? s : x))
+  }
+
+  /** 归档/取消归档：归档自动取消置顶；当前会话被归档时切到列表第一个可见会话。 */
+  async function archiveSession(id: string, archived: boolean): Promise<void> {
+    const s = await apiPost<Session>(`/api/v1/chat/sessions/${id}/archive`, { archived })
+    sessions.value = sessions.value.map((x) => (x.id === id ? s : x))
+    if (archived && currentID.value === id) {
+      const next = sessions.value.find((x) => x.id !== id && x.status !== 'archived')
+      if (next) await selectSession(next.id)
+    }
+  }
+
   /** 批量删除会话。 */
   async function deleteSessions(ids: string[]): Promise<{ ok: number; failed: string[] }> {
     const failed: string[] = []
@@ -639,6 +684,7 @@ export const useChatStore = defineStore('chat', () => {
       if (session) useToast().success(t('chat.newSessionCreated'))
       return
     }
+    compressionNotice.value = null
     let sessionID = currentID.value
     if (!sessionID) {
       // 新会话时把当前选中的模型 ID 一并传入（避免创建后因缺 provider/model 立即 5003）
@@ -943,9 +989,13 @@ export const useChatStore = defineStore('chat', () => {
         continue
       }
       // chat:compressed → 自动压缩发生了但没有别的视觉信号，必须显式提示，
-      // 否则用户只会发现「前面的聊天不见了」
+      // 否则用户只会发现「前面的聊天不见了」；toast 之外再落一条时间线分隔线（带交接纪要）
       if (update.setCompressed) {
         useToast().info(t('chat.autoCompressed', update.setCompressed.removed_messages))
+        compressionNotice.value = {
+          removed: update.setCompressed.removed_messages,
+          summary: update.setCompressed.summary ?? ''
+        }
         continue
       }
       // chat:context-trimmed → system 段被预算裁掉（如 Skill 正文）：回答质量下降必须可解释，
@@ -967,6 +1017,19 @@ export const useChatStore = defineStore('chat', () => {
           ? t('chat.sandboxViolation', update.setWarn.rel_path)
           : t('chat.sandboxViolationNoPath')
         useToast().error(title, update.setWarn.message)
+        continue
+      }
+      // chat:goal → 目标状态卡（set/pause/auto-continue 校验后共用；null = 已清除）
+      if (update.setGoal !== undefined) {
+        const prevStatus = goal.value?.status
+        goal.value = update.setGoal
+        // 达成即时反馈：卡片随 done 消失，达成依据用 toast 收尾
+        if (update.setGoal?.status === 'done' && prevStatus !== 'done') {
+          useToast().success(
+            t('chat.goal.doneTitle'),
+            update.setGoal.done_because || update.setGoal.text
+          )
+        }
         continue
       }
       applyStreamUpdate(update, {
@@ -1116,12 +1179,14 @@ export const useChatStore = defineStore('chat', () => {
     streamingArtifacts,
     streamingGenUi,
     streamingRetry,
+    compressionNotice,
     error,
     stopReason,
     stopElapsedMs,
     pendingApproval,
     // ===== P2 扩展 =====
     todoState,
+    goal,
     fileChanges,
     artifacts,
     tasks,
@@ -1134,6 +1199,8 @@ export const useChatStore = defineStore('chat', () => {
     loadModels,
     loadCommands,
     loadTodoState,
+    loadGoal,
+    updateGoal,
     toggleTodo,
     loadFileChanges,
     loadFileChangeDetail,
@@ -1155,6 +1222,8 @@ export const useChatStore = defineStore('chat', () => {
     selectSession,
     createSession,
     deleteSession,
+    pinSession,
+    archiveSession,
     deleteSessions,
     clearMessages,
     truncateMessages,

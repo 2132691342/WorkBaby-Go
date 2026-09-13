@@ -158,6 +158,7 @@ func (m *runEventMapper) handle(e harness.Event) {
 				"filter_key":       boundary.FilterKey,
 				"cutoff_at":        boundary.CutoffAt,
 				"recovery_refs":    boundary.RecoveryRefs,
+				"summary":          boundary.Summary,
 			})
 		}
 	case harness.EventToolResult:
@@ -165,7 +166,7 @@ func (m *runEventMapper) handle(e harness.Event) {
 			s.emit(runID, ses.ID, "chat:tool-result", map[string]any{
 				"id": p.ToolCallID, "name": p.Name,
 				"content": p.Content, "error": p.Err, "duration_ms": p.DurationMs,
-				"agent": e.Agent, "ui_hint": p.UIHint,
+				"agent": e.Agent, "ui_hint": p.UIHint, "data": p.Data,
 			})
 			if isChild {
 				return
@@ -176,12 +177,13 @@ func (m *runEventMapper) handle(e harness.Event) {
 					s.emit(runID, ses.ID, "chat:todo", map[string]any{"state": st})
 				}
 			}
-			// 结果 + 产物落块：审批拒绝（refused）同样落块，历史可复现完整过程
+			// 结果 + 产物落块：审批拒绝（refused）同样落块，历史可复现完整过程；
+			// data 是工具的结构化结果（如 knowledge_search 的命中列表），来源卡直接消费
 			m.persistBlock(e, domain.BlockToolResult, map[string]any{
 				"tool_call_id": p.ToolCallID, "name": p.Name,
 				"content": p.Content, "error": p.Err,
 				"duration_ms": p.DurationMs, "refused": p.Refused,
-				"ui_hint": p.UIHint,
+				"ui_hint": p.UIHint, "data": p.Data,
 			})
 			if len(p.Data) > 0 {
 				m.persistBlock(e, domain.BlockArtifact, map[string]any{"name": p.Name, "data": p.Data})

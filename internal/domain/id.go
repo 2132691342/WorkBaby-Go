@@ -28,6 +28,8 @@ const (
 	IDFolder         = "FOLDER"
 	IDFile           = "FILE"
 	IDInbox          = "INBOX"
+	IDAgentProfile   = "AGENT"
+	IDUserCommand    = "UCMD"
 )
 
 // LocalUserID 本机单用户固定 ID；与 doc 17 auth §1 一致。

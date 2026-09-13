@@ -1,6 +1,8 @@
 package api
 
 import (
+	"strings"
+
 	"WorkBaby/internal/domain"
 	"WorkBaby/internal/harness"
 	"WorkBaby/internal/llm"
@@ -71,10 +73,57 @@ func (h *Handler) CancelStream(sessionID string) error {
 	return h.chatSvc.CancelStream(sessionID)
 }
 
-// ListChatCommands 内置斜杠命令元数据（前端命令面板的数据源）。
-func (h *Handler) ListChatCommands() domain.CommandListRESP {
+// ListChatCommands 斜杠命令元数据（前端命令面板的数据源）：内置 + 自定义命令合并，
+// 自定义命令 client_only 且带 prompt 模板（选中即灌入输入框）。
+func (h *Handler) ListChatCommands() (domain.CommandListRESP, error) {
 	items := service.BuiltinCommands()
-	return domain.CommandListRESP{Items: items, Total: len(items)}
+	customs, err := h.commandSvc.List(h.ctx)
+	if err != nil {
+		return domain.CommandListRESP{Items: items, Total: len(items)}, nil
+	}
+	for _, c := range customs {
+		desc := c.Description
+		if desc == "" {
+			desc = firstLine(c.Prompt)
+		}
+		items = append(items, domain.SlashCommand{
+			Name:       c.Name,
+			Desc:       desc,
+			Group:      "custom",
+			ClientOnly: true,
+			Prompt:     c.Prompt,
+		})
+	}
+	return domain.CommandListRESP{Items: items, Total: len(items)}, nil
+}
+
+// firstLine 取模板首行作描述兜底（rune 截断 80）。
+func firstLine(s string) string {
+	s = strings.TrimSpace(strings.SplitN(s, "\n", 2)[0])
+	r := []rune(s)
+	if len(r) > 80 {
+		s = string(r[:80]) + "…"
+	}
+	return s
+}
+
+// UpsertCustomCommand 创建/更新自定义斜杠命令（按 name upsert）。
+func (h *Handler) UpsertCustomCommand(req domain.UserCommandREQ) (domain.UserCommandRESP, error) {
+	p, err := h.commandSvc.Upsert(h.ctx, &req)
+	if err != nil {
+		return domain.UserCommandRESP{}, err
+	}
+	return *p, nil
+}
+
+// DeleteCustomCommand 删除自定义斜杠命令。
+func (h *Handler) DeleteCustomCommand(name string) error {
+	return h.commandSvc.Delete(h.ctx, name)
+}
+
+// ListCustomCommands 自定义命令全量（设置页管理用；/ 面板走 ListChatCommands 合并）。
+func (h *Handler) ListCustomCommands() ([]domain.UserCommandRESP, error) {
+	return h.commandSvc.List(h.ctx)
 }
 
 // SetSessionAgent 切换会话 Agent（写元数据；下次 run 起生效）。
@@ -91,6 +140,26 @@ func (h *Handler) SetSessionAgent(sessionID string, req domain.SetSessionAgentRE
 // （不受历史折叠影响）；req.KeepRecent 覆盖默认保留窗口（<=0 用后端默认）。
 func (h *Handler) CompactSession(sessionID string, req domain.CompactREQ) (domain.CompactResultRESP, error) {
 	return h.chatSvc.CompactSession(h.ctx, sessionID, req)
+}
+
+// GetSessionGoal 查询会话目标（目标模式状态卡数据源）。
+func (h *Handler) GetSessionGoal(sessionID string) (domain.GoalRESP, error) {
+	return h.chatSvc.Goal(h.ctx, sessionID)
+}
+
+// SetSessionGoal 设置/替换/暂停/恢复/清除会话目标（/goal 命令后端实现）。
+func (h *Handler) SetSessionGoal(sessionID string, req domain.GoalREQ) (domain.GoalRESP, error) {
+	return h.chatSvc.SetGoal(h.ctx, sessionID, req)
+}
+
+// GetSideConversation 返回主会话已有的辅助会话；没有返回 null（面板显示空态）。
+func (h *Handler) GetSideConversation(sessionID string) (*domain.ChatSessionRESP, error) {
+	return h.chatSvc.GetSideConversation(h.ctx, sessionID)
+}
+
+// EnsureSideConversation 返回主会话的辅助会话（不存在则创建；模型/工作区/权限随主会话）。
+func (h *Handler) EnsureSideConversation(sessionID string) (*domain.ChatSessionRESP, error) {
+	return h.chatSvc.EnsureSideConversation(h.ctx, sessionID)
 }
 
 // SearchSessions 跨会话快速检索（/resume）。

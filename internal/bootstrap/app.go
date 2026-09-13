@@ -47,6 +47,8 @@ type App struct {
 	MemoryProcedureRepo  *repo.MemoryProcedureRepo
 	InboxRepo            *repo.InboxRepo
 	SkillRepo            *repo.SkillRepo
+	AgentProfileRepo     *repo.AgentProfileRepo
+	UserCommandRepo      *repo.UserCommandRepo
 	McpRepo              *repo.McpServerRepo
 }
 
@@ -87,6 +89,8 @@ func New(db *gorm.DB) *App {
 		MemoryProcedureRepo:  repo.NewMemoryProcedureRepo(db),
 		InboxRepo:            repo.NewInboxRepo(db),
 		SkillRepo:            repo.NewSkillRepo(db),
+		AgentProfileRepo:     repo.NewAgentProfileRepo(db),
+		UserCommandRepo:      repo.NewUserCommandRepo(db),
 		McpRepo:              repo.NewMcpServerRepo(db),
 	}
 }
