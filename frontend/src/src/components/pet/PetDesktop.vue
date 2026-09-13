@@ -456,7 +456,7 @@ watch([chatOpen, scale, bubbleEnabled, mood], () => scheduleHitMask())
 .pet-chat-title {
   font-size: 12px;
   font-weight: 700;
-  color: #3f4470;
+  color: var(--wb-ink);
 }
 .pet-chat-close {
   margin-left: auto;
@@ -498,13 +498,13 @@ watch([chatOpen, scale, bubbleEnabled, mood], () => scheduleHitMask())
 }
 .pet-chat-msg-ai {
   align-self: flex-start;
-  background: rgba(129, 140, 248, 0.1);
-  color: #3f4470;
+  background: var(--wb-primary-soft);
+  color: var(--wb-ink);
   border-bottom-left-radius: 3px;
 }
 .pet-chat-msg-user {
   align-self: flex-end;
-  background: #6366f1;
+  background: var(--wb-primary);
   color: #fff;
   border-bottom-right-radius: 3px;
 }
@@ -535,13 +535,13 @@ watch([chatOpen, scale, bubbleEnabled, mood], () => scheduleHitMask())
   border-radius: 8px;
   padding: 5px 8px;
   font-size: 11px;
-  color: #3f4470;
+  color: var(--wb-ink);
   background: #fff;
   outline: none;
 }
 .pet-chat-input input:focus {
-  border-color: #818cf8;
-  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.15);
+  border-color: var(--wb-primary);
+  box-shadow: 0 0 0 2px var(--wb-primary-soft);
 }
 .pet-chat-send {
   display: flex;
@@ -550,7 +550,7 @@ watch([chatOpen, scale, bubbleEnabled, mood], () => scheduleHitMask())
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  background: #6366f1;
+  background: var(--wb-primary);
   color: #fff;
   flex-shrink: 0;
   transition: all 0.15s;
@@ -559,7 +559,7 @@ watch([chatOpen, scale, bubbleEnabled, mood], () => scheduleHitMask())
   opacity: 0.45;
 }
 .pet-chat-send:not(:disabled):hover {
-  background: #4f46e5;
+  background: var(--wb-primary-strong);
 }
 .pet-chat-pop-enter-active {
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -655,11 +655,11 @@ watch([chatOpen, scale, bubbleEnabled, mood], () => scheduleHitMask())
   padding: 7px 12px;
   border-radius: 14px 14px 14px 4px;
   background: rgba(255, 255, 255, 0.97);
-  border: 1px solid rgba(129, 140, 248, 0.25);
-  box-shadow: 0 6px 18px rgba(30, 34, 90, 0.16);
+  border: 1px solid color-mix(in srgb, var(--wb-primary) 25%, transparent);
+  box-shadow: 0 6px 18px rgba(23, 66, 133, 0.16);
   font-size: 12px;
   font-weight: 600;
-  color: #3f4470;
+  color: var(--wb-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -796,17 +796,17 @@ watch([chatOpen, scale, bubbleEnabled, mood], () => scheduleHitMask())
   height: 20px;
   margin-left: 2px;
   border-radius: 999px;
-  color: #6366f1;
+  color: var(--wb-primary);
   background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  border: 1px solid color-mix(in srgb, var(--wb-primary) 30%, transparent);
   transition: all 0.15s;
 }
 .pet-chat-toggle:hover {
-  background: #6366f1;
+  background: var(--wb-primary);
   color: #fff;
 }
 .pet-chat-toggle.active {
-  background: #6366f1;
+  background: var(--wb-primary);
   color: #fff;
 }
 </style>

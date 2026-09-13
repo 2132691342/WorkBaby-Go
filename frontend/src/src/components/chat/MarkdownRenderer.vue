@@ -333,7 +333,7 @@ onBeforeUnmount(() => {
   padding: 6px 10px;
 }
 .markdown-body th {
-  background: color-mix(in srgb, var(--wb-primary, #6366f1) 8%, transparent);
+  background: color-mix(in srgb, var(--wb-primary, #2f7bf6) 8%, transparent);
   font-weight: 600;
 }
 
@@ -349,7 +349,7 @@ onBeforeUnmount(() => {
 }
 .markdown-body li.task-list-item input[type='checkbox'] {
   margin: 0;
-  accent-color: var(--wb-primary, #6366f1);
+  accent-color: var(--wb-primary, #2f7bf6);
   pointer-events: none;
 }
 
@@ -363,7 +363,7 @@ onBeforeUnmount(() => {
 }
 .markdown-body .footnote-ref a,
 .markdown-body .footnote-backref {
-  color: var(--wb-primary-strong, #4f46e5);
+  color: var(--wb-primary-strong, #1c63dc);
   text-decoration: none;
 }
 

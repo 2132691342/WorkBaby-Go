@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 
 /**
- * 主题系统：两套主题 light（冷白 + 靛蓝）/ dark（近黑 + 冰蓝）。旧主题 id 由 {@link normalizeThemeID} 平滑归一。
+ * 主题系统：两套主题 light（浅蓝工作台，默认）/ dark（中性炭灰）。旧主题 id 由 {@link normalizeThemeID} 平滑归一。
  */
 
 export type ThemeID = 'light' | 'dark'
@@ -16,10 +16,10 @@ export interface ThemeConfig {
   surface: string         // 卡片表面
 }
 
-/** 归一旧主题 id：starry→dark，其余未知值→dark（默认外观跟随暗色基调）；light 显式保留。 */
+/** 归一旧主题 id：dark 显式保留，其余未知值→light（默认外观即浅蓝工作台）。 */
 export function normalizeThemeID(id: string | null | undefined): ThemeID {
-  if (id === 'light') return 'light'
-  return 'dark'
+  if (id === 'dark') return 'dark'
+  return 'light'
 }
 
 export interface BackgroundSettings {
@@ -29,8 +29,8 @@ export interface BackgroundSettings {
   extractedPrimary: string | null  // 用户上传图提取的主色
 }
 
-// v2 键：默认外观切成 dark，换键让存量用户的旧 light 偏好一次性让位给新默认
-const THEME_KEY = 'workbaby.theme.v2'
+// v3 键：默认外观切成 light（浅蓝工作台），换键让存量用户的旧偏好一次性让位给新默认
+const THEME_KEY = 'workbaby.theme.v3'
 const BG_KEY = 'workbaby.background'
 
 /**
@@ -38,7 +38,7 @@ const BG_KEY = 'workbaby.background'
  * 新增主题必须同时补 themes.css 的 CSS 块并在此登记。
  */
 export const THEMES: ThemeConfig[] = [
-  { id: 'light',  nameKey: 'settings.theme.light',  preview: 'linear-gradient(135deg,#f7f7f5,#4f46e5)', primary: '#4f46e5', primaryStrong: '#4338ca', bg: '#f7f7f5', surface: '#ffffff' },
+  { id: 'light',  nameKey: 'settings.theme.light',  preview: 'linear-gradient(135deg,#e8f1fe,#2f7bf6)', primary: '#2f7bf6', primaryStrong: '#1c63dc', bg: '#eef4fd', surface: '#ffffff' },
   { id: 'dark',  nameKey: 'settings.theme.dark',  preview: 'linear-gradient(135deg,#191919,#6d6af0)', primary: '#6d6af0', primaryStrong: '#8f8cff', bg: '#202020', surface: '#262626' }
 ]
 
@@ -70,7 +70,7 @@ export function useTheme() {
   }
 
   /**
-   * 初始化主题：localStorage 优先；无记录默认 dark。
+   * 初始化主题：localStorage 优先；无记录默认 light。
    * 不跟随系统 prefers-color-scheme，避免 WebView2 继承 Windows 深色模式造成启动时黑白跳变。
    */
   function initTheme(): void {
@@ -83,7 +83,7 @@ export function useTheme() {
     } catch {
       // ignore
     }
-    setTheme('dark')
+    setTheme('light')
   }
 
   /** 设置背景（图片 + 透明度 + 模糊度） */

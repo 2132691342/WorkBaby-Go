@@ -159,7 +159,7 @@ onMounted(loadList)
 </script>
 
 <template>
-  <div class="wb-ui flex h-full flex-col bg-wb-bg text-wb-ink">
+  <div class="wb-ui flex h-full flex-col text-wb-ink">
     <!-- 顶部 hero（原型 wf-hero） -->
     <header class="wf-hero">
       <div class="tile"><GitBranch class="ic" /></div>

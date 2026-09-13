@@ -11,6 +11,7 @@ declare module 'vue' {
     AdvancedSettings: typeof import('./components/settings/tabs/AdvancedSettings.vue')['default']
     AppBackground: typeof import('./components/common/AppBackground.vue')['default']
     AppearanceSettings: typeof import('./components/settings/tabs/AppearanceSettings.vue')['default']
+    AppNav: typeof import('./components/common/AppNav.vue')['default']
     ApprovalInline: typeof import('./components/chat/ApprovalInline.vue')['default']
     ArtifactCard: typeof import('./components/chat/ArtifactCard.vue')['default']
     AssistantAvatar: typeof import('./components/chat/AssistantAvatar.vue')['default']

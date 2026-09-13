@@ -61,7 +61,7 @@ func main() {
 		// Frameless：启用前端自绘标题栏（wb-ui.css .titlebar + winctl），
 		// 拖拽区用 --wails-draggable:drag 声明；Windows 下缩放手柄由 Wails 自带。
 		Frameless:        true,
-		BackgroundColour: &options.RGBA{R: 247, G: 247, B: 245, A: 1},
+		BackgroundColour: &options.RGBA{R: 238, G: 244, B: 253, A: 1},
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 			// /files/** 走本地受管文件服务（媒体产物/工作区预览）；其余回退嵌入前端资源

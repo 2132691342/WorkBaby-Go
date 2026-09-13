@@ -15,6 +15,7 @@ import {
 import { storeToRefs } from 'pinia'
 import { UploadFile } from '@/wailsjs/go/main/App'
 import AppBackground from '@/components/common/AppBackground.vue'
+import AppNav from '@/components/common/AppNav.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import SessionSidebar from '@/components/chat/SessionSidebar.vue'
 import { useSettingsStore } from '@/stores/settings'
@@ -326,6 +327,9 @@ async function onNewSessionShortcut(): Promise<void> {
       </div>
     </div>
 
+    <!-- 顶栏横向菜单：工作台 / 自动化 / 工作流 / 记忆 / 知识库 / 仪表盘 / 设置 -->
+    <AppNav @create="onCreateSession" @search="openPalette" />
+
     <div class="win-body">
       <!-- 极简左栏：快捷动作 + 任务列表 + 底部设置 -->
       <aside v-show="!collapsed" class="side">
@@ -387,8 +391,9 @@ async function onNewSessionShortcut(): Promise<void> {
         </div>
       </aside>
 
-      <!-- 主内容区 -->
+      <!-- 主内容区（app-deco：右下淡蓝装饰层，z-index:-1 保证在所有内容之下） -->
       <main class="main relative z-10">
+        <div class="app-deco" aria-hidden="true" />
         <RouterView />
       </main>
     </div>

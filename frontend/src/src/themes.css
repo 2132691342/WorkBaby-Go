@@ -1,44 +1,44 @@
-/* ===== 主题系统（Studio 工作台 · 2026 重构） =====
+/* ===== 主题系统（浅蓝工作台） =====
  *
- * <p>设计基调（doc/19）：拒绝模板化「AI 味」紫色渐变。
+ * <p>设计基调：
  * <ul>
- *   <li>暖中性底色分层：bg → surface → surface-2 → overlay，靠明度而非描边建立层级</li>
- *   <li>单主色：靛蓝（#4f46e5）只用于交互态与关键强调，大面积中性灰阶承载内容</li>
- *   <li>琥珀（#d97706）作点缀色：空状态图标 / 高亮数字 / 装饰光斑，克制使用</li>
- *   <li>精细表面：1px 内描边 + 8px 圆角 + 阴影仅浮层，Linear/Arc 式桌面精致感</li>
- *   <li>排版即结构：字号/字重/行距承担信息层级，颜色留给状态</li>
+ *   <li>light（默认）：浅蓝渐变页面底 + 纯白卡片，主色亮蓝（#2f7bf6）只用于交互态与强调</li>
+ *   <li>蓝调柔和阴影 + 大圆角（10 / 14px）替代描边，白卡自然浮起</li>
+ *   <li>深蓝墨色文字（#16233c）+ 蓝灰次要文字，政务后台式清爽观感</li>
+ *   <li>dark：中性炭灰分层（保留），主色靛蓝只用于交互态</li>
  * </ul>
  */
 
-/* ---- light：暖纸白底 + 靛蓝（Studio 日间） ---- */
+/* ---- light：浅蓝渐变底 + 白卡 + 亮蓝（默认外观） ---- */
 [data-theme='light'] {
-  --wb-bg: #f7f7f5;
+  --wb-bg: #eef4fd;
+  --wb-page-gradient: linear-gradient(180deg, #e5f0fe 0%, #eff7ff 32%, #fbfdff 100%);
   --wb-surface: #ffffff;
-  --wb-surface-2: #fafaf8;
-  --wb-surface-hover: #f0f0ed;
+  --wb-surface-2: #f4f8fe;
+  --wb-surface-hover: #e9f2fe;
   --wb-surface-solid: #ffffff;
-  --wb-side: #f0efec;
-  --wb-primary: #4f46e5;
-  --wb-primary-strong: #4338ca;
-  --wb-primary-soft: rgba(79, 70, 229, 0.10);
-  --wb-mint: #0f9d6e;
-  --wb-lavender: #7c5cf0;
-  --wb-sky: #0e7cc4;
-  --wb-lemon: #d97706;
-  --wb-success: #0f9d6e;
-  --wb-warning: #d97706;
-  --wb-danger: #dc2626;
-  --wb-info: #0e7cc4;
-  --wb-ink: #1a1c20;
-  --wb-muted: #6e7178;
-  --wb-border: rgba(26, 28, 32, 0.09);
-  --wb-border-strong: rgba(26, 28, 32, 0.16);
-  --wb-radius-sm: 6px;
-  --wb-radius: 8px;
-  --wb-radius-lg: 12px;
-  --wb-shadow: 0 1px 2px rgb(15 17 22 / 0.05);
-  --wb-shadow-lg: 0 8px 24px rgb(15 17 22 / 0.08);
-  --wb-shadow-pop: 0 16px 48px rgb(15 17 22 / 0.14);
+  --wb-side: #ffffff;
+  --wb-primary: #2f7bf6;
+  --wb-primary-strong: #1c63dc;
+  --wb-primary-soft: rgba(47, 123, 246, 0.10);
+  --wb-mint: #12b76a;
+  --wb-lavender: #7a5af8;
+  --wb-sky: #2e90fa;
+  --wb-lemon: #f79009;
+  --wb-success: #12b76a;
+  --wb-warning: #f79009;
+  --wb-danger: #f04438;
+  --wb-info: #2e90fa;
+  --wb-ink: #16233c;
+  --wb-muted: #64748b;
+  --wb-border: rgba(23, 66, 133, 0.10);
+  --wb-border-strong: rgba(23, 66, 133, 0.18);
+  --wb-radius-sm: 8px;
+  --wb-radius: 10px;
+  --wb-radius-lg: 14px;
+  --wb-shadow: 0 1px 2px rgba(23, 66, 133, 0.05), 0 3px 10px rgba(23, 66, 133, 0.05);
+  --wb-shadow-lg: 0 8px 24px rgba(23, 66, 133, 0.10);
+  --wb-shadow-pop: 0 18px 48px rgba(23, 66, 133, 0.16);
   --wb-glass-blur: 0px;
   --wb-glass-opacity: 1;
 
@@ -67,6 +67,7 @@
  * 全中性灰不带蓝相，主色靛蓝只留给交互态与用户气泡。 */
 [data-theme='dark'] {
   --wb-bg: #202020;
+  --wb-page-gradient: none;
   --wb-surface: #262626;
   --wb-surface-2: #2b2b2b;
   --wb-surface-hover: #303030;

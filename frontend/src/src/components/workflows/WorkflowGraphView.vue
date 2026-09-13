@@ -341,7 +341,7 @@ watch(() => props.workflow_id, (id) => {
 </script>
 
 <template>
-  <div class="flex h-full w-full bg-wb-bg">
+  <div class="flex h-full w-full">
     <!-- 左侧节点调色板（目录驱动） -->
     <aside class="w-56 overflow-y-auto border-r border-wb-border bg-wb-surface p-3">
       <div class="mb-3 flex items-center justify-between">

@@ -11,6 +11,7 @@ import { useTheme } from './useTheme'
  * 图表配色与全站 token 单一真相源。
  */
 export interface WbChartTheme {
+  primary: string
   primaryStrong: string
   mint: string
   lemon: string
@@ -59,6 +60,7 @@ export function useWbChartTheme(): ComputedRef<WbChartTheme> {
   return computed<WbChartTheme>(() => {
     void currentTheme.value // 主题切换 → 依赖失效 → 重算
     return {
+      primary: readVar('--wb-primary'),
       primaryStrong: readVar('--wb-primary-strong'),
       mint: readVar('--wb-mint'),
       lemon: readVar('--wb-lemon'),

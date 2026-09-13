@@ -87,15 +87,15 @@ async function initLineChart(el: HTMLDivElement): Promise<ECharts> {
   return core.init(el) as unknown as ECharts
 }
 
-/** token 三线折线：面积渐隐 + 平滑曲线，今日视图横轴为 24 小时。 */
+/** token 三线折线：蓝色梯度（主蓝 / 亮蓝 / 青绿点缀）+ 面积渐隐，今日视图横轴为 24 小时。 */
 function renderTokenChart(): void {
   if (!tokenEl.value || !dashboard.tokenTrend) return
   const d = dashboard.tokenTrend
   const th = chartTheme.value
   const series = [
-    { key: 'input' as const, name: t('dashboard.tokenInput'), color: th.primaryStrong },
-    { key: 'output' as const, name: t('dashboard.tokenOutput'), color: th.mint },
-    { key: 'cache_read' as const, name: t('dashboard.tokenCache'), color: th.lemon }
+    { key: 'input' as const, name: t('dashboard.tokenInput'), color: th.primary, alpha: 0.30 },
+    { key: 'output' as const, name: t('dashboard.tokenOutput'), color: th.sky, alpha: 0.16 },
+    { key: 'cache_read' as const, name: t('dashboard.tokenCache'), color: th.mint, alpha: 0.10 }
   ]
   void initLineChart(tokenEl.value).then((c) => {
     tokenChart = c
@@ -134,7 +134,7 @@ function renderTokenChart(): void {
           color: {
             type: 'linear' as const, x: 0, y: 0, x2: 0, y2: 1,
             colorStops: [
-              { offset: 0, color: withAlpha(s.color, 0.16) },
+              { offset: 0, color: withAlpha(s.color, s.alpha) },
               { offset: 1, color: withAlpha(s.color, 0) }
             ]
           }
@@ -205,8 +205,8 @@ function renderPieChart(): void {
           emphasis: { label: { show: false } },
           data: hasData
             ? [
-                { value: s!.cache, name: t('dashboard.tokenCached'), itemStyle: { color: th.lemon } },
-                { value: s!.uncached, name: t('dashboard.tokenUncached'), itemStyle: { color: th.primaryStrong } },
+                { value: s!.cache, name: t('dashboard.tokenCached'), itemStyle: { color: th.sky } },
+                { value: s!.uncached, name: t('dashboard.tokenUncached'), itemStyle: { color: th.primary } },
                 { value: s!.output, name: t('dashboard.tokenOutput'), itemStyle: { color: th.mint } }
               ]
             : []
@@ -238,7 +238,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="card">
+  <section class="card card--chart">
     <div class="flex-r mb10" style="flex-wrap: wrap; gap: 10px">
       <div>
         <h2>{{ t('dashboard.tokenTrend') }}</h2>
@@ -267,9 +267,9 @@ onBeforeUnmount(() => {
         @change="applyTokenCustom"
       />
       <div class="legend">
-        <span><i :style="{ background: 'var(--wb-sky)' }" />{{ t('dashboard.tokenInput') }}</span>
-        <span><i :style="{ background: 'var(--wb-mint)' }" />{{ t('dashboard.tokenOutput') }}</span>
-        <span><i :style="{ background: 'var(--wb-lemon)' }" />{{ t('dashboard.tokenCache') }}</span>
+        <span><i :style="{ background: 'var(--wb-primary)' }" />{{ t('dashboard.tokenInput') }}</span>
+        <span><i :style="{ background: 'var(--wb-sky)' }" />{{ t('dashboard.tokenOutput') }}</span>
+        <span><i :style="{ background: 'var(--wb-mint)' }" />{{ t('dashboard.tokenCache') }}</span>
       </div>
     </div>
     <div v-if="!dashboard.tokenTrend" class="flex h-56 items-center justify-center rounded-lg border border-dashed border-wb-border text-sm text-wb-muted">
