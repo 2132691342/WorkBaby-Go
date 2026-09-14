@@ -14,11 +14,13 @@ import (
 
 // 本文件：token 用量与计费落库（run 汇总 / 按轮明细 / 委派与压缩分账 / 单价解析）。
 
-func (s *ChatService) persistUsage(ctx context.Context, ses *domain.ChatSessionDO, runID, assistantMsgID string, res harness.RunResult) {
+// persistUsage 落 run 的按轮明细。model 是**本次实际调用**的模型（可能被 Agent 定义覆盖），
+// 用它而不是会话模型，否则仪表盘的模型用量与费用会归错账。
+func (s *ChatService) persistUsage(ctx context.Context, ses *domain.ChatSessionDO, runID, assistantMsgID, model string, res harness.RunResult) {
 	if s.usages == nil || len(res.Turns) == 0 {
 		return
 	}
-	pricing := s.modelPricing(ctx, ses.Model)
+	pricing := s.modelPricing(ctx, model)
 	nowMs := time.Now().UnixMilli()
 	rows := make([]domain.TokenUsageDO, 0, len(res.Turns))
 	for _, t := range res.Turns {
@@ -28,7 +30,7 @@ func (s *ChatService) persistUsage(ctx context.Context, ses *domain.ChatSessionD
 			RunID:            runID,
 			MessageID:        assistantMsgID,
 			ProviderID:       ses.ProviderID,
-			Model:            ses.Model,
+			Model:            model,
 			Source:           domain.UsageSourceChat,
 			Turn:             t.Turn,
 			InputTokens:      t.Usage.InputTokens,
@@ -48,23 +50,27 @@ func (s *ChatService) persistUsage(ctx context.Context, ses *domain.ChatSessionD
 
 // persistUsageRow 落一条附属 LLM 调用的用量明细（上下文压缩摘要等）。
 // turn<0 表示非主循环调用：进总消耗统计，不进按轮次的图表。
-func (s *ChatService) persistUsageRow(ctx context.Context, ses *domain.ChatSessionDO, runID, messageID string, turn int, u llm.TokenUsage) {
-	s.persistUsageRowFrom(ctx, ses, runID, messageID, turn, domain.UsageSourceChat, "", u)
+func (s *ChatService) persistUsageRow(ctx context.Context, ses *domain.ChatSessionDO, runID, messageID string, turn int, model string, u llm.TokenUsage) {
+	s.persistUsageRowFrom(ctx, ses, runID, messageID, turn, domain.UsageSourceChat, "", model, u)
 }
 
 // persistUsageRowFrom 带来源与 Agent 归属的明细落库；来源是仪表盘按场景拆分的唯一依据。
-func (s *ChatService) persistUsageRowFrom(ctx context.Context, ses *domain.ChatSessionDO, runID, messageID string, turn int, source domain.TokenUsageSource, agent string, u llm.TokenUsage) {
+// model 为本次实际调用的模型（委派场景是子 Agent 的模型，而非父会话模型）。
+func (s *ChatService) persistUsageRowFrom(ctx context.Context, ses *domain.ChatSessionDO, runID, messageID string, turn int, source domain.TokenUsageSource, agent, model string, u llm.TokenUsage) {
 	if s.usages == nil {
 		return
 	}
-	pricing := s.modelPricing(ctx, ses.Model)
+	if model == "" {
+		model = ses.Model
+	}
+	pricing := s.modelPricing(ctx, model)
 	row := domain.TokenUsageDO{
 		ID:               pkg.NewID("USAGE"),
 		SessionID:        ses.ID,
 		RunID:            runID,
 		MessageID:        messageID,
 		ProviderID:       ses.ProviderID,
-		Model:            ses.Model,
+		Model:            model,
 		Source:           source,
 		Agent:            agent,
 		Turn:             turn,

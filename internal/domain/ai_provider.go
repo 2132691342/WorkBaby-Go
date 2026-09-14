@@ -88,7 +88,7 @@ type AiProviderDO struct {
 	Enabled         bool         `gorm:"default:true"       json:"enabled"`
 	ContextWindow   int          `gorm:"default:0"          json:"context_window"`    // 最大输入 token；0 = 走全局默认
 	MaxOutputTokens int          `gorm:"default:0"          json:"max_output_tokens"` // 单次最大输出 token；0 = 不限制
-	CompressRatio   float64      `gorm:"default:0.9"        json:"compress_ratio"`    // 上下文占比达此比例触发压缩
+	CompressRatio   float64      `gorm:"default:0.75"       json:"compress_ratio"`    // 上下文占比达此比例触发压缩
 	Temperature     float64      `gorm:"default:0"          json:"temperature"`       // 0 = 走全局默认
 	TopP            float64      `gorm:"default:0"          json:"top_p"`             // 0 = 走全局默认
 	ThinkingEffort  string       `gorm:"size:16;default:''" json:"thinking_effort"`   // 空 = 走全局默认

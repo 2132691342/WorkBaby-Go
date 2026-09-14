@@ -263,9 +263,10 @@ func registerChatRoutes(v1 *gin.RouterGroup, h *api.Handler) {
 	v1.POST("/chat/approval-grants/:id/delete", func(c *gin.Context) {
 		Fail(c, h.RevokeApprovalGrant(c.Param("id")))
 	})
-	// 斜杠命令：元数据（命令面板）+ 需后端能力的动作
+	// 斜杠命令：元数据（命令面板）+ 需后端能力的动作。
+	// session_id 可选：带上时一并加载该会话工作区下的命令文件（就近覆盖）。
 	v1.GET("/chat/commands", func(c *gin.Context) {
-		v, err := h.ListChatCommands()
+		v, err := h.ListChatCommands(c.Query("session_id"))
 		unwrap(c, v, err)
 	})
 	// 自定义斜杠命令（保存的提示词模板）：面板合并展示 + 设置页管理

@@ -12,7 +12,7 @@ type ProviderParams struct {
 	ExtraBody   map[string]any  `json:"extraBody,omitempty"`
 }
 
-// Defaults 全局默认（system_settings: chat.defaultTemperature=0.2）。
+// Defaults 全局默认（system_settings: chat.defaultTemperature=0.25；topP 固定 0.75）。
 type Defaults struct {
 	Temperature float64
 	TopP        float64
@@ -100,7 +100,10 @@ func providerDefaults(p *ProviderParams) map[string]any {
 }
 
 // ProviderParamsFromDO 把持久化 AiProviderDO 映射成 ProviderParams。
-// 约定：Temperature==0 / ThinkingEffort=="" 视作"未设置"，对应字段置 nil（被 ResolveParams 跳到下一层）。
+// 约定：Temperature==0 / TopP==0 / ThinkingEffort=="" 视作"未设置"，对应字段置 nil
+// （被 ResolveParams 跳到下一层：全局默认）。
+// TopP 不映射会让 Provider 表格里填的 top_p 静默失效——展示了输入框却不生效，
+// 比没有这个字段更糟。
 func ProviderParamsFromDO(p *domain.AiProviderDO) *ProviderParams {
 	if p == nil {
 		return nil
@@ -109,6 +112,10 @@ func ProviderParamsFromDO(p *domain.AiProviderDO) *ProviderParams {
 	if p.Temperature != 0 {
 		t := p.Temperature
 		out.Temperature = &t
+	}
+	if p.TopP != 0 {
+		tp := p.TopP
+		out.TopP = &tp
 	}
 	if tc := ThinkingFromEffort(p.ThinkingEffort); tc != nil {
 		out.Thinking = tc

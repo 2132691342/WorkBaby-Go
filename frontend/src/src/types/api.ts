@@ -152,7 +152,8 @@ export interface MessageAttachment {
 }
 
 /** 消息块类型（与后端 domain.MessageBlockKind 对齐）。
- *  流式期间额外含 'text'（正文累计），落库时收敛到 message.content。 */
+ *  'text' 为正文片段：模型在两次工具调用之间的叙述按真实位置落块，
+ * 这样刷新回看时的顺序与流式期一致（message.content 仍是全文，供复制/导出用）。 */
 export type MessageBlockKind = 'thinking' | 'text' | 'tool_call' | 'tool_result' | 'artifact' | 'genui' | 'skill'
 
 /** 消息块（MessageBlockRESP）：块即行，payload 为 JSON 字符串。 */
@@ -435,8 +436,10 @@ export interface SlashCommand {
   desc: string
   group: 'session' | 'model' | 'agent' | 'system' | 'custom' | string
   client_only: boolean
-  /** 自定义命令的提示词模板（group=custom；选中即灌入输入框）。 */
+  /** 自定义命令的提示词模板（group=custom；选中即灌入输入框，`$ARGUMENTS`/`$1..$n` 发送前展开）。 */
   prompt?: string
+  /** 命令来源：builtin（内置）/ user（设置页）/ file（{home}/commands/*.md）。 */
+  source?: string
 }
 
 /** 命令列表出参。 */
@@ -741,6 +744,10 @@ export interface AgentProfile {
   tools_deny: string[] | null
   memory_enable: boolean
   max_turns: number
+  /** 固定使用的模型名；空 = 继承主 Agent 当前模型（模型名在会话的 Provider 上解析）。 */
+  model?: string
+  /** 推理强度 off/low/medium/high；空 = 跟随请求级与 Provider 设置。仅在指定了 model 时生效。 */
+  thinking?: string
   enabled: boolean
   created_at: number
   updated_at: number
@@ -755,6 +762,8 @@ export interface AgentProfileReq {
   tools_deny?: string[]
   memory_enable?: boolean
   max_turns?: number
+  model?: string
+  thinking?: string
   enabled?: boolean
 }
 

@@ -70,3 +70,43 @@ type GitCommitReq struct {
 func (h *Handler) GitCommit(req GitCommitReq) error {
 	return h.gitSvc(req.SessionID).Commit(h.ctx, &domain.GitCommitREQ{Message: req.Message, StageAll: req.StageAll})
 }
+
+// GitLog 提交历史分页（limit / skip / all）。
+func (h *Handler) GitLog(sessionID string, limit, skip int, all bool) ([]domain.GitCommitRESP, error) {
+	return h.gitSvc(sessionID).Log(h.ctx, &domain.GitLogREQ{Limit: limit, Skip: skip, All: all}), nil
+}
+
+// GitCommitDetail 单次提交的元信息与变更文件清单。
+func (h *Handler) GitCommitDetail(sessionID, hash string) (*domain.GitCommitDetailRESP, error) {
+	return h.gitSvc(sessionID).CommitDetail(h.ctx, hash)
+}
+
+// GitCommitFileDiff 提交内单文件 diff（path 空 = 全量）。
+func (h *Handler) GitCommitFileDiff(sessionID, hash, path string) (*domain.GitDiffRESP, error) {
+	out, err := h.gitSvc(sessionID).CommitFileDiff(h.ctx, hash, path)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.GitDiffRESP{Diff: out}, nil
+}
+
+// GitGraph 提交图谱（只读文本）。
+func (h *Handler) GitGraph(sessionID string, limit int) (*domain.GitGraphRESP, error) {
+	out, err := h.gitSvc(sessionID).Graph(h.ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.GitGraphRESP{Graph: out}, nil
+}
+
+// GitBranchReq 分支操作入参（删除）。
+type GitBranchReq struct {
+	SessionID string `json:"session_id"`
+	Branch    string `json:"branch"`
+	Force     bool   `json:"force"`
+}
+
+// GitDeleteBranch 删除本地分支（当前分支被拒）。
+func (h *Handler) GitDeleteBranch(req GitBranchReq) error {
+	return h.gitSvc(req.SessionID).DeleteBranch(h.ctx, req.Branch, req.Force)
+}

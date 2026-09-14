@@ -33,7 +33,7 @@ func ProvidersFromFile(path string) ([]domain.AiProviderDO, error) {
 		}
 		ratio := p.CompressRatio
 		if ratio <= 0 {
-			ratio = 0.9
+			ratio = defaultCompressionRatio
 		}
 		out = append(out, domain.AiProviderDO{
 			ID:                id,

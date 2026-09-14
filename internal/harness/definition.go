@@ -13,12 +13,27 @@ import (
 // 装配方（service）按定义物化每次 run 的 Runner 配置，因此同一定义可在 chat / 工作流节点 /
 // 定时任务 / 子 Agent 中复用，替换各调用点的硬编码参数。
 type Definition struct {
-	Name        string       // 唯一名（"default" / "coding" / "research" / "writer"）
-	Description string       // 一句话职责（未来供 UI 选择与命令面板）
+	Name        string       // 唯一名（"default" / "coding" / "research" / "writer" / "explore"）
+	Description string       // 一句话职责（供 UI 选择、命令面板与主 Agent 判断何时委派）
 	Persona     string       // 人设/方法论 system 段；空 = 不注入
 	Tools       ToolPolicy   // 工具策略（Allow/Ask/Deny 三级）
 	Memory      MemoryPolicy // 记忆策略
 	Budget      Budget       // 运行预算
+	// Model 该 Agent 固定使用的模型；空 = 跟随会话模型。
+	// 语义边界：模型名在**当前会话的 Provider** 上解析——一个 Provider 一套凭据与协议方言，
+	// 跨 Provider 换模型属于会话级选择，不由 Agent 定义承担。
+	Model string
+	// Thinking 推理强度（off / low / medium / high）；空 = 跟随请求级与 Provider/全局设置。
+	// 仅在请求未显式指定推理强度时生效（用户当次的选择永远优先）。
+	Thinking string
+}
+
+// EffectiveModel 本次 run 实际使用的模型：Agent 定义优先，否则跟随会话。
+func (d Definition) EffectiveModel(sessionModel string) string {
+	if strings.TrimSpace(d.Model) != "" {
+		return d.Model
+	}
+	return sessionModel
 }
 
 // ToolPolicy Agent 层的工具白名单/黑名单：声明「本 Agent 该带哪些工具」。
@@ -154,4 +169,16 @@ const (
 	// personaWriter 写作助手：轻工具、长输出。
 	personaWriter = "你是 WorkBaby 的写作助手，负责整理、总结与创作。\n" +
 		"工作方式：先确认目标与篇幅；只在你明确需要时才调用工具；输出结构清晰。" + personaMethodology
+	// personaExplore 只读探索专家：被主 Agent 派出去摸清一块代码或一份资料，回传证据而非结论。
+	// 与其他人设的关键差别是「不产出改动」——把这条写进人设，模型才不会试图先改再解释。
+	personaExplore = "你是 WorkBaby 的只读探索专家，负责在隔离上下文里查清事实并把证据带回来。\n" +
+		"工作方式：\n" +
+		"1. 只读：不创建、不修改、不删除任何文件，也不执行会改变系统状态的命令。\n" +
+		"2. 先铺开再收敛：先用 file_list / file_grep 定位范围，再 file_read 精读关键位置，不要一上来逐文件通读。\n" +
+		"3. 结论必须带证据：每条结论标注「文件路径 + 行号区间」，便于主 Agent 直接复核。\n" +
+		"4. 区分事实与推断：读到的写「事实」，没读到的写「未确认」，不补充未经查证的猜测。\n" +
+		"5. 有界收束：围绕被指派的问题作答，不做与之无关的横向扩展。\n\n" +
+		"## 输出\n" +
+		"- 先给结论，再列证据清单（路径 + 行号 + 一句话说明）。\n" +
+		"- 找到的内容不足以回答时，明确说明缺什么、已查过哪些位置。"
 )

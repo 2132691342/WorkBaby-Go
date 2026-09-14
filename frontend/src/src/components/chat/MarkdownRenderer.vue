@@ -237,7 +237,9 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* 优化：layout containment + 内容渲染隔离，减少流式重写引发的页面整体 layout shift */
+/* 只保留「本组件真实拥有的节点」样式：v-html 注入的 DOM 不带 data-v-*，
+ * 写在这里的 .markdown-body 子孙规则全都不会命中（曾经就有一整块是死规则，
+ * 唯一效果是让人以为改了那里能生效）。正文排版见 style.css，代码块见下方全局块。 */
 .markdown-body-wrapper {
   contain: layout style;
 }
@@ -267,129 +269,6 @@ onBeforeUnmount(() => {
   font-size: 0.85rem;
   margin: 4px 0;
 }
-.markdown-body pre {
-  border-radius: 12px;
-  padding: 12px;
-  overflow-x: auto;
-  background: var(--wb-code-bg, #f6f8fa);
-  margin: 8px 0;
-}
-.markdown-body code {
-  font-family: var(--font-mono);
-  font-size: 0.9em;
-  padding: 2px 4px;
-  border-radius: 4px;
-  background: var(--wb-code-bg, #f6f8fa);
-}
-.markdown-body pre code {
-  padding: 0;
-  background: transparent;
-}
-.markdown-body p {
-  margin: 6px 0;
-}
-.markdown-body ul,
-.markdown-body ol {
-  padding-left: 20px;
-  margin: 6px 0;
-}
-.markdown-body blockquote {
-  border-left: 3px solid var(--wb-primary);
-  padding-left: 12px;
-  margin: 8px 0;
-  color: var(--wb-muted);
-}
-.markdown-body h1,
-.markdown-body h2,
-.markdown-body h3,
-.markdown-body h4,
-.markdown-body h5,
-.markdown-body h6 {
-  font-weight: 600;
-  line-height: 1.3;
-  margin: 12px 0 8px;
-}
-.markdown-body h1 { font-size: 1.4em; }
-.markdown-body h2 { font-size: 1.2em; }
-.markdown-body h3 { font-size: 1.05em; }
-.markdown-body a {
-  color: var(--wb-primary-strong);
-  text-decoration: none;
-}
-.markdown-body a:hover {
-  text-decoration: underline;
-}
-/* 表格：外层容器提供横向滚动，宽表不再撑破布局 */
-.markdown-body table {
-  border-collapse: collapse;
-  margin: 8px 0;
-  display: block;
-  overflow-x: auto;
-  max-width: 100%;
-}
-.markdown-body th,
-.markdown-body td {
-  border: 1px solid var(--wb-border, #e5e7eb);
-  padding: 6px 10px;
-}
-.markdown-body th {
-  background: color-mix(in srgb, var(--wb-primary, #2f7bf6) 8%, transparent);
-  font-weight: 600;
-}
-
-/* ===== GFM 任务列表 ===== */
-.markdown-body ul.contains-task-list {
-  list-style: none;
-  padding-left: 4px;
-}
-.markdown-body li.task-list-item {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-.markdown-body li.task-list-item input[type='checkbox'] {
-  margin: 0;
-  accent-color: var(--wb-primary, #2f7bf6);
-  pointer-events: none;
-}
-
-/* ===== 脚注 ===== */
-.markdown-body .footnotes {
-  margin-top: 12px;
-  padding-top: 8px;
-  border-top: 1px solid var(--wb-border, #e5e7eb);
-  font-size: 0.85em;
-  color: var(--wb-muted, #6b7280);
-}
-.markdown-body .footnote-ref a,
-.markdown-body .footnote-backref {
-  color: var(--wb-primary-strong, #1c63dc);
-  text-decoration: none;
-}
-
-/* ===== 数学公式 / Mermaid（占位 → 异步填充）===== */
-.markdown-body .wb-math {
-  overflow-x: auto;
-  overflow-y: hidden;
-  max-width: 100%;
-}
-.markdown-body .wb-math[data-display='block'] {
-  margin: 8px 0;
-  text-align: center;
-}
-.markdown-body .wb-mermaid-svg {
-  margin: 8px 0;
-  overflow-x: auto;
-  text-align: center;
-}
-.markdown-body .wb-mermaid-error,
-.markdown-body .wb-render-error {
-  background: color-mix(in srgb, var(--wb-warning, #b45309) 10%, transparent);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 0.85em;
-  white-space: pre-wrap;
-}
 </style>
 
 <style>
@@ -397,8 +276,8 @@ onBeforeUnmount(() => {
  * 配色跟随主题：token 全走 --wb-c-* 变量，两套主题只切变量值，token 规则一份。
  * 取色基准：GitHub Light / GitHub Dark 官方 hljs 主题。 */
 :root[data-theme='light'] {
-  --wb-code-bg: #f6f8fa;
-  --wb-code-header-bg: #eaeef2;
+  --wb-code-bg: #f7f9fc;
+  --wb-code-header-bg: #eef2f8;
   --wb-code-fg: #24292f;
   --wb-code-border: rgba(15, 23, 42, 0.1);
   --wb-c-keyword: #cf222e;
@@ -430,18 +309,23 @@ onBeforeUnmount(() => {
   background: var(--wb-code-bg);
   color: var(--wb-code-fg);
   border: 1px solid var(--wb-code-border);
-  /* 长代码限高滚动而不是折叠：折叠会让用户以为内容丢了，滚动则始终可见 */
-  max-height: 30rem;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 0.7em 0;
+  /* 长代码限高滚动而不是折叠：折叠会让用户以为内容丢了，滚动则始终可见。
+   * 限高收到 24rem——过高的代码块会把消息流切成两段，正文被推到屏外。 */
+  max-height: 24rem;
   overflow: auto;
   overscroll-behavior: contain;
 }
-/* header 覆盖在 pre 顶部：语言标签 + 复制按钮 */
+/* header 覆盖在 pre 顶部：语言标签 + 复制按钮。
+ * 负外边距抵消 pre 的内边距，让 header 顶满整条；数值必须与 pre 的 padding 同步。 */
 .markdown-body .wb-code-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 10px;
-  margin: -12px -12px 8px;
+  padding: 8px 12px;
+  margin: -12px -14px 10px;
   background: var(--wb-code-header-bg);
   border-bottom: 1px solid var(--wb-code-border);
   font-size: 11px;
@@ -499,9 +383,63 @@ onBeforeUnmount(() => {
 /* summary 内的 header（折叠条上的语言 + 复制） */
 .markdown-body .wb-code-summary .wb-code-header {
   margin: 0;
-  padding: 4px 10px;
+  padding: 6px 10px;
   background: transparent;
   border-bottom: none;
+}
+
+/* ===== GFM 任务列表 ===== */
+.markdown-body ul.contains-task-list {
+  list-style: none;
+  padding-left: 4px;
+}
+.markdown-body li.task-list-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.markdown-body li.task-list-item input[type='checkbox'] {
+  margin: 0;
+  accent-color: var(--wb-primary);
+  pointer-events: none;
+}
+
+/* ===== 脚注 ===== */
+.markdown-body .footnotes {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wb-border);
+  font-size: 0.85em;
+  color: var(--wb-muted);
+}
+.markdown-body .footnote-ref a,
+.markdown-body .footnote-backref {
+  color: var(--wb-primary-strong);
+  text-decoration: none;
+}
+
+/* ===== 数学公式 / Mermaid（占位 → 异步填充）===== */
+.markdown-body .wb-math {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+}
+.markdown-body .wb-math[data-display='block'] {
+  margin: 0.8em 0;
+  text-align: center;
+}
+.markdown-body .wb-mermaid-svg {
+  margin: 0.8em 0;
+  overflow-x: auto;
+  text-align: center;
+}
+.markdown-body .wb-mermaid-error,
+.markdown-body .wb-render-error {
+  background: color-mix(in srgb, var(--wb-warning) 10%, transparent);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.85em;
+  white-space: pre-wrap;
 }
 
 /* hljs token → 主题变量 */

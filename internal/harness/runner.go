@@ -83,9 +83,25 @@ type LoopHooks struct {
 	AfterToolCalls      []ToolResultHook
 	ToolGate            *tool.Gate
 	Approver            func(ctx context.Context, description, risk string) bool
-	// HooksBeforeTool 用户自定义钩子闸门（子进程协议）：deny 拦截工具调用。
-	// 与目录信任/策略门平级的一层，拒绝理由直达模型。
-	HooksBeforeTool func(ctx context.Context, tool string, args json.RawMessage) (ok bool, reason string)
+}
+
+// PreToolDecision 工具执行前裁决（allow / ask / deny；空 = 无意见）。
+type PreToolDecision struct {
+	Decision string
+	Reason   string
+	// Context 放行时追加进模型可见的工具回执（用户钩子的补充上下文）。
+	Context string
+}
+
+// ToolHooks 工具生命周期用户钩子组（子进程协议）；nil 字段 = 该缝关闭。
+// 裁决语义与工具策略门一致：deny 直接拒绝，ask 走审批，allow 放行。
+type ToolHooks struct {
+	PreToolUse func(ctx context.Context, toolName, toolCallID string, args json.RawMessage) PreToolDecision
+	// PermissionRequest 仅在需要询问时触发；返回 allow / deny 与理由，空 = 交回人工审批。
+	PermissionRequest func(ctx context.Context, toolName, toolCallID string, args json.RawMessage) (decision string, reason string)
+	// PostToolUse / PostToolUseFailure 返回追加进模型可见上下文的文本（可空）。
+	PostToolUse        func(ctx context.Context, toolName, toolCallID string, args json.RawMessage, response string) string
+	PostToolUseFailure func(ctx context.Context, toolName, toolCallID string, args json.RawMessage, errText string) string
 }
 
 // Runner 控制循环主控（多轮 ReAct）；模型可调用工具，每轮执行并回填结果，直到无调用或达终止条件。
@@ -98,6 +114,7 @@ type Runner struct {
 	cfg             Config
 	checkpoints     CheckpointStore            // 可选；nil = 不落检查点（JSONL 或 SQL 实现）
 	hooks           LoopHooks                  // 循环缝集合（nil 字段 = 关闭）
+	toolHooks       ToolHooks                  // 工具生命周期用户钩子（nil 字段 = 关闭）
 	compressor      Compressor                 // 上下文压缩器；默认 Micro；nil 时 ByContextBudget 关闭
 	reqParams       RequestParams              // 请求级采样参数（chat 透传；nil = 不覆盖）
 	providerParams  *llm.ProviderParams        // Provider 级（ai_providers.temperature/thinking）；nil = 走全局
@@ -118,7 +135,8 @@ type Runner struct {
 	delegateFlights map[string]*delegateFlight // 同参委派在飞表（agent|task → flight）
 	// OnDelegateUsage 子 Agent 委派用量回调（可选）：委派子 run 的消耗单独上报，
 	// 不上报会让总消耗统计系统性漏计（一次委派可达 12 轮 + 几十次工具调用）。
-	OnDelegateUsage func(agentName string, turns []TurnUsage)
+	// model 为子 run 实际使用的模型（子 Agent 可指定自己的模型），用于按模型归账。
+	OnDelegateUsage func(agentName, model string, turns []TurnUsage)
 }
 
 // PathTrust 目录信任闸门：由 service 侧抽取目标目录并解析信任三态，返回是否放行与拒绝原因。
@@ -193,10 +211,10 @@ func (r *Runner) WithAfterToolCall(fn ToolResultHook) *Runner {
 // nil = 关闭（维持既有行为）。
 func (r *Runner) WithPathTrust(p PathTrust) *Runner { r.hooks.BeforeToolCall = p; return r }
 
-// WithHooksBeforeTool 启用用户自定义钩子闸门（子进程协议）：工具执行前跑用户命令，
-// deny 即拦截。挂在策略门之后、停滞检测之前。nil = 关闭。
-func (r *Runner) WithHooksBeforeTool(fn func(ctx context.Context, tool string, args json.RawMessage) (ok bool, reason string)) *Runner {
-	r.hooks.HooksBeforeTool = fn
+// WithToolHooks 注入工具生命周期用户钩子组（PreToolUse / PermissionRequest /
+// PostToolUse / PostToolUseFailure）。零值 ToolHooks = 全部关闭。
+func (r *Runner) WithToolHooks(h ToolHooks) *Runner {
+	r.toolHooks = h
 	return r
 }
 

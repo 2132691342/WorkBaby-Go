@@ -16,7 +16,7 @@ import (
 // ClientOnly 命令的执行逻辑在前端（切模型/开面板/导出），后端不重复实现；
 // 非 ClientOnly 命令的面板项直接跳到现有端点（/chat/sessions/:id/compact 等）。
 func BuiltinCommands() []domain.SlashCommand {
-	return []domain.SlashCommand{
+	cmds := []domain.SlashCommand{
 		// 会话闭环：新建 / 重命名 / 清空 / 分叉 / 截断
 		{Name: "new", Desc: "新建会话", Group: "session", ClientOnly: true},
 		{Name: "rename", Args: "<新标题>", Desc: "重命名当前会话", Group: "session", ClientOnly: true},
@@ -39,6 +39,11 @@ func BuiltinCommands() []domain.SlashCommand {
 		{Name: "export", Desc: "导出当前会话为 Markdown", Group: "session", ClientOnly: true},
 		{Name: "help", Desc: "查看全部命令说明", Group: "system", ClientOnly: true},
 	}
+	// 来源标记集中在此处理：逐条写字面量会让「加一条命令」变成两处修改。
+	for i := range cmds {
+		cmds[i].Source = domain.CommandSourceBuiltin
+	}
+	return cmds
 }
 
 // CompactSession 确定性压缩历史（/compact 的后端实现）：早期轮次标 archived 剔出

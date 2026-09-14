@@ -17,7 +17,8 @@ import (
 // 注册表是运行期的唯一消费点：delegate_task 按名委派与会话 Agent 切换经 harness.Agent(name)
 // 取定义，本服务只负责把 agent_profiles 表里 enabled 的行物化成 harness.Definition。
 type AgentProfileService struct {
-	repo *repo.AgentProfileRepo
+	repo     *repo.AgentProfileRepo
+	dataHome string // {home}；非空时额外加载 {home}/agents/*.md 定义文件
 }
 
 // NewAgentProfileService 构造服务；注册表同步由调用方在启动期显式 Sync（失败不阻断启动）。
@@ -25,18 +26,36 @@ func NewAgentProfileService(repo *repo.AgentProfileRepo) *AgentProfileService {
 	return &AgentProfileService{repo: repo}
 }
 
+// WithDataHome 注入数据根：启用 {home}/agents/*.md 定义文件（文件与表同构，一并物化）。
+func (s *AgentProfileService) WithDataHome(home string) *AgentProfileService {
+	s.dataHome = home
+	return s
+}
+
 // agentNamePattern kebab-case 唯一名（与 Skill 命名约定一致）。
 var agentNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 
 // Sync 把 enabled 的自定义子智能体物化进 harness 注册表（启动期与每次写操作后调用）。
+// 来源两处：agent_profiles 表（界面维护）+ {home}/agents/*.md（文件维护）。
+// 同名时以表为准——界面上的显式修改优先于磁盘上的历史文件，避免改了界面却不生效。
 func (s *AgentProfileService) Sync(ctx context.Context) error {
 	rows, err := s.repo.ListEnabled(ctx)
 	if err != nil {
 		return err
 	}
 	defs := make([]harness.Definition, 0, len(rows))
+	taken := make(map[string]struct{}, len(rows))
 	for i := range rows {
-		defs = append(defs, profileToDefinition(&rows[i]))
+		d := profileToDefinition(&rows[i])
+		defs = append(defs, d)
+		taken[d.Name] = struct{}{}
+	}
+	for _, d := range LoadAgentFiles(s.dataHome) {
+		if _, dup := taken[d.Name]; dup {
+			pkg.L.Warn("agent file shadowed by profile row", "agent", d.Name)
+			continue
+		}
+		defs = append(defs, d)
 	}
 	harness.SetCustomAgents(defs)
 	return nil
@@ -101,6 +120,17 @@ func validateProfileReq(req *domain.AgentProfileREQ) (*domain.AgentProfileDO, er
 	if req.MaxTurns < 0 || req.MaxTurns > 40 {
 		return nil, pkg.New(8203, "max_turns 取值范围 0-40（0 用委派默认）", "")
 	}
+	model := strings.TrimSpace(req.Model)
+	thinking := strings.ToLower(strings.TrimSpace(req.Thinking))
+	if thinking != "" {
+		if _, ok := thinkingLevels[thinking]; !ok {
+			return nil, pkg.New(8203, "推理强度取值 off / low / medium / high", req.Thinking)
+		}
+		// 不指定模型 = 完全继承主 Agent，此时单独改思考档位会让用户当次选择失效，直接拒绝比静默忽略好。
+		if model == "" {
+			return nil, pkg.New(8203, "指定推理强度前需先指定模型（留空表示继承主 Agent）", "")
+		}
+	}
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -114,6 +144,8 @@ func validateProfileReq(req *domain.AgentProfileREQ) (*domain.AgentProfileDO, er
 		ToolsDeny:    marshalGlobList(req.ToolsDeny),
 		MemoryEnable: req.MemoryEnable,
 		MaxTurns:     req.MaxTurns,
+		Model:        model,
+		Thinking:     thinking,
 		Enabled:      enabled,
 	}, nil
 }
@@ -128,7 +160,9 @@ func profileToDefinition(row *domain.AgentProfileDO) harness.Definition {
 			Allow: unmarshalGlobList(row.ToolsAllow),
 			Deny:  unmarshalGlobList(row.ToolsDeny),
 		},
-		Memory: harness.MemoryPolicy{Enabled: row.MemoryEnable},
+		Memory:   harness.MemoryPolicy{Enabled: row.MemoryEnable},
+		Model:    strings.TrimSpace(row.Model),
+		Thinking: strings.TrimSpace(row.Thinking),
 	}
 	if row.MaxTurns > 0 {
 		def.Budget.MaxTurns = row.MaxTurns
@@ -147,6 +181,8 @@ func profileToRESP(row *domain.AgentProfileDO) domain.AgentProfileRESP {
 		ToolsDeny:    unmarshalGlobList(row.ToolsDeny),
 		MemoryEnable: row.MemoryEnable,
 		MaxTurns:     row.MaxTurns,
+		Model:        row.Model,
+		Thinking:     row.Thinking,
 		Enabled:      row.Enabled,
 		CreatedAt:    row.CreatedAt,
 		UpdatedAt:    row.UpdatedAt,

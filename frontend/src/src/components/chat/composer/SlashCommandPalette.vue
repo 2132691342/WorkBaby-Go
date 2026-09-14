@@ -48,13 +48,23 @@ export interface SlashCommand {
   group?: string
   /** 自定义命令的提示词模板（group=custom；选中即灌入输入框）。 */
   prompt?: string
+  /** 命令来源：builtin / user（设置页）/ file（{home}/commands）/ workspace（<ws>/.workbaby/commands）。 */
+  source?: string
 }
 
 const props = defineProps<{
   visible: boolean
   query: string
   /** 后端斜杠命令元数据（GET /api/v1/chat/commands），与本地兜底合并。 */
-  backendCommands?: { name: string; args: string; desc: string; group: string; client_only: boolean }[]
+  backendCommands?: {
+    name: string
+    args: string
+    desc: string
+    group: string
+    client_only: boolean
+    prompt?: string
+    source?: string
+  }[]
 }>()
 
 const emit = defineEmits<{
@@ -87,7 +97,15 @@ const LOCAL_COMMANDS: SlashCommand[] = [
 ]
 
 /** 后端命令 → SlashCommand（无 descKey/labelKey，用直接的 desc 字符串透传）。 */
-function backendToSlash(cmd: { name: string; args: string; desc: string; group: string; client_only: boolean; prompt?: string }): SlashCommand {
+function backendToSlash(cmd: {
+  name: string
+  args: string
+  desc: string
+  group: string
+  client_only: boolean
+  prompt?: string
+  source?: string
+}): SlashCommand {
   const icon = groupIcon(cmd.group)
   return {
     id: cmd.name,
@@ -99,8 +117,21 @@ function backendToSlash(cmd: { name: string; args: string; desc: string; group: 
     group: cmd.group,
     label: cmd.name,
     desc: cmd.desc,
-    prompt: cmd.prompt
+    prompt: cmd.prompt,
+    source: cmd.source
   } as SlashCommand
+}
+
+/**
+ * 来源徽标：让用户一眼看出「这条命令在哪改」。
+ * 同名命令有四级来源，没有徽标时「改了文件却不生效」是无法自证的。
+ */
+function sourceBadge(cmd: SlashCommand): { text: string; cls: string } {
+  if (cmd.source === 'workspace') return { text: t('slash.src.workspace'), cls: 'bg-wb-primary/15 text-wb-primary-strong' }
+  if (cmd.source === 'file') return { text: t('slash.src.file'), cls: 'bg-wb-primary/10 text-wb-primary' }
+  if (cmd.source === 'user') return { text: t('slash.src.user'), cls: 'bg-wb-primary/10 text-wb-primary' }
+  if (cmd.clientOnly) return { text: t('slash.local'), cls: 'border border-wb-border text-wb-muted' }
+  return { text: t('slash.server'), cls: 'bg-wb-primary/10 text-wb-primary' }
 }
 
 /** 合并命令：后端优先（同名本地命令隐藏）。 */
@@ -193,8 +224,9 @@ defineExpose({ reset, pickAt, moveActive, filtered })
             <span class="flex items-center gap-1.5">
               <span class="truncate font-medium">/{{ cmd.id }}</span>
               <span v-if="cmd.args" class="truncate text-[10px] text-wb-muted font-mono">{{ cmd.args }}</span>
-              <span v-if="cmd.clientOnly" class="ml-auto rounded border border-wb-border px-1 py-0 text-[9px] text-wb-muted">{{ t('slash.local') }}</span>
-              <span v-else class="ml-auto rounded bg-wb-primary/10 px-1 py-0 text-[9px] text-wb-primary">{{ t('slash.server') }}</span>
+              <span class="ml-auto shrink-0 rounded px-1 py-0 text-[9px]" :class="sourceBadge(cmd).cls">
+                {{ sourceBadge(cmd).text }}
+              </span>
             </span>
             <span class="block truncate text-[10px] text-wb-muted">{{ cmd.descKey ? t(cmd.descKey) : cmd.desc }}</span>
           </span>

@@ -5,10 +5,11 @@
  * <p>每个条目 = 人设 system prompt + 工具 allow/deny 策略 + 记忆开关 + 轮次预算；
  * 保存即写入 harness 注册表，主 Agent 可经 delegate_task 按名委派，也可 /agent 切换为会话主 Agent。
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { Bot, Plus, Trash2 } from '@/components/common/icons'
 import { useAgentProfilesStore } from '@/stores/agents'
+import { useChatStore } from '@/stores/chat'
 import { t } from '@/i18n'
 import FormDialog from '@/components/common/FormDialog.vue'
 import Field from '@/components/common/Field.vue'
@@ -16,10 +17,26 @@ import type { AgentProfile } from '@/types/api'
 
 const agents = useAgentProfilesStore()
 const { profiles: list, loading, error, editingName, form } = storeToRefs(agents)
+const chat = useChatStore()
+const { models } = storeToRefs(chat)
 
-onMounted(() => {
+onMounted(async () => {
   agents.load()
+  // 模型下拉需要已配置的模型清单：先拉一次，避免让用户手打模型名（打错只会在运行时以 5003 暴露）
+  if (models.value.length === 0) await chat.loadModels()
 })
+
+/** 可选模型名（按模型名去重，一个模型可能被多个 Provider 提供）。 */
+const modelOptions = computed(() => {
+  const seen = new Set<string>()
+  for (const m of models.value) {
+    if (m.model) seen.add(m.model)
+  }
+  return [...seen].sort()
+})
+
+/** 可选的推理强度档位（与后端 thinkingLevels 一致）。 */
+const THINKING_LEVELS = ['off', 'low', 'medium', 'high'] as const
 
 // ===== 新建 / 编辑统一弹窗 =====
 const showForm = ref(false)
@@ -84,6 +101,16 @@ async function submitForm(): Promise<void> {
           <el-table-column :label="t('agents.tools')" min-width="160" show-overflow-tooltip>
             <template #default="{ row }">
               <span class="text-xs text-wb-muted">{{ (row as AgentProfile).tools_allow?.length ? (row as AgentProfile).tools_allow!.join(', ') : t('agents.allTools') }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column :label="t('agents.model')" min-width="150" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span class="text-xs" :class="(row as AgentProfile).model ? 'text-wb-primary-strong' : 'text-wb-muted'">
+                {{ (row as AgentProfile).model || t('agents.modelInherit') }}
+              </span>
+              <span v-if="(row as AgentProfile).model && (row as AgentProfile).thinking" class="text-xs text-wb-muted">
+                · {{ t(`chat.effort.${(row as AgentProfile).thinking}`) }}
+              </span>
             </template>
           </el-table-column>
           <el-table-column :label="t('agents.maxTurns')" width="90" align="center">
@@ -174,6 +201,29 @@ async function submitForm(): Promise<void> {
           <el-option v-for="tn in form.tools_deny || []" :key="tn" :value="tn" :label="tn" />
         </el-select>
       </div>
+
+      <div class="wb-fgrid mt4">
+        <Field :label="t('agents.model')">
+          <el-select
+            v-model="form.model"
+            filterable
+            clearable
+            allow-create
+            default-first-option
+            class="w-full"
+            :placeholder="t('agents.modelHint')"
+          >
+            <el-option v-for="mn in modelOptions" :key="mn" :value="mn" :label="mn" />
+          </el-select>
+        </Field>
+        <Field :label="t('agents.thinking')">
+          <select v-model="form.thinking" class="input" :disabled="!form.model">
+            <option value="">{{ t('agents.thinkingFollow') }}</option>
+            <option v-for="lv in THINKING_LEVELS" :key="lv" :value="lv">{{ t(`chat.effort.${lv}`) }}</option>
+          </select>
+        </Field>
+      </div>
+      <p class="fs11 muted" style="margin: 6px 0 0">{{ t('agents.modelBoundaryHint') }}</p>
 
       <div class="wb-fgrid mt4">
         <Field :label="t('agents.memory')">

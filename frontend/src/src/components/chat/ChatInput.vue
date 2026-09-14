@@ -39,6 +39,7 @@ import { useFoldersStore } from '@/stores/folders'
 import { useFilesStore } from '@/stores/files'
 import { splitTokens } from '@/chat/models/tokens'
 import type { DraftToken } from '@/chat/models/tokens'
+import { expandSlashDraft } from '@/chat/commandArgs'
 
 type PermissionLevel = 'restricted' | 'confirm' | 'auto' | 'full'
 
@@ -420,10 +421,12 @@ function submit(): void {
   if (slashOpen.value && /^\/\w*\s*$/.test(draft.value)) {
     return
   }
+  // 自定义命令：`/命令名 参数…` 按模板占位符展开后再发送（内置命令与普通文本原样通过）
+  const payload = expandSlashDraft(text, chat.commands)
   if (props.streaming) {
     // 流式中发送 = 立即插入（steer）：store 的 sendMessage 检测到流式会走 /steer 注入缝；
     // 「入队」走独立的 Plus 按钮与队列 flush。输入保持可写，插话/排队两不误。
-    emit('send', text, [], currentParams())
+    emit('send', payload, [], currentParams())
     draft.value = ''
     slashOpen.value = false
     slashQuery.value = ''
@@ -432,7 +435,7 @@ function submit(): void {
     void nextTick(() => textareaRef.value?.focus())
     return
   }
-  emit('send', text, attachments.value.map((a) => a.id), currentParams())
+  emit('send', payload, attachments.value.map((a) => a.id), currentParams())
   draft.value = ''
   attachments.value = []
   slashOpen.value = false
@@ -1390,14 +1393,18 @@ defineExpose({
   text-overflow: ellipsis;
 }
 
-/* 非默认权限态需要被看见：只用文字色 + 底色提示，不描边（描边是框线噪音的来源之一） */
+/* 非默认权限态需要被看见：文字色 + 极淡底 + 一道内描边。
+ * 「完全访问」原先只有 12% 红底，在白色输入框上饱和度偏高、像报错；
+ * 拆成底色压到 8% + 内描边承担边界，警示仍在但不刺眼。 */
 .mini--active {
   color: var(--wb-warning);
-  background: color-mix(in srgb, var(--wb-warning) 10%, transparent);
+  background: color-mix(in srgb, var(--wb-warning) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-warning) 22%, transparent);
 }
 .mini--danger {
   color: var(--wb-danger);
-  background: color-mix(in srgb, var(--wb-danger) 12%, transparent);
+  background: color-mix(in srgb, var(--wb-danger) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--wb-danger) 22%, transparent);
 }
 
 /* 草稿字符计数：mono 数字，超限标红 */
@@ -1468,8 +1475,6 @@ defineExpose({
   white-space: nowrap;
 }
 
-/* 权限下拉：危险档提示 */
-.wb-perm-menu :deep(.el-dropdown-menu__item.is-danger) {
-  color: var(--wb-danger);
-}
+/* 权限下拉的样式在 style.css 的 .wb-perm-menu 段落：菜单 teleport 到 body，
+   scoped :deep 命中不到，故不在此重复声明。 */
 </style>

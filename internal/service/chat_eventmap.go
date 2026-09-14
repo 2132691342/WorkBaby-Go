@@ -8,6 +8,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"WorkBaby/internal/capability"
@@ -29,6 +30,11 @@ type runEventMapper struct {
 	blockSeq  int64          // message_blocks 单调序号（同一事件对应同一 seq）
 	toolCalls []llm.ToolCall // 父 run 收集的工具调用（run 结束写 assistant.tool_calls）
 	doneEvent map[string]any // 终态事件：延迟到 assistant 落库后由 executeAgent 发出
+
+	// textSeg 当前累积的正文片段（自上次落块以来收到的 content 增量）。
+	// 模型一轮里的输出是「叙述 → 调工具 → 叙述 → 调工具」交替的，
+	// 只有按工具调用的真实位置把正文落成块，刷新回看时才不会把所有叙述挤到过程之后。
+	textSeg strings.Builder
 }
 
 // newRunEventMapper 构造一次 run 的事件映射器。
@@ -62,6 +68,21 @@ func (m *runEventMapper) persistBlock(e harness.Event, kind domain.MessageBlockK
 	if err := m.svc.blocks.Create(m.ctx, &row); err != nil {
 		pkg.L.Warn("persist message block failed", "runID", m.runID, "err", err.Error())
 	}
+}
+
+// flushText 把累积的正文片段落成一个 text 块（空/纯空白不落）。
+// 落块时机 = 工具调用之前 与 轮次/run 结束：这样块序列里的正文与工具调用
+// 就保持了模型真实的输出顺序，而不是「过程全在前、正文全在后」。
+func (m *runEventMapper) flushText(e harness.Event) {
+	if m.textSeg.Len() == 0 {
+		return
+	}
+	text := m.textSeg.String()
+	m.textSeg.Reset()
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	m.persistBlock(e, domain.BlockText, map[string]any{"text": text})
 }
 
 // handle 实现 harness.Sink：单事件映射入口。
@@ -101,6 +122,7 @@ func (m *runEventMapper) handle(e harness.Event) {
 		}
 		if p, ok := e.Payload.(harness.TurnDeltaPayload); ok && p.Kind == "content" {
 			s.emit(runID, ses.ID, "chat:stream", map[string]any{"delta": p.Text})
+			m.textSeg.WriteString(p.Text)
 		}
 	case harness.EventTurnThinking:
 		if isChild {
@@ -125,9 +147,13 @@ func (m *runEventMapper) handle(e harness.Event) {
 				"latency_ms":            time.Since(m.runStart).Milliseconds(),
 			})
 		}
+		// 本轮叙述收尾：这一轮若以正文结束（没有后续工具调用），在这里落块
+		m.flushText(e)
 	case harness.EventToolCall:
 		if p, ok := e.Payload.(harness.ToolCallPayload); ok {
 			if !isChild {
+				// 先落正文再落工具调用：块的 seq 顺序即用户看到的执行顺序
+				m.flushText(e)
 				m.toolCalls = append(m.toolCalls, llm.ToolCall{
 					ID:   p.ID,
 					Type: "function",
@@ -229,6 +255,8 @@ func (m *runEventMapper) handle(e harness.Event) {
 				})
 				return
 			}
+			// 收尾前把最后一段正文落块（正常路径已在 TurnEnd 落过，这里是兜底）
+			m.flushText(e)
 			m.doneEvent = map[string]any{
 				"status":      "completed",
 				"reason":      string(domain.MapHarnessReason(p.Reason)),

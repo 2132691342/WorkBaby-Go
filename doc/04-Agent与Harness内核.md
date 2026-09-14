@@ -18,10 +18,49 @@
 | coding | 工程 | exec / file_* / doc_reader / archive / websearch | 关 | MaxTurns 40 |
 | research | 调研 | websearch / webfetch / http / knowledge_search | 开（召回 10）不形成 | 默认 |
 | writer | 写作 | 未限制 | 开（召回 6）不形成 | 默认 |
+| explore | 只读探索 | file_read / file_list / file_grep / file_search / doc_reader / knowledge_search / websearch / webfetch（白名单不含任何写工具） | 关 | MaxTurns 24 |
+
+`explore` 的存在意义是「不可能改坏任何东西」：白名单里刻意没有 file_write / file_edit / exec / run_skill_script / delegate_task，宁可让它做不了，也不让它能做。
 
 Persona = 各自定位 + 共享方法论段（先探查、先计划、最小改动、用工具验证结果、失败改道、不确定就问、成果必须可核验）。
 
-自定义子智能体（设置页「子智能体」CRUD，agent_profiles 表）与内置表同构：`AgentProfileService.Sync` 把 enabled 行物化成 Definition 整表替换进 harness 注册表（`harness.SetCustomAgents`），`Agent(name)` 查找顺序为内置 → 自定义 → 回退 default。delegate_task 委派、会话 /agent 切换、后台任务提交共用这一注册表；写操作（创建/启停/删除）即时重同步，下次 run 起生效。内置名（default/coding/research/writer）为保留名。
+自定义子智能体两个来源，`AgentProfileService.Sync` 一次物化成 Definition 整表替换进 harness 注册表（`harness.SetCustomAgents`）：
+
+| 来源 | 载体 | 说明 |
+|---|---|---|
+| 设置页 CRUD | `agent_profiles` 表 | 界面上随手改；写操作（创建/启停/删除）后即时重同步 |
+| 定义文件 | `{home}/agents/<名>.md` | frontmatter 元数据 + 正文人设；可随 dotfiles / 仓库分发 |
+
+Agent 定义没有工作区维度（子智能体是个人能力，不随仓库走），因此同名冲突取「界面即最近一次显式编辑」：表 > 文件。命令正好相反——它有工作区级载体，按就近覆盖（见 doc/07）。
+
+`Agent(name)` 查找顺序为内置 → 自定义 → 回退 default。delegate_task 委派、会话 `/agent` 切换、后台任务提交共用这一注册表。内置名（default / coding / research / writer / explore）为保留名；表与文件同名时以表为准（界面上的显式修改优先于磁盘上的历史文件）。
+
+定义文件 frontmatter 与 Definition 的映射：
+
+| 字段 | 落点 | 说明 |
+|---|---|---|
+| `name` | Definition.Name | 必填；缺省取文件名；须匹配 `^[a-z][a-z0-9-]{0,63}$` |
+| `description` | Definition.Description | 必填；主 Agent 依据它决定何时委派 |
+| `tools` | Tools.Allow | 逗号分隔 glob；`*` = 不设白名单（全部工具） |
+| `disallowedTools` | Tools.Deny | 逗号分隔 glob |
+| `maxTurns` | Budget.MaxTurns | 正整数 |
+| `model` | Definition.Model | 专属模型；`inherit` 或不写 = 跟随会话模型 |
+| `thoughtLevel` | Definition.Thinking | off / low / medium / high；须与 `model` 同时给出 |
+| 正文 | Persona | 即该系统提示词 |
+
+缺 name / description、名字非法、撞内置名的文件会被诊断并跳过（单个文件写坏不影响其余）。未接入执行链的字段（`color` / `mcpServers` / `injectAgentsMd`）仅登记告警——写错不生效必须可见，否则比不写更难排查。
+
+### 模型与推理强度的覆盖规则
+
+| 维度 | 优先级 | 说明 |
+|---|---|---|
+| 模型 | Agent 定义 > 会话模型 | 覆盖时发 `chat:warn`（kind=agent_model_override）——「界面显示 A、实际跑 B」必须可解释；`token_usages` / `run_records` / 费用一并记实际调用的模型，避免按模型归账时错账 |
+| 推理强度 | 请求级（用户当次档位）> Agent 定义 > Provider/全局默认 | 仅当请求未显式指定时生效，用户当次的选择永远优先 |
+
+两条边界：
+
+- **模型名在会话的 Provider 上解析**：一个 Provider 一套凭据与协议方言，跨 Provider 换模型属于会话级选择，不由 Agent 定义承担。
+- **`thoughtLevel` 必须与 `model` 同时给出**：不指定模型即「完全继承」，此时单方面改思考档位会让用户当次的选择失效。文件里违规只告警丢弃，设置页保存时直接拒绝（见 `AgentProfileService`）。委派子 run 同样遵守：子 Agent 定义了自己的模型就用它，否则继承父 run 的模型。
 
 ## 2. 上下文装配（ContextAssembler）
 
@@ -72,7 +111,7 @@ DB 历史 → `[]*llm.Message`：跳过 streaming 占位与 archived 消息（�
 | 注入防护 | 参数含伪工具调用标记 → 拒绝（prompt_injection） |
 | 目录信任 | 信任三态（allow/ask/deny）+ 计划模式硬拦 → 拒绝（path_trust） |
 | 策略门 | 显式规则 glob > 会话模式 × 风险默认；按 per-call 命令级风险裁决；deny → policy，ask 经审批 → approval |
-| 用户钩子 | before_tool 事件触发用户命令（子进程协议），deny 即拦截 → user_hook；钩子故障不阻断（执行器已兜底放行） |
+| 用户钩子 | PreToolUse 事件触发用户命令（子进程协议）：allow 放行并把附加上下文带进回执、ask 升级为人工确认、deny 拦截 → user_hook；钩子故障不阻断（执行器已兜底放行） |
 | 停滞 | 同名同参连续 ≥ StagnationLimit（默认 5）置熔断信号 |
 | 循环/预算 | 全 run 同名同参计数 ≥ LoopLimit（默认 3）→ loop_guard；执行次数超上限 → tool_budget；签名键序归一化（JSON 规范化），同参异序仍判重复，计数在锁内并行安全 |
 | 幂等恢复 | Resume 命中已完成成功调用 → 复用，不重放副作用 |
@@ -83,7 +122,23 @@ DB 历史 → `[]*llm.Message`：跳过 streaming 占位与 archived 消息（�
 
 ### 用户钩子子进程协议（user_hooks）
 
-事件：`run_start` / `before_tool` / `after_tool` / `run_end`（matcher 仅对 before/after_tool 生效，工具名逗号分隔精确匹配）。触发即经 `cmd /c` 拉起子进程：stdin 收 JSON 载荷（event/session_id/run_id/tool/params/outcome/reason），stdout 输出 JSON 决策——`before_tool` 输出 `{"decision":"deny","reason":"…"}` 拦截工具调用（理由回填模型），其余事件只观察不阻断。exit 非 0 / 超时 / 非法 JSON 均记日志后放行（失败原因带子进程输出前 200 字，便于定位）。run_start / after_tool / run_end 异步执行不阻塞 run。
+七类事件，触发即经 `cmd /c` 拉起子进程；`--` 表示该事件不参与 matcher 过滤：
+
+| 事件 | matcher | 插入点 | 决策效果 |
+|---|---|---|---|
+| `SessionStart` | — | 首轮模型请求前（续跑不重放） | `additionalContext` 追加进 system |
+| `UserPromptSubmit` | — | 用户提交后、模型调用前 | `additionalContext` 注入本轮 system；`continue:false` / exit 2 阻断本次请求 |
+| `PreToolUse` | 工具名 | 策略门之后、执行之前 | `permissionDecision`：`allow` 放行（附加上下文带进回执）/ `ask` 升级人工确认 / `deny` 拦截 |
+| `PermissionRequest` | 工具名 | 仅在需要询问时 | `decision.behavior`：`allow` / `deny`，直接代答，不打扰用户 |
+| `PostToolUse` | 工具名 | 工具成功后 | `additionalContext` 追加进工具回执（`[hook]` 段） |
+| `PostToolUseFailure` | 工具名 | 工具失败后 | 同上，用于恢复建议 / 诊断 |
+| `Stop` | — | 本轮无工具调用、run 即将收尾 | `decision:"block"` + `reason` → 带着反馈再跑一轮（连续上限 3 次） |
+
+- **载荷**：stdin 一行 JSON。公共字段 `hook_event_name` / `session_id` / `run_id` / `cwd` / `permission_mode`；事件专属 `source`（SessionStart）、`prompt`（UserPromptSubmit）、`tool_name` / `tool_input` / `tool_use_id`（工具类）、`tool_response` / `error`（Post 类）、`last_assistant_message` / `stop_hook_active`（Stop）。
+- **决策**：stdout JSON，优先读 `hookSpecificOutput`，兼容顶层 `additionalContext` / `additional_context`。退出码 0 = 解析 stdout、2 = 阻断快捷方式、其他 = 当前钩子可恢复失败（记日志跳过，不影响后续钩子）。
+- **matcher**：空 / `*` = 全部；只含字母数字下划线与 `|` 按精确名称名单（`Write|Edit`）；含其他字符按正则。非法正则在写入期即拒绝。
+- **聚合**：多个匹配钩子按 `sort` 升序执行，拒绝优先于询问优先于放行（deny > ask > allow）；`PreToolUse` 命中 deny 立即短路。
+- **故障**：超时（默认 10s，上限 60s）/ 子进程退出异常 / 非法 JSON 一律放行并记日志（失败原因带子进程输出前 200 字）。工具类钩子同步执行（结果要进回执）；Stop 仅在续接缝消费。
 
 命令行按用户填写原样透传给 `cmd`（`SysProcAttr.CmdLine`，不做参数转义）——带引号的写法（`node "C:\Program Files\guard.js"`、`cmd /c "echo ok"`）不会被重排破坏。
 

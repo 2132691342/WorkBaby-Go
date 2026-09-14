@@ -75,24 +75,52 @@ func (h *Handler) CancelStream(sessionID string) error {
 
 // ListChatCommands 斜杠命令元数据（前端命令面板的数据源）：内置 + 自定义命令合并，
 // 自定义命令 client_only 且带 prompt 模板（选中即灌入输入框）。
-func (h *Handler) ListChatCommands() (domain.CommandListRESP, error) {
+//
+// sessionID 非空时一并加载该会话工作区下的命令文件（<ws>/.workbaby/commands）。
+// 同名冲突按「就近优先」：工作区文件 > 用户级文件 > 设置页记录。
+// 理由：越贴近当前项目的声明越具体，项目内的约定应当能覆盖个人的通用同名命令。
+func (h *Handler) ListChatCommands(sessionID string) (domain.CommandListRESP, error) {
 	items := service.BuiltinCommands()
-	customs, err := h.commandSvc.List(h.ctx)
-	if err != nil {
-		return domain.CommandListRESP{Items: items, Total: len(items)}, nil
+	byName := make(map[string]int, len(items))
+	for i, it := range items {
+		byName[it.Name] = i
 	}
-	for _, c := range customs {
-		desc := c.Description
-		if desc == "" {
-			desc = firstLine(c.Prompt)
+
+	// upsertCustom 同名覆盖已存在的条目（含内置名），否则追加。
+	upsertCustom := func(c domain.SlashCommand) {
+		if c.Desc == "" {
+			c.Desc = firstLine(c.Prompt)
 		}
-		items = append(items, domain.SlashCommand{
-			Name:       c.Name,
-			Desc:       desc,
-			Group:      "custom",
-			ClientOnly: true,
-			Prompt:     c.Prompt,
-		})
+		if i, dup := byName[c.Name]; dup {
+			items[i] = c
+			return
+		}
+		byName[c.Name] = len(items)
+		items = append(items, c)
+	}
+
+	// ① 设置页记录（最先铺底，会被下面的文件覆盖）
+	if customs, err := h.commandSvc.List(h.ctx); err == nil {
+		for _, c := range customs {
+			upsertCustom(domain.SlashCommand{
+				Name:       c.Name,
+				Desc:       c.Description,
+				Group:      "custom",
+				ClientOnly: true,
+				Prompt:     c.Prompt,
+				Source:     domain.CommandSourceUser,
+			})
+		}
+	}
+	// ② 用户级文件：{home}/commands/*.md
+	for _, c := range service.LoadCommandFiles(h.paths.Home) {
+		upsertCustom(c)
+	}
+	// ③ 工作区级文件：<ws>/.workbaby/commands/*.md（未绑定工作区时不加载，与工作区技能同一约定）
+	if wsPath := h.chatSvc.WorkspaceRoot(h.ctx, sessionID, ""); wsPath != "" {
+		for _, c := range service.LoadWorkspaceCommandFiles(wsPath) {
+			upsertCustom(c)
+		}
 	}
 	return domain.CommandListRESP{Items: items, Total: len(items)}, nil
 }

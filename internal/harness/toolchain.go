@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"WorkBaby/internal/llm"
@@ -39,6 +40,8 @@ type toolCallCtx struct {
 
 	tool        tool.Tool
 	resultLimit int
+	// preContext PreToolUse 钩子给出的补充上下文：放行后追加进模型可见的工具回执。
+	preContext string
 }
 
 // toolHandler 洋葱链的一层：返回 nil 继续向内，返回消息即短路整链。
@@ -66,7 +69,7 @@ func (r *Runner) toolChain() toolHandler {
 		r.layerInjectionGuard,
 		r.layerPathTrust,
 		r.layerPolicyGate,
-		r.layerUserHook,
+		r.layerPreToolUse,
 		r.layerStagnation,
 		r.layerLoopBudget,
 		r.layerIdempotent,
@@ -169,23 +172,63 @@ func (r *Runner) layerPolicyGate(tc *toolCallCtx) (msg *llm.Message) {
 			risk = gateApprovalRisk(tc.tool.RiskLevel())
 		}
 	}
-	if risk == "" || r.hooks.Approver == nil {
+	if risk == "" {
 		return nil
 	}
-	if !r.hooks.Approver(tc.ctx, desc, risk) {
+	if !r.approve(tc, desc, risk) {
 		return r.refused(tc, RefusedApproval, "denied by user")
 	}
 	return nil
 }
 
-// layerUserHook 用户自定义钩子闸门：工具执行前跑用户命令（子进程协议），
-// deny 即拦截（拒绝理由回填给模型）。钩子故障不阻断（service 层已兜底放行）。
-func (r *Runner) layerUserHook(tc *toolCallCtx) *llm.Message {
-	if r.hooks.HooksBeforeTool == nil {
+// approve 需要人工确认时的统一入口：先问 PermissionRequest 用户钩子（给出 allow/deny 即
+// 不必打扰用户），再落回人工审批。放行时标记护栏链——本次调用已被裁决过，
+// 工具内部的自有审批兜底不再重复问。
+func (r *Runner) approve(tc *toolCallCtx, desc, risk string) bool {
+	if r.toolHooks.PermissionRequest != nil {
+		switch dec, _ := r.toolHooks.PermissionRequest(tc.ctx, tc.call.Name, tc.call.ID, tc.call.Arguments); dec {
+		case "deny":
+			return false
+		case "allow":
+			tc.ctx = tool.WithGuardChain(tc.ctx)
+			return true
+		}
+	}
+	if r.hooks.Approver == nil {
+		tc.ctx = tool.WithGuardChain(tc.ctx)
+		return true
+	}
+	if !r.hooks.Approver(tc.ctx, desc, risk) {
+		return false
+	}
+	tc.ctx = tool.WithGuardChain(tc.ctx)
+	return true
+}
+
+// layerPreToolUse 工具执行前钩子（子进程协议）：三态裁决——
+// deny 直接拒绝（理由回填给模型）；ask 升级为人工确认；allow 放行并把附加上下文带进回执。
+func (r *Runner) layerPreToolUse(tc *toolCallCtx) *llm.Message {
+	if r.toolHooks.PreToolUse == nil {
 		return nil
 	}
-	if ok, reason := r.hooks.HooksBeforeTool(tc.ctx, tc.call.Name, tc.call.Arguments); !ok {
+	d := r.toolHooks.PreToolUse(tc.ctx, tc.call.Name, tc.call.ID, tc.call.Arguments)
+	tc.preContext = d.Context
+	switch d.Decision {
+	case "deny":
+		reason := d.Reason
+		if reason == "" {
+			reason = "denied by PreToolUse hook"
+		}
 		return r.refused(tc, RefusedUserHook, reason)
+	case "ask":
+		desc := tc.tool.Name() + "(" + string(tc.call.Arguments) + ")"
+		risk := tool.RiskApprovalNeeds
+		if d.Reason != "" {
+			risk = d.Reason
+		}
+		if !r.approve(tc, desc, risk) {
+			return r.refused(tc, RefusedApproval, "denied by user")
+		}
 	}
 	return nil
 }
@@ -301,6 +344,11 @@ func (r *Runner) layerExecute(tc *toolCallCtx) *llm.Message {
 	} else if tc.state != nil {
 		tc.state.ConsecutiveToolFails = 0
 	}
+	// 用户钩子的附加上下文：PreToolUse 放行时给出的说明 + PostToolUse(Failure) 的补充/诊断。
+	// 只追加不替换——工具原始输出始终是回执主体。
+	if extra := r.collectToolHookContext(tc, content, errMsg); extra != "" {
+		content = content + "\n\n[hook] " + extra
+	}
 	r.sink.Emit(Event{Kind: EventToolResult, RunID: tc.runID, SessionID: tc.sessionID, Turn: tc.turn, Payload: ToolResultPayload{
 		ToolCallID: tc.call.ID,
 		Name:       tc.call.Name,
@@ -323,6 +371,26 @@ func (r *Runner) layerExecute(tc *toolCallCtx) *llm.Message {
 		toolContent = "error: " + errMsg + "\n" + content
 	}
 	return llm.ToolMessage(tc.call.ID, tc.call.Name, toolContent)
+}
+
+// collectToolHookContext 汇总工具生命周期钩子要注入模型的补充上下文（可空）。
+func (r *Runner) collectToolHookContext(tc *toolCallCtx, content, errMsg string) string {
+	var parts []string
+	if tc.preContext != "" {
+		parts = append(parts, tc.preContext)
+	}
+	if errMsg != "" {
+		if r.toolHooks.PostToolUseFailure != nil {
+			if txt := r.toolHooks.PostToolUseFailure(tc.ctx, tc.call.Name, tc.call.ID, tc.call.Arguments, errMsg); txt != "" {
+				parts = append(parts, txt)
+			}
+		}
+	} else if r.toolHooks.PostToolUse != nil {
+		if txt := r.toolHooks.PostToolUse(tc.ctx, tc.call.Name, tc.call.ID, tc.call.Arguments, content); txt != "" {
+			parts = append(parts, txt)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // refused 发结构化拒绝结果事件并返回 tool 消息（Refused 语义；不推进停滞计数）。

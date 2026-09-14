@@ -139,6 +139,7 @@ async function remove(c: UserCommand): Promise<void> {
           </el-button>
         </el-empty>
         <p class="fs11 muted" style="margin: 8px 0 0">{{ t('commands.usageHint') }}</p>
+        <p class="fs11 muted" style="margin: 4px 0 0">{{ t('commands.fileHint') }}</p>
       </section>
     </div>
 

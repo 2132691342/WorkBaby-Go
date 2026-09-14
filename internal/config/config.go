@@ -132,9 +132,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.wal", true)
 	v.SetDefault("database.busyTimeoutMs", 5000)
 	v.SetDefault("database.fts", true)
-	v.SetDefault("assistant.defaultTemperature", 0.2)
+	v.SetDefault("assistant.defaultTemperature", 0.25)
 	v.SetDefault("assistant.defaultThinking", "medium")
 	v.SetDefault("assistant.defaultContextWindow", 128000)
-	v.SetDefault("assistant.compressionRatio", 0.9)
+	v.SetDefault("assistant.compressionRatio", 0.75)
 	v.SetDefault("security.masterKeyB64", "")
 }

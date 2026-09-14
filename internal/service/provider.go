@@ -142,7 +142,7 @@ func (s *ProviderService) Create(ctx context.Context, req *domain.AiProviderREQ)
 		Enabled:           req.Enabled == nil || *req.Enabled,
 		ContextWindow:     req.ContextWindow,
 		MaxOutputTokens:   req.MaxOutputTokens,
-		CompressRatio:     orDefault(req.CompressRatio, 0.9),
+		CompressRatio:     orDefault(req.CompressRatio, defaultCompressionRatio),
 		Temperature:       req.Temperature,
 		TopP:              req.TopP,
 		ThinkingEffort:    req.ThinkingEffort,

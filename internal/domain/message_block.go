@@ -7,6 +7,7 @@ type MessageBlockKind string
 
 const (
 	BlockThinking   MessageBlockKind = "thinking"    // 推理文本
+	BlockText       MessageBlockKind = "text"        // 正文片段（模型在两次工具调用之间的叙述）
 	BlockToolCall   MessageBlockKind = "tool_call"   // 工具调用（模型决策 + 参数）
 	BlockToolResult MessageBlockKind = "tool_result" // 工具执行结果
 	BlockArtifact   MessageBlockKind = "artifact"    // 工具产出的结构化数据（todo 快照等）

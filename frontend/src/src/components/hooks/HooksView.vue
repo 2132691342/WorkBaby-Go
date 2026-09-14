@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 用户钩子管理（设置中心 tab）：生命周期事件触发用户命令的子进程协议。
- * 协议 v1：stdin 收 JSON 载荷，stdout 出 JSON 决策；before_tool 的 deny 拦截工具调用。
+ * 七类事件；纯名称名单 / 正则 matcher；PreToolUse 可 deny，Stop 可 block 续跑。
  */
 import { onMounted, ref } from 'vue'
 import { Webhook, Plus, Trash2, Play } from '@/components/common/icons'
@@ -34,10 +34,21 @@ const testing = ref<string | null>(null)
 const editingId = ref<string | null>(null)
 const form = ref(blank())
 
-const EVENTS = ['run_start', 'before_tool', 'after_tool', 'run_end'] as const
+const EVENTS = [
+  'SessionStart',
+  'UserPromptSubmit',
+  'PreToolUse',
+  'PermissionRequest',
+  'PostToolUse',
+  'PostToolUseFailure',
+  'Stop',
+] as const
+
+/** 参与 matcher 过滤的事件（其余事件的匹配式被后端忽略）。 */
+const MATCHER_EVENTS = ['PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure']
 
 function blank() {
-  return { id: '', name: '', event: 'before_tool', matcher: '', command: '', timeout_ms: 10000, enabled: true, sort: 0 }
+  return { id: '', name: '', event: 'PreToolUse', matcher: '', command: '', timeout_ms: 10000, enabled: true, sort: 0 }
 }
 
 onMounted(load)
@@ -118,12 +129,27 @@ async function test(h: UserHook): Promise<void> {
 
 function eventLabel(e: string): string {
   const map: Record<string, string> = {
-    run_start: t('hooks.eventRunStart'),
-    before_tool: t('hooks.eventBeforeTool'),
-    after_tool: t('hooks.eventAfterTool'),
-    run_end: t('hooks.eventRunEnd'),
+    SessionStart: t('hooks.eventSessionStart'),
+    UserPromptSubmit: t('hooks.eventUserPromptSubmit'),
+    PreToolUse: t('hooks.eventPreToolUse'),
+    PermissionRequest: t('hooks.eventPermissionRequest'),
+    PostToolUse: t('hooks.eventPostToolUse'),
+    PostToolUseFailure: t('hooks.eventPostToolUseFailure'),
+    Stop: t('hooks.eventStop'),
   }
   return map[e] ?? e
+}
+
+/** 可拦截 / 可续跑的事件在列表里用警示色区分：它们真的会改变执行结果。 */
+function eventTagType(e: string): 'warning' | 'danger' | 'info' {
+  if (e === 'PreToolUse') return 'danger'
+  if (e === 'PermissionRequest' || e === 'Stop' || e === 'UserPromptSubmit') return 'warning'
+  return 'info'
+}
+
+/** 切换事件时清掉不生效的 matcher，避免保存后被后端拒绝。 */
+function onEventChange(): void {
+  if (!MATCHER_EVENTS.includes(form.value.event)) form.value.matcher = ''
 }
 </script>
 
@@ -153,7 +179,7 @@ function eventLabel(e: string): string {
           </el-table-column>
           <el-table-column :label="t('hooks.event')" width="130">
             <template #default="{ row }">
-              <el-tag size="small" :type="(row as UserHook).event === 'before_tool' ? 'warning' : 'info'">
+              <el-tag size="small" :type="eventTagType((row as UserHook).event)">
                 {{ eventLabel((row as UserHook).event) }}
               </el-tag>
             </template>
@@ -181,7 +207,7 @@ function eventLabel(e: string): string {
           </el-table-column>
         </el-table>
         <el-empty v-else :description="t('hooks.empty')" :image-size="80" class="py-6" />
-        <p class="fs11 muted" style="margin: 8px 0 0">{{ t('hooks.protocolHint') }}</p>
+        <p class="fs11 muted" style="margin: 8px 0 0; white-space: pre-line">{{ t('hooks.protocolHint') }}</p>
       </section>
     </div>
 
@@ -197,12 +223,17 @@ function eventLabel(e: string): string {
           <input v-model="form.name" class="input" :placeholder="t('hooks.nameHint')" />
         </Field>
         <Field :label="t('hooks.event')" required>
-          <select v-model="form.event" class="input">
+          <select v-model="form.event" class="input" @change="onEventChange">
             <option v-for="e in EVENTS" :key="e" :value="e">{{ eventLabel(e) }}</option>
           </select>
         </Field>
         <Field :label="t('hooks.matcher')" full>
-          <input v-model="form.matcher" class="input mono" :placeholder="t('hooks.matcherHint')" />
+          <input
+            v-model="form.matcher"
+            class="input mono"
+            :disabled="!MATCHER_EVENTS.includes(form.event)"
+            :placeholder="MATCHER_EVENTS.includes(form.event) ? t('hooks.matcherHint') : t('hooks.matcherNa')"
+          />
         </Field>
         <Field :label="t('hooks.command')" required full>
           <input v-model="form.command" class="input mono" :placeholder="t('hooks.commandHint')" />
@@ -214,7 +245,7 @@ function eventLabel(e: string): string {
           <el-switch v-model="form.enabled" />
         </Field>
       </div>
-      <p class="fs11 muted" style="margin: 6px 0 0">{{ t('hooks.protocolHint') }}</p>
+      <p class="fs11 muted" style="margin: 6px 0 0; white-space: pre-line">{{ t('hooks.protocolHint') }}</p>
     </FormDialog>
   </div>
 </template>

@@ -436,9 +436,14 @@ func (s *ChatService) providerDO(ctx context.Context, providerID string) *domain
 	return row
 }
 
-// defaults 从 system_settings 读 chat 默认温度/思考；读失败回退到 config.yaml 内置默认（0.2 / medium）。
+// defaults 从 system_settings 读 chat 默认温度/思考；读失败回退到内置默认（0.25 / topP 0.75 / medium）。
+// topP 暂无独立设置项：它是与 temperature 联动的采样旋钮，单独暴露只会增加配置面。
 func (s *ChatService) defaults(ctx context.Context) llm.Defaults {
-	d := llm.Defaults{Temperature: 0.2, Thinking: llm.ThinkingFromEffort("medium")}
+	d := llm.Defaults{
+		Temperature: defaultTemperature,
+		TopP:        defaultTopP,
+		Thinking:    llm.ThinkingFromEffort("medium"),
+	}
 	if s.setRepo == nil {
 		return d
 	}
@@ -455,9 +460,11 @@ func (s *ChatService) defaults(ctx context.Context) llm.Defaults {
 	return d
 }
 
-// 上下文与压缩相关默认值（system_settings 未配置时的兜底）。
+// 采样与上下文相关默认值（system_settings / Provider 未配置时的兜底）。
 const (
-	defaultCompressionRatio = 0.9   // 上下文占用达窗口 90% 触发压缩
+	defaultTemperature      = 0.25  // 默认采样温度
+	defaultTopP             = 0.75  // 默认核采样阈值
+	defaultCompressionRatio = 0.75  // 上下文占用达窗口 75% 触发压缩
 	defaultMaxInputChars    = 32000 // 单条用户输入上限（含附件展开文本）
 )
 

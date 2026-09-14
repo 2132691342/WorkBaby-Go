@@ -93,6 +93,40 @@ export function resolveMessageBlocks(msg: Message): ResolvedBlock[] {
   return []
 }
 
+/** 渲染分组：连续工具块归入同一组（渲染成一张「过程卡」），其余块各自一组。 */
+export interface BlockGroup<T> {
+  /** 稳定的 v-for key。 */
+  key: string
+  /** 连续工具块（长度 ≥1）；为空的组表示这是一个独立块。 */
+  tools: T[]
+  /** 独立块（tools 为空时有效）。 */
+  one: T | null
+}
+
+/**
+ * 按**相邻性**把块序列切成渲染分组，不重排任何元素。
+ *
+ * <p>正文块会自然切断分组，所以「叙述 → 工具组 → 叙述」的顺序被完整保留。
+ * 顺序由上游的 seq 决定，这里只做切分——任何"按类型归类"的写法都会打乱消息顺序。
+ */
+export function groupToolRuns<T extends { kind: string; seq: number }>(units: T[]): BlockGroup<T>[] {
+  const out: BlockGroup<T>[] = []
+  for (const u of units) {
+    const isTool = u.kind === 'tool_call' || u.kind === 'tool_result'
+    const last = out[out.length - 1]
+    if (isTool && last && last.tools.length > 0) {
+      last.tools.push(u)
+      continue
+    }
+    if (isTool) {
+      out.push({ key: `tools-${u.seq}`, tools: [u], one: null })
+    } else {
+      out.push({ key: `${u.kind}-${u.seq}`, tools: [], one: u })
+    }
+  }
+  return out
+}
+
 /** 块是否为「带错误结果」的 tool_result（refused 不算错误）。 */
 export function isFailedResultBlock(block: ResolvedBlock): boolean {
   if (block.kind !== 'tool_result') return false

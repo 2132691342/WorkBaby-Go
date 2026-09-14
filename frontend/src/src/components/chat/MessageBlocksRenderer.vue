@@ -8,8 +8,8 @@
 import { computed, ref, watch } from 'vue'
 import { Brain, Sparkles, Loader2, Square, Check, X, ChevronDown } from '@/components/common/icons'
 import { t } from '@/i18n'
-import { looksLikeDiff } from '@/chat/models/blocks'
-import { toolIcon, toolLabel } from '@/chat/models/toolVisuals'
+import { groupToolRuns, looksLikeDiff } from '@/chat/models/blocks'
+import { toolLabel } from '@/chat/models/toolVisuals'
 import { traceIcon, traceKind, traceTarget, traceDelegateAgent, countDiffLines } from '@/chat/models/toolTrace'
 import type { ResolvedBlock } from '@/chat/models/blocks'
 import type { StreamingBlock } from '@/chat/models/streamingBlocks'
@@ -69,7 +69,10 @@ const renderBlocks = computed<RenderBlock[]>(() => {
     for (let i = 0; i < props.blocks.length; i++) {
       const b = props.blocks[i]
       const rb: RenderBlock = { kind: b.kind as RenderBlock['kind'], seq: i, text: b.text, data: null }
-      if (b.kind === 'tool_call' && b.data) {
+      if (b.kind === 'text' && b.data) {
+        // 正文块：payload 是 {"text": "…"}，不是裸文本
+        rb.text = String(b.data.text ?? '')
+      } else if (b.kind === 'tool_call' && b.data) {
         rb.call = {
           id: String(b.data.id ?? ''),
           name: String(b.data.name ?? 'unknown'),
@@ -126,10 +129,11 @@ const renderBlocks = computed<RenderBlock[]>(() => {
       out.push(rb)
     }
   }
-  // 历史消息的正文（message.content）补为最后一条 text 块。
-  // 流式期不传 content（streamingContent 在 StreamingBubble 用专属 slot 渲染 + cursor 增强）。
+  // 兜底补正文：仅当块序列里**没有** text 块时才把 message.content 补到末尾。
+  // 一旦已按真实位置落了正文块，再补一次就是重复内容，
+  // 而且会把正文整体拖到过程之后——顺序就乱了（这是历史回看顺序错乱的根因）。
   const tail = (props.content ?? '').trim()
-  if (tail) {
+  if (tail && !out.some((b) => b.kind === 'text')) {
     const seq = out.length
     out.push({ kind: 'text', seq, text: tail, data: null })
   }
@@ -176,6 +180,15 @@ const renderUnits = computed(() => {
   return out
 })
 
+/**
+ * 渲染分组：连续工具单元归入同一张「过程卡」。
+ *
+ * <p>不分组时每个工具都是消息流里孤立的一行，一屏十几个工具就是十几行裸文字；
+ * 归入一张卡后行间用极浅分隔线，才有参考图里「一张卡内若干行」的列表观感。
+ * 纯函数在 chat/models/blocks.ts（含单测），组件只负责渲染。
+ */
+const renderGroups = computed(() => groupToolRuns(renderUnits.value))
+
 // ===== 折叠状态（历史块用；流式期不折叠） =====
 const localOpen = ref(new Map<string, boolean>())
 function isExpandable(b: RenderBlock): boolean {
@@ -194,11 +207,20 @@ function toolResultLines(content: string): string[] {
   return content.split('\n').filter((l) => l.length > 0)
 }
 
+/** 是否为最后一个块：流式光标只挂在末块上（收缩成一处，避免模板里重复长表达式）。 */
+function isLastBlock(b: RenderBlock): boolean {
+  const list = renderUnits.value
+  return props.streaming_mode === true && list.length > 0 && b === list[list.length - 1]
+}
+
 function isOpen(b: RenderBlock): boolean {
   const key = `${b.kind}:${b.seq}`
   const m = localOpen.value.get(key)
   if (m !== undefined) return m
-  return isError(b) || (props.streaming_mode === true && b.kind === 'tool_call')
+  // 默认只展开「正在执行」或「失败」的块。
+  // 早期实现按「流式期」全量展开工具块，一次 run 几十个工具就会撑出一堆空结果面板，
+  // 消息流被拉长数倍——已完成的过程折叠成一行才是可读的默认态。
+  return isError(b) || b.running === true
 }
 function toggle(b: RenderBlock): void {
   const key = `${b.kind}:${b.seq}`
@@ -254,9 +276,92 @@ watch(
     <!-- 块按顺序渲染：thinking / tool_call / tool_result / artifact / skill / genui / text。
          注意：循环 renderUnits（配对后的视图），不是 renderBlocks（原始数据）；
          这样 tool_call 与对应 tool_result 合并展示为一个工具单元，避免视觉上的『两次工具』。 -->
-    <template v-for="b in renderUnits" :key="`${b.kind}:${b.seq}`">
+    <template v-for="g in renderGroups" :key="g.key">
+      <!-- 连续工具单元 → 一张过程卡：行间极浅分隔线，形成参考图里「卡内若干行」的列表观感。
+           正文块会自然切断分组，所以「叙述 → 工具组 → 叙述」的真实顺序得以保留。 -->
+      <div v-if="g.tools.length > 0" class="wb-trace">
+        <div
+          v-for="b in g.tools"
+          :key="`${b.kind}:${b.seq}`"
+          class="wb-tool"
+          :class="{ open: isOpen(b), err: isError(b) }"
+        >
+          <button
+            type="button"
+            class="wb-tool-hd"
+            :style="!isExpandable(b) ? 'cursor: default' : ''"
+            @click="isExpandable(b) && toggle(b)"
+          >
+            <span class="wb-tool-st">
+              <Loader2 v-if="b.running" class="wb-loader animate-spin" />
+              <Check v-else-if="b.result && !b.result.refused && !b.result.error" class="wb-ok" />
+              <X v-else-if="b.result?.refused" class="wb-refused" />
+              <Square v-else-if="b.result && b.result.error" class="wb-fail" />
+              <Square v-else class="wb-pend" />
+            </span>
+            <component :is="unitIcon(b)" class="wb-ic" />
+            <!-- 有调用：动词迹线（动词 + 目标 + Δ）；孤立结果：退化为工具名 -->
+            <template v-if="b.call">
+              <span class="wb-tool-verb">{{ unitVerb(b) }}</span>
+              <!-- 委派：目标是子代理名 + 一行任务 -->
+              <template v-if="b.call.name === 'delegate_task'">
+                <span class="wb-tool-tgt-main">{{ unitAgent(b) }}</span>
+                <span v-if="unitTarget(b)?.main" class="wb-tool-tgt-sub" :title="unitTarget(b)!.main">{{ unitTarget(b)!.main }}</span>
+              </template>
+              <!-- 常规：文件名粗体 + 目录淡色 / 命令 / 查询词 -->
+              <template v-else-if="unitTarget(b)">
+                <span class="wb-tool-tgt-main">{{ unitTarget(b)!.main }}</span>
+                <span v-if="unitTarget(b)!.sub" class="wb-tool-tgt-sub">{{ unitTarget(b)!.sub }}</span>
+              </template>
+              <span v-else class="wb-tool-nm" :title="b.call.name">{{ toolLabel(b.call.name) }}</span>
+            </template>
+            <span v-else class="wb-tool-nm">{{ toolLabel(b.result?.name ?? '') }}</span>
+            <span v-if="unitDelta(b)" class="wb-tool-delta">
+              <span v-if="unitDelta(b)!.added" class="add">+{{ unitDelta(b)!.added }}</span>
+              <span v-if="unitDelta(b)!.removed" class="del">-{{ unitDelta(b)!.removed }}</span>
+            </span>
+            <span v-if="b.result?.durationMs != null" class="wb-tool-ms">
+              {{ (b.result.durationMs / 1000).toFixed(1) }}s
+            </span>
+            <span v-if="isError(b)" class="wb-tool-failed">{{ t('chat.execFailed') }}</span>
+            <ChevronDown v-if="isExpandable(b)" class="wb-tool-chev" :class="{ rotate: isOpen(b) }" />
+          </button>
+          <div v-if="isOpen(b) && (b.call?.arguments || b.result?.content)" class="wb-tool-bd">
+            <template v-if="b.call?.arguments">
+              <p class="wb-tool-lb">args</p>
+              <pre class="wb-tool-pre"><code>{{ b.call.arguments }}</code></pre>
+            </template>
+            <template v-if="b.result?.content">
+              <p class="wb-tool-lb">result</p>
+              <!-- 知识库检索：结构化命中 → 来源卡（可展开全文），替代文本墙 -->
+              <KnowledgeHits
+                v-if="b.result.name === 'knowledge_search' && knowledgeHits(b).length > 0"
+                :hits="knowledgeHits(b)"
+              />
+              <!-- 多行结果按行展示（file_list / doc_reader 等） -->
+              <ul
+                v-else-if="toolResultLines(b.result.content).length > 1 && !(b.result.uiHint === 'diff' || looksLikeDiff(b.result.content))"
+                class="wb-tool-lines"
+              >
+                <li v-for="(ln, li) in toolResultLines(b.result.content)" :key="li">
+                  <span v-if="b.result.name === 'file_list'" class="wb-tool-line-path">📄</span>
+                  <span v-else-if="b.result.name === 'file_glob'" class="wb-tool-line-path">🔍</span>
+                  <code>{{ ln }}</code>
+                </li>
+              </ul>
+              <DiffView
+                v-else-if="b.result.uiHint === 'diff' || looksLikeDiff(b.result.content)"
+                :diff="b.result.content"
+                :max-height="224"
+              />
+              <pre v-else class="wb-tool-pre">{{ b.result.content }}</pre>
+            </template>
+          </div>
+        </div>
+      </div>
+
       <!-- 思考块 -->
-      <div v-if="b.kind === 'thinking' && b.text" class="wb-block-thinking">
+      <div v-else-if="g.one && g.one.kind === 'thinking' && g.one.text" class="wb-block-thinking">
         <button
           type="button"
           class="wb-think-toggle"
@@ -267,116 +372,34 @@ watch(
           <span>{{ thinkingOpen ? t('chat.thinking') : t('chat.thoughtDone') }}</span>
           <ChevronDown class="wb-chev" :class="{ rotate: thinkingOpen }" />
         </button>
-        <pre v-if="thinkingOpen" class="wb-think-body">{{ b.text }}</pre>
+        <pre v-if="thinkingOpen" class="wb-think-body">{{ g.one.text }}</pre>
       </div>
 
       <!-- 文本块：内置 MarkdownRenderer 作为默认渲染，父组件可用 #text slot 覆盖（流式期挂光标）。
            关键：内联 fallback 必填——若父组件未传 slot，slot 内部为空会让历史文本消失
            （早期重构的回归 bug：MessageItem 没传 #text，块里没渲染任何东西）。 -->
-      <div v-else-if="b.kind === 'text' && b.text" class="wb-block-text">
-        <slot name="text" :content="b.text" :streaming="streaming_mode === true && b === renderUnits[renderUnits.length - 1]">
+      <div v-else-if="g.one && g.one.kind === 'text' && g.one.text" class="wb-block-text">
+        <slot name="text" :content="g.one.text" :streaming="isLastBlock(g.one)">
           <div class="flex items-end gap-1">
-            <MarkdownRenderer :content="b.text" :streaming="streaming_mode === true && b === renderUnits[renderUnits.length - 1]" />
-            <span v-if="streaming_mode === true && b === renderUnits[renderUnits.length - 1]" class="wb-cursor" />
+            <MarkdownRenderer :content="g.one.text" :streaming="isLastBlock(g.one)" />
+            <span v-if="isLastBlock(g.one)" class="wb-cursor" />
           </div>
         </slot>
       </div>
 
-      <!-- 工具单元：tool_call 与 result 配对，动词迹线（动词 + 目标 + Δ徽标）+ 展开区。
-           流式期 running → 头部 spinner；成功 → 绿勾；refused → 黄 X；error → 红方块 + 执行失败。 -->
-      <div v-else-if="b.kind === 'tool_call' && b.call" class="wb-block-tool wb-tool" :class="{ open: isOpen(b), err: isError(b) }">
-        <button
-          type="button"
-          class="wb-tool-hd"
-          :style="!isExpandable(b) ? 'cursor: default' : ''"
-          @click="isExpandable(b) && toggle(b)"
-        >
-          <span class="wb-tool-st">
-            <Loader2 v-if="b.running" class="wb-loader animate-spin" />
-            <Check v-else-if="b.result && !b.result.refused && !b.result.error" class="wb-ok" />
-            <X v-else-if="b.result?.refused" class="wb-refused" />
-            <Square v-else-if="b.result && b.result.error" class="wb-fail" />
-            <Square v-else class="wb-pend" />
-          </span>
-          <component :is="unitIcon(b)" class="wb-ic" />
-          <span class="wb-tool-verb">{{ unitVerb(b) }}</span>
-          <!-- 委派：目标是子代理名 + 一行任务 -->
-          <template v-if="b.call.name === 'delegate_task'">
-            <span class="wb-tool-tgt-main">{{ unitAgent(b) }}</span>
-            <span v-if="unitTarget(b)?.main" class="wb-tool-tgt-sub" :title="unitTarget(b)!.main">{{ unitTarget(b)!.main }}</span>
-          </template>
-          <!-- 常规：文件名粗体 + 目录淡色 / 命令 / 查询词 -->
-          <template v-else-if="unitTarget(b)">
-            <span class="wb-tool-tgt-main">{{ unitTarget(b)!.main }}</span>
-            <span v-if="unitTarget(b)!.sub" class="wb-tool-tgt-sub">{{ unitTarget(b)!.sub }}</span>
-          </template>
-          <span v-if="!unitTarget(b)" class="wb-tool-nm" :title="b.call.name">{{ toolLabel(b.call.name) }}</span>
-          <span v-if="unitDelta(b)" class="wb-tool-delta">
-            <span v-if="unitDelta(b)!.added" class="add">+{{ unitDelta(b)!.added }}</span>
-            <span v-if="unitDelta(b)!.removed" class="del">-{{ unitDelta(b)!.removed }}</span>
-          </span>
-          <span v-if="b.result?.durationMs != null" class="wb-tool-ms">
-            {{ (b.result.durationMs / 1000).toFixed(1) }}s
-          </span>
-          <span v-if="isError(b)" class="wb-tool-failed">{{ t('chat.execFailed') }}</span>
-          <ChevronDown v-if="isExpandable(b)" class="wb-tool-chev" :class="{ rotate: isOpen(b) }" />
-        </button>
-        <div v-if="isOpen(b) && (b.call.arguments || b.result?.content)" class="wb-tool-bd">
-          <p v-if="b.call.arguments" class="wb-tool-lb">args</p>
-          <pre v-if="b.call.arguments" class="wb-tool-pre"><code>{{ b.call.arguments }}</code></pre>
-          <template v-if="b.result?.content">
-            <p class="wb-tool-lb">result</p>
-            <!-- 知识库检索：结构化命中 → 来源卡（可展开全文），替代文本墙 -->
-            <KnowledgeHits
-              v-if="b.result.name === 'knowledge_search' && knowledgeHits(b).length > 0"
-              :hits="knowledgeHits(b)"
-            />
-            <!-- 多行结果按行展示（file_list / doc_reader 等） -->
-            <ul v-else-if="b.result?.content && toolResultLines(b.result.content).length > 1 && !(b.result.uiHint === 'diff' || looksLikeDiff(b.result.content))" class="wb-tool-lines">
-              <li v-for="(ln, li) in toolResultLines(b.result.content)" :key="li">
-                <span v-if="b.result && b.result.name === 'file_list'" class="wb-tool-line-path">📄</span>
-                <span v-else-if="b.result && b.result.name === 'file_glob'" class="wb-tool-line-path">🔍</span>
-                <code>{{ ln }}</code>
-              </li>
-            </ul>
-            <DiffView
-              v-else-if="b.result?.content && (b.result.uiHint === 'diff' || looksLikeDiff(b.result.content))"
-              :diff="b.result.content"
-              :max-height="224"
-            />
-            <pre v-else-if="b.result?.content" class="wb-tool-pre">{{ b.result.content }}</pre>
-          </template>
-        </div>
-      </div>
-
-      <!-- 孤立 tool_result（无对应 tool_call，理论上不应发生）：退化为单独展示 -->
-      <div v-else-if="b.kind === 'tool_result' && b.result" class="wb-block-tool wb-tool" :class="{ open: isOpen(b), err: isError(b) }">
-        <button type="button" class="wb-tool-hd" @click="isExpandable(b) && toggle(b)">
-          <span class="wb-tool-st">
-            <Loader2 v-if="b.running" class="wb-loader animate-spin" />
-            <Check v-else-if="!b.result.refused && !b.result.error" class="wb-ok" />
-            <X v-else-if="b.result.refused" class="wb-refused" />
-            <Square v-else class="wb-fail" />
-          </span>
-          <component :is="toolIcon(b.result.name)" class="wb-ic text-wb-primary-strong" />
-          <span class="wb-tool-nm">{{ toolLabel(b.result.name) }}</span>
-        </button>
-        <pre v-if="isOpen(b) && b.result.content" class="wb-tool-bd">{{ b.result.content }}</pre>
-      </div>
-
       <!-- Skill 命中：单行 chip -->
-      <div v-else-if="b.kind === 'skill' && b.skill" class="wb-block-skill">
-        <span class="wb-skill-chip"><Sparkles class="wb-ic text-wb-lavender" /> {{ t('chat.skillHit', b.skill.name ?? '') }}</span>
+      <div v-else-if="g.one && g.one.kind === 'skill' && g.one.skill" class="wb-block-skill">
+        <span class="wb-skill-chip"><Sparkles class="wb-ic" /> {{ t('chat.skillHit', g.one.skill.name ?? '') }}</span>
       </div>
 
       <!-- Artifact 块：简化展示 -->
-      <div v-else-if="b.kind === 'artifact' && b.artifact" class="wb-block-artifact">
-        <div class="wb-art-card">{{ b.artifact.name }}</div>
+      <div v-else-if="g.one && g.one.kind === 'artifact' && g.one.artifact" class="wb-block-artifact">
+        <div class="wb-art-card">{{ g.one.artifact.name }}</div>
       </div>
 
       <!-- GenUI：内联渲染 -->
-      <div v-else-if="b.kind === 'genui' && b.genui" class="wb-block-genui">
-        <GenUiRenderer :node="b.genui" />
+      <div v-else-if="g.one && g.one.kind === 'genui' && g.one.genui" class="wb-block-genui">
+        <GenUiRenderer :node="g.one.genui" />
       </div>
     </template>
   </div>
@@ -387,6 +410,34 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* ===== 过程卡（连续工具单元）=====
+ * 一屏十几个工具若每行裸露，消息流就是十几行散文字；收进一张卡后
+ * 行间用极浅分隔线、hover 整行高亮，才有参考图那种「卡内列表」的秩序感。 */
+.wb-trace {
+  border: 1px solid var(--wb-border);
+  border-radius: 12px;
+  background: var(--wb-surface-solid);
+  overflow: hidden;
+}
+.wb-trace .wb-tool + .wb-tool {
+  border-top: 1px solid color-mix(in srgb, var(--wb-border) 65%, transparent);
+}
+.wb-trace .wb-tool-hd {
+  border-radius: 0;
+}
+.wb-trace .wb-tool-hd:hover {
+  background: color-mix(in srgb, var(--wb-primary) 6%, transparent);
+}
+/* 展开区：卡内嵌块（不用漂白的大白块，避免把行切断） */
+.wb-trace .wb-tool-bd {
+  margin: 0 8px 8px 24px;
+  background: var(--wb-surface-2);
+  border-radius: 8px;
+}
+.wb-trace .wb-tool.err .wb-tool-hd {
+  border-radius: 0;
 }
 .wb-block-thinking {
   display: flex;
@@ -499,9 +550,15 @@ watch(
 .wb-tool-delta .del {
   color: var(--wb-danger);
 }
+/* 失败标记：行尾小红 chip（原先只是红字，扫读时容易被忽略） */
 .wb-tool-failed {
-  font-size: 10.5px;
+  font-size: 10px;
+  font-weight: 600;
   color: var(--wb-danger);
+  background: color-mix(in srgb, var(--wb-danger) 12%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+  flex: none;
 }
 .wb-tool-chev {
   width: 11px;
@@ -535,7 +592,7 @@ watch(
   margin-left: 2px;
 }
 .wb-tool-bd {
-  margin: 4px 0 0 24px;
+  margin: 3px 0 1px 24px;
   padding: 6px 8px;
   background: var(--wb-surface);
   border-radius: 6px;
@@ -543,13 +600,18 @@ watch(
   overflow: auto;
   overscroll-behavior: contain;
 }
+/* args / result 标签：小 chip（比裸大写字母更清楚地划分段落） */
 .wb-tool-lb {
-  margin: 0 0 2px;
+  display: inline-block;
+  margin: 0 0 5px;
   font-size: 9.5px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--wb-muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  background: color-mix(in srgb, var(--wb-ink) 6%, transparent);
+  border-radius: 5px;
+  padding: 1px 6px;
 }
 .wb-tool-pre {
   margin: 0 0 6px;
@@ -591,15 +653,17 @@ watch(
 .wb-block-skill {
   display: flex;
 }
+/* 技能命中 chip：走品牌蓝而非紫——单点紫色在蓝调界面里会显得「不属于这里」 */
 .wb-skill-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
+  gap: 5px;
+  padding: 3px 10px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--wb-lavender) 14%, transparent);
-  color: var(--wb-lavender);
+  background: var(--wb-primary-soft);
+  color: var(--wb-primary-strong);
   font-size: 11px;
+  font-weight: 500;
 }
 .wb-art-card {
   display: inline-flex;

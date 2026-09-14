@@ -21,8 +21,6 @@ func (s *Server) registerRoutes() {
 	registerChannelRoutes(v1, h)
 	registerFileRoutes(v1, h)
 	registerGitRoutes(v1, h)
-	registerTerminalRoutes(v1, h)
-	registerBrowserRoutes(v1, h)
 	registerWikiRoutes(v1, h)
 	registerHookRoutes(v1, h)
 }

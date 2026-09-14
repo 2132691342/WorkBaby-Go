@@ -51,7 +51,7 @@ const emptyDraft = (): ProviderDraft => ({
   name: '', kind: '', api_key: '', base_url: '', model: '', alias: '',
   tier: 'primary', enabled: true,
   context_window: null, max_output_tokens: null,
-  compress_ratio: 0.9, temperature: null, top_p: null,
+  compress_ratio: 0.75, temperature: null, top_p: null,
   thinking_effort: null, thinking_style: '',
   supports_tool_call: null, supports_vision: null, supports_reasoning: null
 })
@@ -104,7 +104,7 @@ function startEditProvider(p: AiProvider): void {
     enabled: p.enabled,
     context_window: p.context_window ?? null,
     max_output_tokens: p.max_output_tokens ?? null,
-    compress_ratio: p.compress_ratio ?? 0.9,
+    compress_ratio: p.compress_ratio ?? 0.75,
     temperature: p.temperature ?? null,
     top_p: p.top_p ?? null,
     thinking_effort: p.thinking_effort ?? null,
@@ -472,7 +472,7 @@ defineExpose({ load })
           <input v-model.number="draft.temperature" class="input mono" type="number" min="0" max="2" step="0.05" :placeholder="t('settings.providerTemperatureDefault')" />
         </Field>
         <Field :label="t('settings.top_p')" :hint="t('settings.topPTip')">
-          <input v-model.number="draft.top_p" class="input mono" type="number" min="0" max="1" step="0.05" placeholder="0.95" />
+          <input v-model.number="draft.top_p" class="input mono" type="number" min="0" max="1" step="0.05" placeholder="0.75" />
         </Field>
         <Field :label="t('settings.thinking_effort')">
           <select v-model="draft.thinking_effort" class="input">

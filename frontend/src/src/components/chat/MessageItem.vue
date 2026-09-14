@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useClipboard } from '@vueuse/core'
-import { Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, ChevronDown, Paperclip, RotateCcw, Wrench } from '@/components/common/icons'
+import { Brain, Copy, Check, Pencil, RefreshCw, Trash2, GitBranch, FileText, ChevronDown, Paperclip, RotateCcw, Wrench } from '@/components/common/icons'
 import type { Message, MessageAttachment } from '@/types/api'
 import { t } from '@/i18n'
 import { useChatStore } from '@/stores/chat'
@@ -60,9 +60,10 @@ const userAttachments = computed<MessageAttachment[]>(() =>
 /** 历史消息的过程块（按 seq 排序）—— MessageBlocksRenderer 直接消费。 */
 const historyBlocks = computed(() => resolveMessageBlocks(props.message))
 
-// ===== turn 折叠叙事 =====
-// 忙碌回合默认把「思考 + 工具」压成一行迹线，正文（答案）照常显示；点开恢复完整过程。
-// 简单回合（过程 < 2 步）不折叠。
+// ===== turn 折叠叙事（手动收起，不自动折叠）=====
+// 默认**展开**：流式期间正文与工具就是按真实顺序穿插渲染的，回复结束后若自动折起来，
+// 用户会看到「过程被拍扁成一行」的闪动，且回看顺序与刚才看到的不一致（一致优先于紧凑）。
+// 忙碌回合仍提供「收起过程」，把长过程压成一行迹线——但只在用户点了才收起。
 const traceTools = computed(() => blocksToToolCalls(historyBlocks.value))
 const traceProcessCount = computed(
   () => traceTools.value.length + historyBlocks.value.filter((b) => b.kind === 'thinking' && !!b.text).length
@@ -70,8 +71,8 @@ const traceProcessCount = computed(
 const traceFoldable = computed(
   () => !isUser.value && !!props.message.content?.trim() && traceProcessCount.value >= 2
 )
-/** 迹线展开态（默认折叠）。 */
-const traceOpen = ref(false)
+/** 迹线展开态（默认展开，与流式期观感一致）。 */
+const traceOpen = ref(true)
 /** 迹线摘要：聚合 receipt（读取文件 3 · 执行命令 2）+ 总耗时。 */
 const traceSummary = computed(() => {
   const parts = summarizeToolCalls(traceTools.value).map((p) => t(`tool.receipt.${p.action}`, p.count))
@@ -266,19 +267,13 @@ async function forkFrom(): Promise<void> {
     :class="isUser ? 'max-w-[76%] items-end' : 'w-full min-w-0 items-start'"
   >
     <!-- 思考回看：无边框轻量行，展开后正文只留左侧细竖线，
-         不套盒子、不抢正文注意力（折叠叙事态下思考属于过程迹线，不单独出） -->
+         不套盒子、不抢正文注意力（手动收起态下思考属于过程迹线，不单独出）。
+         与块序列里的 thinking 块不重复：thinking 从不落块，块里不会出现思考行。 -->
     <div v-if="!focusMode && !traceCollapsed && !isUser && message.thinking && !editing">
-      <button
-        type="button"
-        class="flex items-center gap-1.5 rounded px-1 py-0.5 text-[11.5px] text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-ink"
-        @click="thinkingOpen = !thinkingOpen"
-      >
-        <Brain class="h-3.5 w-3.5" />
+      <button type="button" class="wb-trace-toggle" @click="thinkingOpen = !thinkingOpen">
+        <Brain class="ic-xs" />
         <span>{{ t('chat.thoughtDone') }}</span>
-        <ChevronDown
-          class="h-3 w-3 transition-transform duration-200"
-          :class="thinkingOpen ? 'rotate-180' : ''"
-        />
+        <ChevronDown class="ic-xs transition-transform duration-200" :class="thinkingOpen ? 'rotate-180' : ''" />
       </button>
       <pre
         v-if="thinkingOpen"
@@ -290,34 +285,25 @@ async function forkFrom(): Promise<void> {
          message.content 作为最后一条 text 块传入（持久化模型里正文不入块）。
          焦点模式仅保留正文（渲染层根据 streaming_mode 标记折叠非正文块）。 -->
     <div v-if="!isUser && !editing" class="w-full">
-      <!-- 折叠叙事态：过程压成一行迹线（思考 + 工具 receipt + 耗时），正文照常显示 -->
+      <!-- 手动收起态：过程压成一行迹线（思考 + 工具 receipt + 耗时），正文照常显示 -->
       <template v-if="traceCollapsed">
-        <button
-          type="button"
-          class="flex items-center gap-1.5 self-start rounded px-1 py-0.5 text-[11.5px] text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-ink"
-          @click="traceOpen = true"
-        >
-          <Wrench class="h-3.5 w-3.5" />
+        <button type="button" class="wb-trace-toggle" @click="traceOpen = true">
+          <Wrench class="ic-xs" />
           <span>{{ t('chat.processTitle') }}</span>
-          <span v-for="p in traceSummary" :key="p" class="text-wb-muted">· {{ p }}</span>
-          <span class="text-wb-primary-strong">{{ t('chat.traceExpand') }}</span>
-          <ChevronDown class="h-3 w-3" />
+          <span v-for="p in traceSummary" :key="p" class="wb-trace-toggle__meta">· {{ p }}</span>
+          <span class="wb-trace-toggle__act">{{ t('chat.traceExpand') }}</span>
+          <ChevronDown class="ic-xs" />
         </button>
         <MarkdownRenderer :content="message.content ?? ''" />
       </template>
 
       <!-- 展开态：按序穿插的完整过程 + 正文（MessageBlocksRenderer 会把正文补为末尾 text 块） -->
       <template v-else>
-        <button
-          v-if="traceFoldable"
-          type="button"
-          class="flex items-center gap-1.5 self-start rounded px-1 py-0.5 text-[11.5px] text-wb-muted transition-colors hover:bg-wb-surface-hover hover:text-wb-ink"
-          @click="traceOpen = false"
-        >
-          <Wrench class="h-3.5 w-3.5" />
+        <button v-if="traceFoldable" type="button" class="wb-trace-toggle" @click="traceOpen = false">
+          <Wrench class="ic-xs" />
           <span>{{ t('chat.processTitle') }}</span>
-          <span class="text-wb-primary-strong">{{ t('chat.traceCollapse') }}</span>
-          <ChevronDown class="h-3 w-3 rotate-180" />
+          <span class="wb-trace-toggle__act">{{ t('chat.traceCollapse') }}</span>
+          <ChevronDown class="ic-xs rotate-180" />
         </button>
         <MessageBlocksRenderer
           :blocks="historyBlocks"

@@ -4,8 +4,7 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Trash2, Eraser, FolderOpen, Pencil, Sparkles, ListTree, RefreshCw, Crosshair, X, Archive, Square, MessageSquare, GitBranch, Terminal, Globe } from '@/components/common/icons'
-import { Sunny } from '@element-plus/icons-vue'
+import { Trash2, Eraser, FolderOpen, Pencil, Sparkles, ListTree, RefreshCw, Crosshair, X, Archive, Square, MessageSquare, GitBranch, Sunny } from '@/components/common/icons'
 import { useChatStore, backendModeToPermission, type PermissionLevel } from '@/stores/chat'
 import { useTrustStore } from '@/stores/trust'
 import { useDialog } from '@/composables/useDialog'
@@ -20,8 +19,6 @@ import PetCompanion from '@/components/pet/PetCompanion.vue'
 import WorkspacePanel from '@/components/chat/WorkspacePanel.vue'
 import SideConversation from '@/components/chat/SideConversation.vue'
 import GitPanel from '@/components/chat/GitPanel.vue'
-import TerminalPanel from '@/components/chat/TerminalPanel.vue'
-import BrowserPanel from '@/components/chat/BrowserPanel.vue'
 import { useSideChatStore } from '@/stores/sideChat'
 import WorkspacePickerDialog from '@/components/chat/WorkspacePickerDialog.vue'
 import FileChangesPanel from '@/components/chat/FileChangesPanel.vue'
@@ -52,8 +49,8 @@ const {
 
 const showWorkspace = ref(false)
 const showPicker = ref(false)
-/** 右侧面板当前激活的 tab（workspace / changes / tasks / side / git / terminal / browser）。 */
-const rightTab = ref<'workspace' | 'changes' | 'tasks' | 'side' | 'git' | 'terminal' | 'browser'>('workspace')
+/** 右侧面板当前激活的 tab（workspace / changes / tasks / side / git）。 */
+const rightTab = ref<'workspace' | 'changes' | 'tasks' | 'side' | 'git'>('workspace')
 const side = useSideChatStore()
 
 /** ChatInput 实例引用：用于把示例 prompt 灌进去。 */
@@ -418,7 +415,7 @@ async function onChangePermission(level: PermissionLevel): Promise<void> {
 }
 
 /** 切右侧面板 tab：点已激活的 tab 收起面板；否则切到目标 tab 并展开。 */
-function toggleTab(tab: 'workspace' | 'changes' | 'tasks' | 'side' | 'git' | 'terminal' | 'browser'): void {
+function toggleTab(tab: 'workspace' | 'changes' | 'tasks' | 'side' | 'git'): void {
   if (showWorkspace.value && rightTab.value === tab) {
     showWorkspace.value = false
     return
@@ -566,26 +563,6 @@ function onHeaderCommand(cmd: string): void {
             <el-icon><GitBranch /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-tooltip :content="t('terminal.title')" placement="bottom">
-          <el-button
-            :type="rightTab === 'terminal' ? 'primary' : 'default'"
-            text
-            circle
-            @click="toggleTab('terminal')"
-          >
-            <el-icon><Terminal /></el-icon>
-          </el-button>
-        </el-tooltip>
-        <el-tooltip :content="t('browser.title')" placement="bottom">
-          <el-button
-            :type="rightTab === 'browser' ? 'primary' : 'default'"
-            text
-            circle
-            @click="toggleTab('browser')"
-          >
-            <el-icon><Globe /></el-icon>
-          </el-button>
-        </el-tooltip>
         <el-tooltip :content="t('chat.workspace')" placement="bottom">
           <el-button
             :type="rightTab === 'workspace' ? 'primary' : 'default'"
@@ -703,15 +680,13 @@ function onHeaderCommand(cmd: string): void {
       <aside
         v-if="showWorkspace"
         class="flex shrink-0 flex-col border-l border-wb-border bg-wb-surface"
-        :class="rightTab === 'side' || rightTab === 'browser' ? 'w-[26rem]' : 'w-72'"
+        :class="rightTab === 'side' ? 'w-[26rem]' : 'w-80'"
       >
         <div class="flex shrink-0 items-center border-b border-wb-border px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-wb-muted">
           <span v-if="rightTab === 'changes'">{{ t('changes.title') }}</span>
           <span v-else-if="rightTab === 'tasks'">{{ t('tasks.title') }}</span>
           <span v-else-if="rightTab === 'side'">{{ t('side.title') }}</span>
           <span v-else-if="rightTab === 'git'">{{ t('git.title') }}</span>
-          <span v-else-if="rightTab === 'terminal'">{{ t('terminal.title') }}</span>
-          <span v-else-if="rightTab === 'browser'">{{ t('browser.title') }}</span>
           <span v-else>{{ t('chat.workspace') }}</span>
           <button
             type="button"
@@ -728,11 +703,8 @@ function onHeaderCommand(cmd: string): void {
           <SideConversation
             v-else-if="rightTab === 'side'"
             :visible="showWorkspace && rightTab === 'side'"
-            @open-tab="toggleTab"
           />
           <GitPanel v-else-if="rightTab === 'git'" />
-          <TerminalPanel v-else-if="rightTab === 'terminal'" />
-          <BrowserPanel v-else-if="rightTab === 'browser'" />
           <WorkspacePanel
             v-else
             :session_id="currentID"

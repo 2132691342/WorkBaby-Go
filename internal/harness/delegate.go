@@ -119,11 +119,14 @@ func (r *Runner) Delegate(ctx context.Context, agentName, task string) (string, 
 	childCtx, cancel := context.WithTimeout(WithRunContext(ctx, childRunID, sessionID), delegateWallTime)
 	defer cancel()
 
-	res := child.RunMessages(childCtx, childRunID, sessionID, "", r.model, msgs)
+	// 子 Agent 定义了自己的模型就用它；否则继承父 run 的模型。
+	// 两者都落在同一个 Provider 上（见 Definition.Model 的语义边界）。
+	childModel := def.EffectiveModel(r.model)
+	res := child.RunMessages(childCtx, childRunID, sessionID, "", childModel, msgs)
 	// 子 run 的消耗单独上报（turn 沿子 run 编号，由 service 决定落库口径）；
 	// 丢弃会让 token_usages 系统性漏计整个委派的用量。
 	if r.OnDelegateUsage != nil && len(res.Turns) > 0 {
-		r.OnDelegateUsage(def.Name, res.Turns)
+		r.OnDelegateUsage(def.Name, childModel, res.Turns)
 	}
 	if res.Err != nil {
 		flight.err = pkg.Wrap(5008, "子任务执行失败", res.Err)

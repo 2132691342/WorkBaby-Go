@@ -20,7 +20,13 @@ type AgentProfileDO struct {
 	ToolsDeny    string         `gorm:"type:text" json:"-"`             // JSON 数组（glob）
 	MemoryEnable bool           `gorm:"default:false" json:"memory_enable"`
 	MaxTurns     int            `gorm:"default:0" json:"max_turns"` // <=0 用委派默认
-	Enabled      bool           `gorm:"default:true" json:"enabled"`
+	// Model 该子智能体固定使用的模型；空 = 继承主 Agent 当前模型。
+	// 语义边界：模型名在**当前会话的 Provider** 上解析（一个 Provider 一套凭据与协议方言）。
+	Model string `gorm:"size:128" json:"model"`
+	// Thinking 推理强度（off/low/medium/high）；空 = 跟随请求级与 Provider/全局设置。
+	// 仅在指定了 Model 时生效——不指定模型即「完全继承」，此时改思考档位会让用户当次选择失效。
+	Thinking string         `gorm:"size:16" json:"thinking"`
+	Enabled  bool           `gorm:"default:true" json:"enabled"`
 	CreatedAt    int64          `gorm:"autoCreateTime:milli" json:"created_at"`
 	UpdatedAt    int64          `gorm:"autoUpdateTime:milli" json:"updated_at"`
 	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
@@ -39,6 +45,8 @@ type AgentProfileRESP struct {
 	ToolsDeny    []string `json:"tools_deny,omitempty"`
 	MemoryEnable bool     `json:"memory_enable"`
 	MaxTurns     int      `json:"max_turns"`
+	Model        string   `json:"model,omitempty"`
+	Thinking     string   `json:"thinking,omitempty"`
 	Enabled      bool     `json:"enabled"`
 	CreatedAt    int64    `json:"created_at"`
 	UpdatedAt    int64    `json:"updated_at"`
@@ -53,6 +61,8 @@ type AgentProfileREQ struct {
 	ToolsDeny    []string `json:"tools_deny"`
 	MemoryEnable bool     `json:"memory_enable"`
 	MaxTurns     int      `json:"max_turns"`
+	Model        string   `json:"model"`
+	Thinking     string   `json:"thinking"`
 	Enabled      *bool    `json:"enabled"`
 }
 

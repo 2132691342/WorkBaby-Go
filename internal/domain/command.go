@@ -1,9 +1,18 @@
 package domain
 
+// 命令来源：内置 / 设置页创建（user_commands 表）/ 用户级文件（{home}/commands/*.md）
+// / 工作区级文件（<ws>/.workbaby/commands/*.md）。
+const (
+	CommandSourceBuiltin   = "builtin"
+	CommandSourceUser      = "user"
+	CommandSourceFile      = "file"
+	CommandSourceWorkspace = "workspace"
+)
+
 // SlashCommand 斜杠命令元数据（命令面板）。
 //
 // 真相源在后端：前端命令面板拉一次即渲染，新增命令不必改前端代码。
-// ClientOnly=true 的命令由前端就地执行（开面板/切模型/导出），后端只提供元数据。
+// ClientOnly=true 的命令由前端就地执行（开面板/切模型/导出/灌入模板），后端只提供元数据。
 type SlashCommand struct {
 	Name       string `json:"name"`        // 不含斜杠，如 "compact"
 	Args       string `json:"args"`        // 参数提示，无参数为空串
@@ -11,7 +20,10 @@ type SlashCommand struct {
 	Group      string `json:"group"`       // 分组：session / model / agent / system / custom
 	ClientOnly bool   `json:"client_only"` // 纯前端执行，无需后端接口
 	// Prompt 自定义命令的提示词模板（仅 group=custom；选中即灌入输入框）。
+	// 模板中 `$ARGUMENTS` 为全部参数、`$1`..`$9` 为位置参数，由发送前展开。
 	Prompt string `json:"prompt,omitempty"`
+	// Source 命令来源：builtin / user / file，供设置页与面板区分展示。
+	Source string `json:"source,omitempty"`
 }
 
 // CommandListRESP 命令列表出参。

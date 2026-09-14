@@ -36,8 +36,6 @@ const KNOWN_PREFIXES = [
   '/api/v1/trust',
   // 工作面板与设置中心新域
   '/api/v1/git/',
-  '/api/v1/terminal/',
-  '/api/v1/browser/',
   '/api/v1/wiki/',
   '/api/v1/hooks'
 ]

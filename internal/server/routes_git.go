@@ -60,4 +60,33 @@ func registerGitRoutes(g *gin.RouterGroup, h *api.Handler) {
 		}
 		Fail(c, h.GitCommit(req))
 	})
+	// 提交历史分页（limit / skip / all）
+	g.GET("/git/log", func(c *gin.Context) {
+		v, err := h.GitLog(c.Query("session_id"), atoi(c.Query("limit"), 20), atoi(c.Query("skip"), 0), c.Query("all") == "true")
+		unwrap(c, v, err)
+	})
+	// 提交详情：元信息 + 变更文件清单
+	g.GET("/git/commit", func(c *gin.Context) {
+		v, err := h.GitCommitDetail(c.Query("session_id"), c.Query("hash"))
+		unwrap(c, v, err)
+	})
+	// 提交内单文件 diff
+	g.GET("/git/commit/diff", func(c *gin.Context) {
+		v, err := h.GitCommitFileDiff(c.Query("session_id"), c.Query("hash"), c.Query("path"))
+		unwrap(c, v, err)
+	})
+	// 提交图谱（只读文本）
+	g.GET("/git/graph", func(c *gin.Context) {
+		v, err := h.GitGraph(c.Query("session_id"), atoi(c.Query("limit"), 120))
+		unwrap(c, v, err)
+	})
+	// 删除本地分支（当前分支被拒）
+	g.POST("/git/branch/delete", func(c *gin.Context) {
+		var req api.GitBranchReq
+		if err := BindJSON(c, &req); err != nil {
+			Fail(c, err)
+			return
+		}
+		Fail(c, h.GitDeleteBranch(req))
+	})
 }

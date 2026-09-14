@@ -190,6 +190,37 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 			pkg.L.Warn("sync workspace skills failed", "sessionID", ses.ID, "err", err.Error())
 		}
 	}
+	// Agent 定义的运行期覆盖（见 harness.Definition.Model / Thinking）：
+	//   - 模型：Agent 定义优先于会话模型；优先级差必须让用户看见，否则「界面上显示 A、实际跑 B」无法解释。
+	//   - 推理强度：仅当请求级未显式指定时生效——用户当次点的档位永远优先于 Agent 定义。
+	runModel := def.EffectiveModel(ses.Model)
+	if runModel != ses.Model {
+		pkg.L.Info("agent overrides session model",
+			"sessionID", ses.ID, "agent", def.Name, "sessionModel", ses.Model, "model", runModel)
+		s.emit(runID, ses.ID, "chat:warn", map[string]any{
+			"kind":          "agent_model_override",
+			"agent":         def.Name,
+			"session_model": ses.Model,
+			"model":         runModel,
+			"message":       "本次运行由子智能体定义指定了模型 " + runModel + "（会话模型 " + ses.Model + " 已被覆盖）",
+		})
+	}
+	if params.Thinking == nil && def.Thinking != "" {
+		params.Thinking = llm.ThinkingFromEffort(def.Thinking)
+	}
+	// UserPromptSubmit 用户钩子：模型调用前可补充上下文，或阻断本次请求（策略拦截）。
+	// 续跑不重复触发——该事件属于「用户提交」这一次动作。
+	promptHookCtx := ""
+	if s.hookRunner != nil && !resume {
+		blocked, reason, extra := s.hookRunner.UserPromptSubmit(ctx, ses.ID, runID, userInput, ses.WorkspacePath, ses.PermissionMode)
+		promptHookCtx = extra
+		if blocked {
+			herr := pkg.New(8610, "请求被用户钩子阻断", reason)
+			s.failRun(ctx, runID, ses.ID, assistantMsgID, herr)
+			return harness.RunResult{Reason: harness.ReasonError, Err: herr}
+		}
+	}
+
 	prov, err := s.reg.Get(ses.ProviderID)
 	if err != nil {
 		s.failRun(ctx, runID, ses.ID, assistantMsgID, err)
@@ -221,6 +252,27 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 	// system 装配（真实请求口径，与 ContextUsage 透视同源——见 buildSystem）
 	sys, runState := s.buildSystem(ctx, ses, runID, userInput, def)
 	activeSkillTools := runState.SkillTools
+	// 用户钩子的上下文补充段：SessionStart（首轮模型请求前，续跑不重放）+ UserPromptSubmit。
+	// 追加在 system 尾部而非新开一条 system 消息，避免多 system 段在部分上游被拒。
+	if s.hookRunner != nil {
+		var parts []string
+		if !resume {
+			if txt := s.hookRunner.SessionStart(ctx, ses.ID, runID, "startup", ses.WorkspacePath, ses.PermissionMode); txt != "" {
+				parts = append(parts, txt)
+			}
+		}
+		if promptHookCtx != "" {
+			parts = append(parts, promptHookCtx)
+		}
+		if len(parts) > 0 {
+			extra := "## 用户钩子上下文\n\n" + strings.Join(parts, "\n\n")
+			if sys != nil {
+				sys.Content = sys.Content + "\n\n" + extra
+			} else {
+				sys = &llm.Message{Role: llm.RoleSystem, Content: extra}
+			}
+		}
+	}
 	if sys != nil {
 		llmMsgs = append([]*llm.Message{sys}, llmMsgs...)
 	}
@@ -236,6 +288,14 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 	}()
 	sink := harness.FuncSink(mapper.handle)
 	runStart := mapper.runStart
+	// 助手正文镜像：Stop 钩子需要「最后一条助手消息」作为输入（协议字段 last_assistant_message）。
+	var assistantText strings.Builder
+	observed := harness.FuncSink(func(e harness.Event) {
+		if p, ok := e.Payload.(harness.TurnDeltaPayload); ok && p.Kind == "content" {
+			assistantText.WriteString(p.Text)
+		}
+		sink(e)
+	})
 
 	// 工具两级过滤：Skill 白名单（命中 skill 时）→ Agent 工具策略
 	toolDefs := s.tools.LLMDefinitionsFiltered(ctx, activeSkillTools)
@@ -270,18 +330,18 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 	// 上下文预算按「上下文窗口 × 压缩比例」重算：Agent 内置 120k 是静态值，
 	// 小窗口模型会撑爆、大窗口模型又过早压缩，交给 provider/全局设置决定。
 	provRow := s.providerDO(ctx, ses.ProviderID)
-	window := s.modelContextWindow(ctx, ses.ProviderID, ses.Model)
+	window := s.modelContextWindow(ctx, ses.ProviderID, runModel)
 	if budget := s.contextBudget(ctx, window, provRow); budget > 0 {
 		cfg.ContextBudget = budget
 	}
 	// 上下文压缩升级：Auto（watermark + LLM 六段交接摘要）优先，失败降级 Micro。
 	// 压缩的可见事件与边界证据由 runner 统一发（EventCompressed），此处不再重复上报。
-	auto := harness.NewAutoCompressor(prov, ses.Model)
+	auto := harness.NewAutoCompressor(prov, runModel)
 	// 压缩摘要也计量：Turn 记 -1 与主循环轮次区分（不进「按轮次」图表，但进总消耗）
 	auto.OnUsage = func(u llm.TokenUsage) {
-		s.persistUsageRow(ctx, ses, runID, assistantMsgID, -1, u)
+		s.persistUsageRow(ctx, ses, runID, assistantMsgID, -1, runModel, u)
 	}
-	r := harness.NewRunner(prov, sink, cfg).
+	r := harness.NewRunner(prov, observed, cfg).
 		WithCompressor(auto).
 		WithRequestParams(params).
 		WithProviderParams(s.providerParams(ctx, ses.ProviderID)).
@@ -297,40 +357,45 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 	if trustHook := s.planTrustHook(); trustHook != nil {
 		r = r.WithPathTrust(trustHook)
 	}
-	// 注入缝：同一队列供两条缝消费——跑工具中途插话 / 说完后自动续接
-	drain := func(context.Context) []*llm.Message { return s.steers.drain(ses.ID) }
-	r = r.WithSteering(drain).WithFollowUp(drain)
+	// 插话缝：跑工具中途注入用户新指令
+	r = r.WithSteering(func(context.Context) []*llm.Message { return s.steers.drain(ses.ID) })
+	// 续接缝：待发送消息优先；没有待发送消息时问 Stop 钩子——返回 block 即带着反馈再跑一轮。
+	// 连续续跑上限 3 次（与协议一致），防止「每次都要求再来一轮」把 run 拖成无限循环。
+	stopContinues := 0
+	r = r.WithFollowUp(func(fctx context.Context) []*llm.Message {
+		if msgs := s.steers.drain(ses.ID); len(msgs) > 0 {
+			return msgs
+		}
+		if s.hookRunner == nil || stopContinues >= stopHookMaxContinues {
+			return nil
+		}
+		res := s.hookRunner.Stop(fctx, ses.ID, runID, assistantText.String(), stopContinues > 0)
+		if !res.Block {
+			return nil
+		}
+		stopContinues++
+		// 以 user 消息回注：模型据此补齐后才允许收尾
+		return []*llm.Message{{Role: llm.RoleUser, Content: res.Reason}}
+	})
 	// 自动降级：LLM 建流失败 → 切到 chat.fallback_model 重试本轮
 	r = r.WithTurnAdjuster(s.turnAdjuster(ctx))
 	// 子 Agent 委派消耗单独落库：委派可达 12 轮 + 几十次工具调用，
 	// 不落库会让 token_usages 系统性漏计。Turn 记 -1（同压缩摘要口径），
 	// Source 记 delegate 并带上子 Agent 名，保证消耗可按委派归因而非混进父对话成本。
-	r.OnDelegateUsage = func(agent string, turns []harness.TurnUsage) {
+	r.OnDelegateUsage = func(agent, model string, turns []harness.TurnUsage) {
 		for _, t := range turns {
-			s.persistUsageRowFrom(ctx, ses, runID, assistantMsgID, -1, domain.UsageSourceDelegate, agent, t.Usage)
+			s.persistUsageRowFrom(ctx, ses, runID, assistantMsgID, -1, domain.UsageSourceDelegate, agent, model, t.Usage)
 		}
 	}
 	// 折叠激活：被预算裁掉的工具经 tool_search 按需暴露（激活后下一轮起可调用）
 	if len(deferredDefs) > 0 {
 		r = r.WithDeferredTools(deferredDefs)
 	}
-	// 用户钩子（子进程协议）：before_tool 拦截闸门 + after_tool 观察缝；
-	// run_start / run_end 在本次调用首尾异步触发
+	// 用户钩子（子进程协议）：工具生命周期四缝（PreToolUse / PermissionRequest /
+	// PostToolUse / PostToolUseFailure）；SessionStart 与 UserPromptSubmit 在 run 首部装配，
+	// Stop 在续接缝消费。
 	if s.hookRunner != nil {
-		r = r.WithHooksBeforeTool(func(hctx context.Context, toolName string, args json.RawMessage) (bool, string) {
-			return s.hookRunner.BeforeTool(hctx, ses.ID, runID, toolName, args)
-		})
-		r = r.WithAfterToolCall(func(_ context.Context, toolName string, _ json.RawMessage, res *tool.ToolResult) {
-			outcome := "ok"
-			switch {
-			case res.Refused:
-				outcome = "refused"
-			case res.Err != nil:
-				outcome = "error"
-			}
-			s.hookRunner.AfterTool(ses.ID, runID, toolName, outcome)
-		})
-		s.hookRunner.RunStart(ses.ID, runID)
+		r = r.WithToolHooks(s.hookRunner.HarnessToolHooks(ses.ID, runID, ses.WorkspacePath, ses.PermissionMode))
 	}
 	// 补充输入能力注入 ctx：request_input 工具暂停 run 问用户
 	if s.approval != nil {
@@ -338,24 +403,20 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 	}
 
 	pkg.L.Info("chat run start",
-		"runID", runID, "sessionID", ses.ID, "providerID", ses.ProviderID, "model", ses.Model,
-		"history", len(llmMsgs), "tools", len(toolDefs), "skill", strings.Join(activeSkillTools, ","),
-		"resume", resume)
+		"runID", runID, "sessionID", ses.ID, "providerID", ses.ProviderID, "model", runModel,
+		"agent", def.Name, "history", len(llmMsgs), "tools", len(toolDefs),
+		"skill", strings.Join(activeSkillTools, ","), "resume", resume)
 	var res harness.RunResult
 	if resume {
 		// 续跑：前端按同一 runID 挂 SSE；Resume 不重发 RunStart，这里补 stream.start
-		s.emit(runID, ses.ID, "chat:stream.start", map[string]any{"model": ses.Model, "resumed": true})
-		res = r.Resume(ctx, runID, ses.ID, assistantMsgID, ses.Model)
+		s.emit(runID, ses.ID, "chat:stream.start", map[string]any{"model": runModel, "resumed": true})
+		res = r.Resume(ctx, runID, ses.ID, assistantMsgID, runModel)
 	} else {
-		res = r.RunMessages(ctx, runID, ses.ID, assistantMsgID, ses.Model, llmMsgs)
+		res = r.RunMessages(ctx, runID, ses.ID, assistantMsgID, runModel, llmMsgs)
 	}
 	elapsed := time.Since(runStart).Milliseconds()
 
-	s.persistUsage(ctx, ses, runID, assistantMsgID, res)
-	// run 收尾钩子（异步；终止原因回传给用户命令）
-	if s.hookRunner != nil {
-		s.hookRunner.RunEnd(ses.ID, runID, string(res.Reason))
-	}
+	s.persistUsage(ctx, ses, runID, assistantMsgID, runModel, res)
 
 	if res.Err != nil {
 		pkg.L.Error("chat run failed",
@@ -388,7 +449,7 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 		}
 	}
 	// 消息级费用估算：按累计用量 × 单价（未配置单价为空串，前端不显示费用）。
-	costUSD := s.modelPricing(ctx, ses.Model).
+	costUSD := s.modelPricing(ctx, runModel).
 		CostUSD(int64(res.Accumulated.InputTokens), int64(res.Accumulated.OutputTokens), int64(res.Accumulated.CacheReadTokens))
 	costStr := ""
 	if costUSD > 0 {
@@ -435,7 +496,7 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 		}
 		if !evidenceForClaim(claimedPaths(res.Content), mapper.toolCalls, changes) {
 			pkg.L.Warn("unbacked artifact claim (no matching file_changes in run)",
-				"runID", runID, "sessionID", ses.ID, "model", ses.Model,
+				"runID", runID, "sessionID", ses.ID, "model", runModel,
 				"claimed", fmt.Sprint(claimedPaths(res.Content)), "changes", len(changeRows))
 			s.emit(runID, ses.ID, "chat:warn", map[string]any{
 				"kind":    "unbacked_claim",
@@ -454,7 +515,7 @@ func (s *ChatService) executeAgent(ctx context.Context, ses *domain.ChatSessionD
 		Transcript: captureTranscript(llmMsgs, userInput, res.Content),
 		Def:        def,
 		ProviderID: ses.ProviderID,
-		Model:      ses.Model,
+		Model:      runModel,
 	}, memoryCaptureTimeout)
 	// 三层 State：run 结束清理 temp 作用域（run 级临时态不跨轮存续）
 	if s.tempClear != nil {

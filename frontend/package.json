@@ -21,6 +21,7 @@
     "element-plus": "^2.8.8",
     "highlight.js": "^11.10.0",
     "katex": "^0.18.4",
+    "lucide-vue-next": "^0.577.0",
     "markdown-it": "^14.1.0",
     "markdown-it-footnote": "^4.0.0",
     "markdown-it-task-lists": "^2.1.1",

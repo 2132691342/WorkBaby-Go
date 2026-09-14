@@ -52,6 +52,23 @@ func DefaultAgents() []Definition {
 			Persona:     personaWriter,
 			Memory:      MemoryPolicy{Enabled: true, RecallLimit: 6, Formation: false},
 		},
+		{
+			// Explore：只读探索专家。白名单里刻意没有 file_write / file_edit / exec /
+			// run_skill_script / delegate_task——它存在的意义就是「不可能改坏任何东西」，
+			// 多给一个写工具就失去这个保证（宁可让它做不了，也不要让它能做）。
+			Name:        "explore",
+			Description: "只读探索专家：大范围检索 / 调用链梳理 / 代码结构理解，不创建或修改任何文件",
+			Persona:     personaExplore,
+			Tools: ToolPolicy{
+				Allow: []string{
+					"file_read", "file_list", "file_grep", "file_search",
+					"doc_reader", "knowledge_search",
+					"websearch", "webfetch",
+				},
+			},
+			Memory: MemoryPolicy{Enabled: false, Formation: false},
+			Budget: Budget{MaxTurns: 24},
+		},
 	}
 }
 

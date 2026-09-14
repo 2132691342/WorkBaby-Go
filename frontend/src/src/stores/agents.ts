@@ -24,7 +24,18 @@ export const useAgentProfilesStore = defineStore('agentProfiles', () => {
   const form = ref<AgentProfileReq>(blank())
 
   function blank(): AgentProfileReq {
-    return { name: '', description: '', system_prompt: '', tools_allow: [], tools_deny: [], memory_enable: false, max_turns: 0, enabled: true }
+    return {
+      name: '',
+      description: '',
+      system_prompt: '',
+      tools_allow: [],
+      tools_deny: [],
+      memory_enable: false,
+      max_turns: 0,
+      model: '',
+      thinking: '',
+      enabled: true
+    }
   }
 
   async function load(): Promise<void> {
@@ -55,6 +66,8 @@ export const useAgentProfilesStore = defineStore('agentProfiles', () => {
       tools_deny: p.tools_deny ?? [],
       memory_enable: p.memory_enable,
       max_turns: p.max_turns,
+      model: p.model ?? '',
+      thinking: p.thinking ?? '',
       enabled: p.enabled
     }
     error.value = null

@@ -289,6 +289,8 @@ export const useChatStore = defineStore('chat', () => {
       loadFileChanges(id),
       loadArtifacts(id),
       loadContextUsage(id),
+      // 工作区级命令随会话变化，切会话必须重拉（懒加载在「同一个绑定工作区」的会话间无副作用）
+      loadCommands(id),
       // 页面刷新后恢复本会话的未决审批（此前该方法从未被调用，刷新即丢卡片）
       loadPendingApprovals()
     ])
@@ -301,11 +303,14 @@ export const useChatStore = defineStore('chat', () => {
     error.value = null
   }
 
-  /** 加载内置斜杠命令元数据（命令面板的数据源，）。
-   * 启动期一次缓存；前端只在本会话内消费的 ClientOnly 命令走本地分支。 */
-  async function loadCommands(): Promise<void> {
+  /** 加载斜杠命令元数据（命令面板的数据源）。
+   * sessionID 非空时后端一并返回该会话工作区下的命令文件（<ws>/.workbaby/commands），
+   * 因此切会话后要重拉一次：工作区级命令只在绑定该工作区的会话里可用。
+   * 前端只在本会话内消费的 ClientOnly 命令走本地分支。 */
+  async function loadCommands(sessionID?: string | null): Promise<void> {
     try {
-      const resp = await apiGet<{ items: SlashCommand[] }>('/api/v1/chat/commands')
+      const q = sessionID ? `?session_id=${encodeURIComponent(sessionID)}` : ''
+      const resp = await apiGet<{ items: SlashCommand[] }>(`/api/v1/chat/commands${q}`)
       commands.value = resp.items ?? []
     } catch {
       // 后端暂无：留空数组（前端走本地 fallback）
@@ -570,6 +575,8 @@ export const useChatStore = defineStore('chat', () => {
     // 刷新模型列表并把 selectedModelID 同步到新会话绑定的 provider：
     // 保证「点新会话后」模型下拉仍有可用模型、顶部徽标与实际运行模型一致。
     await loadModels()
+    // 新会话可能绑定了另一个工作区：命令面板要跟着换（含该工作区的 .workbaby/commands）
+    await loadCommands(session.id)
     return session
   }
 

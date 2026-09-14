@@ -8,7 +8,7 @@
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Bot, Send, Loader2, Square, MessageSquare, ScrollText, Terminal, Globe, ArrowLeft } from '@/components/common/icons'
+import { Bot, Send, Loader2, Square, MessageSquare, ScrollText, ArrowLeft } from '@/components/common/icons'
 import { apiGet } from '@/api/client'
 import { useSideChatStore } from '@/stores/sideChat'
 import { useChatStore } from '@/stores/chat'
@@ -27,10 +27,7 @@ const props = defineProps<{
   visible: boolean
 }>()
 
-const emit = defineEmits<{
-  /** 启动页卡片跳转：切换右侧面板 tab（终端 / 浏览器）。 */
-  'open-tab': [tab: 'terminal' | 'browser']
-}>()
+
 
 const listEl = ref<HTMLElement | null>(null)
 const inputEl = ref<HTMLTextAreaElement | null>(null)
@@ -186,11 +183,11 @@ function isUser(m: Message): boolean {
     </div>
   </div>
 
-  <!-- 启动页：四卡（辅助对话可用；审查卡内置审查流；终端/浏览器卡切面板） -->
+  <!-- 启动页：两卡（辅助对话 + 审查流） -->
   <div v-else-if="!sideSession" class="flex h-full flex-col items-center justify-center gap-3 p-4">
     <p class="text-base font-semibold text-wb-ink">{{ t('side.openTitle') }}</p>
     <p class="mb-1 text-xs text-wb-muted">{{ t('side.openHint') }}</p>
-    <div class="grid w-full max-w-[22rem] grid-cols-3 gap-2">
+    <div class="grid w-full max-w-[18rem] grid-cols-2 gap-2">
       <button type="button" class="side-start-card" @click="startSide">
         <MessageSquare class="h-5 w-5" />
         <span>{{ t('side.title') }}</span>
@@ -198,14 +195,6 @@ function isUser(m: Message): boolean {
       <button type="button" class="side-start-card" :title="t('review.hint')" @click="openReview">
         <ScrollText class="h-5 w-5" />
         <span>{{ t('side.review') }}</span>
-      </button>
-      <button type="button" class="side-start-card" @click="emit('open-tab', 'terminal')">
-        <Terminal class="h-5 w-5" />
-        <span>{{ t('side.terminal') }}</span>
-      </button>
-      <button type="button" class="side-start-card" @click="emit('open-tab', 'browser')">
-        <Globe class="h-5 w-5" />
-        <span>{{ t('side.browser') }}</span>
       </button>
     </div>
   </div>
