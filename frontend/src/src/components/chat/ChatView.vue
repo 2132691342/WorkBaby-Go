@@ -503,7 +503,7 @@ function onHeaderCommand(cmd: string): void {
       <!-- 上下文占用环：与输入框同源 liveContextUsage，悬停展开分段详情 -->
       <ContextRing :usage="liveContextUsage" />
 
-      <!-- M3-3 焦点模式：只读正文，隐藏思考与工具时间线 -->
+      <!-- 焦点模式：只读正文，隐藏思考与工具时间线 -->
       <el-tooltip :content="t('chat.focusMode')" placement="bottom">
         <el-button
           :type="focusMode ? 'primary' : 'default'"

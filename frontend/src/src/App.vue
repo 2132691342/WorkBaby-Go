@@ -69,7 +69,7 @@ const tbTitle = computed(() => {
 })
 
 // 全局快捷键（Ctrl+N 新建任务 / Ctrl+K 命令面板 / Ctrl+/ 聚焦输入框 / Ctrl+Shift+P 命令面板
-// / Ctrl+B 收起左栏 / Ctrl+Shift+F 焦点模式 — M3-4 快捷键体系）
+// / Ctrl+B 收起左栏 / Ctrl+Shift+F 焦点模式）
 const { registerShortcut, clearAll: clearAllShortcuts } = useShortcuts()
 const focusMode = useFocusMode()
 

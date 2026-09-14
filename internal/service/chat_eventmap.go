@@ -31,9 +31,8 @@ type runEventMapper struct {
 	toolCalls []llm.ToolCall // 父 run 收集的工具调用（run 结束写 assistant.tool_calls）
 	doneEvent map[string]any // 终态事件：延迟到 assistant 落库后由 executeAgent 发出
 
-	// textSeg 当前累积的正文片段（自上次落块以来收到的 content 增量）。
-	// 模型一轮里的输出是「叙述 → 调工具 → 叙述 → 调工具」交替的，
-	// 只有按工具调用的真实位置把正文落成块，刷新回看时才不会把所有叙述挤到过程之后。
+	// textSeg 自上次落块以来累积的正文增量：在工具调用之前与轮次/run 结束时落块，
+	// 使块的 seq 与模型真实输出顺序一致（叙述 → 工具 → 叙述）。
 	textSeg strings.Builder
 }
 

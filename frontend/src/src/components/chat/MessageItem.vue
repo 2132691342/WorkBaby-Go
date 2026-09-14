@@ -60,10 +60,8 @@ const userAttachments = computed<MessageAttachment[]>(() =>
 /** 历史消息的过程块（按 seq 排序）—— MessageBlocksRenderer 直接消费。 */
 const historyBlocks = computed(() => resolveMessageBlocks(props.message))
 
-// ===== turn 折叠叙事（手动收起，不自动折叠）=====
-// 默认**展开**：流式期间正文与工具就是按真实顺序穿插渲染的，回复结束后若自动折起来，
-// 用户会看到「过程被拍扁成一行」的闪动，且回看顺序与刚才看到的不一致（一致优先于紧凑）。
-// 忙碌回合仍提供「收起过程」，把长过程压成一行迹线——但只在用户点了才收起。
+// ===== 过程收起（手动，不自动折叠）=====
+// 默认展开：回看顺序与流式期间一致。「收起过程」把长过程压成一行迹线，由用户显式触发。
 const traceTools = computed(() => blocksToToolCalls(historyBlocks.value))
 const traceProcessCount = computed(
   () => traceTools.value.length + historyBlocks.value.filter((b) => b.kind === 'thinking' && !!b.text).length

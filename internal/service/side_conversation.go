@@ -150,7 +150,7 @@ func (s *ChatService) sideParentMessages(ctx context.Context, ses *domain.ChatSe
 }
 
 // stripThinkTag 剥离正文中的 <think>…</think> 段（含未闭合尾部）。
-// 早期消息的思考内嵌在 content 里（现已走独立 thinking 通道），继承叙事不需要它。
+// 思考走独立 thinking 通道，继承叙事不需要它。
 func stripThinkTag(content string) string {
 	if !strings.Contains(content, "<think>") {
 		return content

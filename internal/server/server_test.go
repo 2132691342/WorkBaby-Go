@@ -81,7 +81,7 @@ func TestSSEServe(t *testing.T) {
 	assert.Contains(t, got, "id: 1")
 }
 
-// TestSSEReplayFromLastEventID 回归 B3：断线重连按 Last-Event-ID 补发错过的事件。
+// TestSSEReplayFromLastEventID 断线重连按 Last-Event-ID 补发错过的事件。
 func TestSSEReplayFromLastEventID(t *testing.T) {
 	log := event.NewRunEventLog(0, 0)
 	ts, _ := newSSETestServer(log)
@@ -125,7 +125,7 @@ func TestSSEReplayGap(t *testing.T) {
 	assert.Contains(t, got, "event: chat:gap")
 }
 
-// TestSSESlowClientClosed 回归 B1：慢客户端不再静默丢帧，而是关闭连接触发重连重放。
+// TestSSESlowClientClosed 慢客户端不静默丢帧，而是关闭连接触发重连重放。
 func TestSSESlowClientClosed(t *testing.T) {
 	ts, hub := newSSETestServer(event.NewRunEventLog(0, 0))
 	defer ts.Close()

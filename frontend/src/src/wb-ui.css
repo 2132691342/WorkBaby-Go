@@ -206,7 +206,7 @@ body {
   min-width: 0;
   overflow: hidden;
 }
-/* 顶栏菜单项：胶囊形（对齐参考图的横向菜单） */
+/* 顶栏菜单项：胶囊形横向菜单 */
 .appnav-item {
   display: inline-flex;
   align-items: center;
@@ -230,7 +230,7 @@ body {
   background: var(--wb-surface-hover);
   color: var(--wb-ink);
 }
-/* 激活项：品牌渐变实心胶囊（对齐参考图顶栏选中态） */
+/* 激活项：品牌渐变实心胶囊 */
 .appnav-item.is-active {
   background: var(--wb-grad-brand);
   color: #fff;
@@ -652,7 +652,7 @@ body {
 .card.p-sm {
   padding: 11px;
 }
-/* 图表卡：右上淡蓝光晕 + 白底（对齐参考图图表容器） */
+/* 图表卡：右上淡蓝光晕 + 白底 */
 .card--chart {
   background:
     radial-gradient(120% 90% at 100% 0%, color-mix(in srgb, var(--wb-primary) 7%, transparent), transparent 60%),
@@ -728,7 +728,7 @@ body {
 .btn:active {
   transform: translateY(0.5px) scale(0.99);
 }
-/* 胶囊按钮：参考图里的分组切换 / 标签型操作 */
+/* 胶囊按钮：分组切换 / 标签型操作 */
 .btn-pill {
   border-radius: 999px;
   padding: 0 14px;
@@ -911,7 +911,7 @@ textarea.input {
   color: var(--wb-muted);
   cursor: not-allowed;
 }
-/* 胶囊输入：参考图的搜索框形态（全圆角 + 浅底） */
+/* 胶囊输入：搜索框形态（全圆角 + 浅底） */
 .input-pill {
   border-radius: 999px;
   padding-left: 14px;
@@ -974,7 +974,7 @@ select.input {
 .switch.on::after {
   transform: translateX(14px);
 }
-/* 分段控件：胶囊轨道 + 白色滑块（参考图「全部 / 邮箱 / 电话」形态） */
+/* 分段控件：胶囊轨道 + 白色滑块 */
 .seg {
   display: inline-flex;
   padding: 3px;
@@ -1552,7 +1552,7 @@ kbd.chip {
 .ses-item:hover {
   background: color-mix(in srgb, var(--wb-primary) 8%, transparent);
 }
-/* 激活项：浅蓝底 + 左侧主色强调条（参考图侧栏选中态） */
+/* 激活项：浅蓝底 + 左侧主色强调条 */
 .ses-item.on {
   background: var(--wb-primary-soft);
   border-color: color-mix(in srgb, var(--wb-primary) 22%, transparent);
@@ -1635,7 +1635,7 @@ kbd.chip {
   flex-direction: column;
   gap: 14px;
 }
-/* 头像 / 图标容器：圆角方块 + 淡蓝渐变 + 内高光（参考图的图标底） */
+/* 头像 / 图标容器：圆角方块 + 淡蓝渐变 + 内高光 */
 .av {
   width: 30px;
   height: 30px;
@@ -2607,7 +2607,7 @@ kbd.chip {
   transform: translateY(-2px);
   box-shadow: var(--wb-shadow-lg), var(--wb-glass-inset, none);
 }
-/* KPI 卡右上角淡蓝光晕（参考图卡片角标装饰） */
+/* KPI 卡右上角淡蓝光晕（角标装饰） */
 .kpi .c::after {
   content: '';
   position: absolute;
@@ -2633,7 +2633,7 @@ kbd.chip {
   font-variant-numeric: tabular-nums;
   line-height: 1.25;
   margin-top: 1px;
-  /* 渐变数字：品牌色梯度（对齐参考图 KPI 数字质感） */
+  /* 渐变数字：品牌色梯度 */
   background: var(--wb-grad-brand);
   -webkit-background-clip: text;
   background-clip: text;

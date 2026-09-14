@@ -180,13 +180,7 @@ const renderUnits = computed(() => {
   return out
 })
 
-/**
- * 渲染分组：连续工具单元归入同一张「过程卡」。
- *
- * <p>不分组时每个工具都是消息流里孤立的一行，一屏十几个工具就是十几行裸文字；
- * 归入一张卡后行间用极浅分隔线，才有参考图里「一张卡内若干行」的列表观感。
- * 纯函数在 chat/models/blocks.ts（含单测），组件只负责渲染。
- */
+/** 渲染分组：连续工具单元归入同一张过程卡。纯函数见 chat/models/blocks.ts（含单测）。 */
 const renderGroups = computed(() => groupToolRuns(renderUnits.value))
 
 // ===== 折叠状态（历史块用；流式期不折叠） =====
@@ -217,9 +211,7 @@ function isOpen(b: RenderBlock): boolean {
   const key = `${b.kind}:${b.seq}`
   const m = localOpen.value.get(key)
   if (m !== undefined) return m
-  // 默认只展开「正在执行」或「失败」的块。
-  // 早期实现按「流式期」全量展开工具块，一次 run 几十个工具就会撑出一堆空结果面板，
-  // 消息流被拉长数倍——已完成的过程折叠成一行才是可读的默认态。
+  // 默认只展开「正在执行」或「失败」的块：一次 run 几十个工具全展开会把消息流拉长数倍
   return isError(b) || b.running === true
 }
 function toggle(b: RenderBlock): void {
@@ -277,7 +269,7 @@ watch(
          注意：循环 renderUnits（配对后的视图），不是 renderBlocks（原始数据）；
          这样 tool_call 与对应 tool_result 合并展示为一个工具单元，避免视觉上的『两次工具』。 -->
     <template v-for="g in renderGroups" :key="g.key">
-      <!-- 连续工具单元 → 一张过程卡：行间极浅分隔线，形成参考图里「卡内若干行」的列表观感。
+      <!-- 连续工具单元 → 一张过程卡：行间极浅分隔线，形成卡内列表观感。
            正文块会自然切断分组，所以「叙述 → 工具组 → 叙述」的真实顺序得以保留。 -->
       <div v-if="g.tools.length > 0" class="wb-trace">
         <div
@@ -375,9 +367,8 @@ watch(
         <pre v-if="thinkingOpen" class="wb-think-body">{{ g.one.text }}</pre>
       </div>
 
-      <!-- 文本块：内置 MarkdownRenderer 作为默认渲染，父组件可用 #text slot 覆盖（流式期挂光标）。
-           关键：内联 fallback 必填——若父组件未传 slot，slot 内部为空会让历史文本消失
-           （早期重构的回归 bug：MessageItem 没传 #text，块里没渲染任何东西）。 -->
+      <!-- 文本块：默认走内置 MarkdownRenderer，父组件可用 #text slot 覆盖（流式期挂光标）。
+           内联 fallback 必须保留：父组件未传 slot 时内容为空，历史正文会整段消失。 -->
       <div v-else-if="g.one && g.one.kind === 'text' && g.one.text" class="wb-block-text">
         <slot name="text" :content="g.one.text" :streaming="isLastBlock(g.one)">
           <div class="flex items-end gap-1">
@@ -414,7 +405,7 @@ watch(
 
 /* ===== 过程卡（连续工具单元）=====
  * 一屏十几个工具若每行裸露，消息流就是十几行散文字；收进一张卡后
- * 行间用极浅分隔线、hover 整行高亮，才有参考图那种「卡内列表」的秩序感。 */
+ * 行间用极浅分隔线、hover 整行高亮，形成卡内列表的秩序感。 */
 .wb-trace {
   border: 1px solid var(--wb-border);
   border-radius: 12px;

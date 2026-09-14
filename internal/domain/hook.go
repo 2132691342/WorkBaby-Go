@@ -39,8 +39,7 @@ func HookEventUsesMatcher(event string) bool {
 	return false
 }
 
-// hookEventAliases 历史事件名 → 现行事件名。
-// 早期版本使用 run_start / before_tool / after_tool / run_end，读库时归一。
+// hookEventAliases 旧事件名 → 现行事件名：读库时归一，让既有配置继续生效。
 var hookEventAliases = map[string]string{
 	"run_start":   HookEventSessionStart,
 	"before_tool": HookEventPreToolUse,

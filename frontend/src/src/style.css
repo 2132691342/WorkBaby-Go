@@ -941,7 +941,7 @@ button:active:not(:disabled) {
   border-color: var(--wb-glass-border, var(--wb-border)) !important;
   background: var(--wb-surface-solid) !important;
 }
-/* 下拉菜单项：胶囊圆角 + 主色 hover（参考图的菜单观感） */
+/* 下拉菜单项：胶囊圆角 + 主色 hover */
 .el-dropdown-menu,
 .el-select-dropdown__list,
 .el-cascader-menu {

@@ -276,7 +276,7 @@ func (t *trackingTool) calls() int {
 	return t.n
 }
 
-// panicTool Execute 直接 panic（验证 B7 panic 隔离）。
+// panicTool Execute 直接 panic（验证 panic 隔离）。
 type panicTool struct{}
 
 func (panicTool) Name() string              { return "panic_me" }
@@ -301,7 +301,7 @@ func newRunnerWithTools(t *testing.T, prov llm.Provider, tools ...tool.Tool) *Ru
 	return NewRunner(prov, &recordingSink{}, DefaultConfig()).WithTools(reg, defs)
 }
 
-// TestRunnerReadonlyParallel 验证 B7：全只读工具轮并发执行（总耗时 ≈ 单次执行，
+// TestRunnerReadonlyParallel 全只读工具轮并发执行（总耗时 ≈ 单次执行，
 // 而非串行 × N）且结果按调用顺序回填。
 func testRunnerReadonlyParallel(t *testing.T) {
 	const toolDelay = 100 * time.Millisecond
@@ -337,7 +337,7 @@ func testRunnerReadonlyParallel(t *testing.T) {
 	assert.Less(t, strings.Index(joined, "ok:r_a"), strings.Index(joined, "ok:r_b"))
 }
 
-// TestRunnerToolPanicRecovered 验证 B7：单工具 panic 不拖垮 run，以 ToolResult 上报。
+// TestRunnerToolPanicRecovered 单工具 panic 不拖垮 run，以 ToolResult 上报。
 func testRunnerToolPanicRecovered(t *testing.T) {
 	p := &scriptedProvider{calls: [][]llm.StreamChunk{
 		{{ToolCall: &llm.NormalizedToolCall{ID: "c1", Name: "panic_me", Arguments: json.RawMessage(`{}`)}}},

@@ -1,5 +1,9 @@
 package service
 
+// 定义文件（命令 / 子智能体）测试。
+//
+// 覆盖三条链路：单文件解析与拒绝规则、目录级加载的容错、模型与推理强度的映射与校验。
+
 import (
 	"os"
 	"path/filepath"
@@ -13,111 +17,81 @@ import (
 	"WorkBaby/internal/runtime"
 )
 
-// TestSplitFrontMatter 定义文件 frontmatter 解析：无块 / 有块 / 引号 / 别名键 / 列表 / 无闭合。
-func TestSplitFrontMatter(t *testing.T) {
-	cases := []struct {
-		name       string
-		input      string
-		wantField  string
-		wantValue  string
-		wantBody   string
-		wantAbsent string
-	}{
-		{
-			name:      "no frontmatter",
-			input:     "just a prompt",
-			wantBody:  "just a prompt",
-			wantField: "description",
-		},
-		{
-			name:      "plain block",
-			input:     "---\ndescription: review code\n---\nbody line",
-			wantField: "description", wantValue: "review code", wantBody: "body line",
-		},
-		{
-			name:      "quoted value and comments",
-			input:     "---\n# comment\nname: \"code-review\"\n---\nbody",
-			wantField: "name", wantValue: "code-review", wantBody: "body",
-		},
-		{
-			name:      "camelCase alias reads kebab",
-			input:     "---\ndisallowedTools: exec, file_write\n---\nbody",
-			wantField: "disallowedTools", wantValue: "exec, file_write", wantBody: "body",
-		},
-		{
-			name:      "unclosed block is not frontmatter",
-			input:     "---\ndescription: broken",
-			wantField: "description", wantValue: "", wantBody: "---\ndescription: broken",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fm := splitFrontMatter(tc.input)
-			assert.Equal(t, tc.wantValue, fm.get(tc.wantField))
-			assert.Equal(t, tc.wantBody, fm.body)
-		})
-	}
-	// 列表与布尔/整数解析
-	fm := splitFrontMatter("---\ntools: [file_read, file_grep]\nmaxTurns: 12\ninjectAgentsMd: false\n---\nb")
-	assert.Equal(t, []string{"file_read", "file_grep"}, fm.list("tools"))
-	assert.Equal(t, 12, fm.intValue("maxTurns", 0))
-	assert.False(t, fm.boolean("injectAgentsMd", true))
-	assert.Equal(t, 7, fm.intValue("missing", 7))
-}
+// TestDefinitionFileParsing 单文件解析：命令模板、子智能体映射、frontmatter 边界与拒绝规则。
+func TestDefinitionFileParsing(t *testing.T) {
+	t.Run("命令文件", func(t *testing.T) {
+		ok, valid := parseCommandFile([]byte("---\ndescription: 审查改动\nargument-hint: \"[范围]\"\n---\n请审查 $ARGUMENTS 的改动"), "review")
+		require.True(t, valid)
+		assert.Equal(t, "review", ok.Name)
+		assert.Equal(t, "审查改动", ok.Desc)
+		assert.Equal(t, "[范围]", ok.Args)
+		assert.Equal(t, "custom", ok.Group)
+		assert.True(t, ok.ClientOnly)
+		assert.Contains(t, ok.Prompt, "$ARGUMENTS")
+		// 来源由加载器按目录打标（parseCommandFile 只管单个文件的内容）
+		assert.Empty(t, ok.Source)
 
-// TestParseCommandFile 命令文件解析：正文即模板，缺正文与无效字段的处理。
-func TestParseCommandFile(t *testing.T) {
-	ok, valid := parseCommandFile([]byte("---\ndescription: 审查改动\nargument-hint: \"[范围]\"\n---\n请审查 $ARGUMENTS 的改动"), "review")
-	require.True(t, valid)
-	assert.Equal(t, "review", ok.Name)
-	assert.Equal(t, "审查改动", ok.Desc)
-	assert.Equal(t, "[范围]", ok.Args)
-	assert.Equal(t, "custom", ok.Group)
-	assert.True(t, ok.ClientOnly)
-	assert.Contains(t, ok.Prompt, "$ARGUMENTS")
-	// 来源由加载器按目录打标（parseCommandFile 只管单个文件的内容）
-	assert.Empty(t, ok.Source)
-
-	// 空正文：没有可发送的提示词，跳过而不是产出一个空命令
-	if _, v := parseCommandFile([]byte("---\ndescription: 空的\n---\n\n"), "empty"); v {
-		t.Fatal("empty prompt must be rejected")
-	}
-	// 未接入执行链的字段不影响解析（只告警），命令仍然可用
-	if _, v := parseCommandFile([]byte("---\nmodel: gpt-4o\nallowed-tools: exec\n---\nbody"), "with-extra"); !v {
-		t.Fatal("unsupported fields must not drop the command")
-	}
-}
-
-// TestParseAgentFile 定义文件 → harness.Definition 的映射与拒绝规则。
-func TestParseAgentFile(t *testing.T) {
-	builtin := map[string]struct{}{"default": {}, "explore": {}}
-
-	def, ok := parseAgentFile([]byte(
-		"---\nname: reviewer\ndescription: 代码审查员\ntools: file_read, file_grep\ndisallowedTools: file_write\nmaxTurns: 8\n---\n你是审查员。",
-	), "reviewer.md", builtin)
-	require.True(t, ok)
-	assert.Equal(t, "reviewer", def.Name)
-	assert.Equal(t, []string{"file_read", "file_grep"}, def.Tools.Allow)
-	assert.Equal(t, []string{"file_write"}, def.Tools.Deny)
-	assert.Equal(t, 8, def.Budget.MaxTurns)
-	assert.False(t, def.Memory.Enabled, "sub agent must not write long-term memory")
-	assert.Contains(t, def.Persona, "你是审查员")
-
-	// tools: * → 不设白名单（等价「全部工具」）
-	all, ok := parseAgentFile([]byte("---\nname: any\ndescription: d\ntools: \"*\"\n---\nbody"), "any.md", builtin)
-	require.True(t, ok)
-	assert.Nil(t, all.Tools.Allow)
-
-	// 缺 description / 名非法 / 撞内置名 → 拒绝
-	for _, in := range []string{
-		"---\nname: no-desc\n---\nbody",
-		"---\nname: Bad_Name\ndescription: d\n---\nbody",
-		"---\nname: explore\ndescription: 想覆盖内置\n---\nbody",
-	} {
-		if _, v := parseAgentFile([]byte(in), "x.md", builtin); v {
-			t.Fatalf("must be rejected: %s", in)
+		// 空正文：没有可发送的提示词，跳过而不是产出一个空命令
+		if _, v := parseCommandFile([]byte("---\ndescription: 空的\n---\n\n"), "empty"); v {
+			t.Fatal("empty prompt must be rejected")
 		}
-	}
+		// 未接入执行链的字段不影响解析（只告警），命令仍然可用
+		if _, v := parseCommandFile([]byte("---\nmodel: gpt-4o\nallowed-tools: exec\n---\nbody"), "with-extra"); !v {
+			t.Fatal("unsupported fields must not drop the command")
+		}
+	})
+
+	t.Run("子智能体文件", func(t *testing.T) {
+		builtin := map[string]struct{}{"default": {}, "explore": {}}
+
+		def, ok := parseAgentFile([]byte(
+			"---\nname: reviewer\ndescription: 代码审查员\ntools: file_read, file_grep\ndisallowedTools: file_write\nmaxTurns: 8\n---\n你是审查员。",
+		), "reviewer.md", builtin)
+		require.True(t, ok)
+		assert.Equal(t, "reviewer", def.Name)
+		assert.Equal(t, []string{"file_read", "file_grep"}, def.Tools.Allow)
+		assert.Equal(t, []string{"file_write"}, def.Tools.Deny)
+		assert.Equal(t, 8, def.Budget.MaxTurns)
+		assert.False(t, def.Memory.Enabled, "子智能体不写长期记忆")
+		assert.Contains(t, def.Persona, "你是审查员")
+
+		// tools: * → 不设白名单（等价「全部工具」）
+		all, ok := parseAgentFile([]byte("---\nname: any\ndescription: d\ntools: \"*\"\n---\nbody"), "any.md", builtin)
+		require.True(t, ok)
+		assert.Nil(t, all.Tools.Allow)
+
+		// 缺 description / 名非法 / 撞内置名 → 拒绝
+		for _, in := range []string{
+			"---\nname: no-desc\n---\nbody",
+			"---\nname: Bad_Name\ndescription: d\n---\nbody",
+			"---\nname: explore\ndescription: 想覆盖内置\n---\nbody",
+		} {
+			if _, v := parseAgentFile([]byte(in), "x.md", builtin); v {
+				t.Fatalf("must be rejected: %s", in)
+			}
+		}
+	})
+
+	t.Run("frontmatter 边界", func(t *testing.T) {
+		// 无 frontmatter：整份内容即正文
+		plain := "just a prompt"
+		fm := splitFrontMatter(plain)
+		assert.Equal(t, plain, fm.body)
+		assert.Empty(t, fm.get("description"))
+
+		// 列表 / 整数 / 布尔解析，缺省值可指定
+		typed := splitFrontMatter("---\ntools: [file_read, file_grep]\nmaxTurns: 12\ninjectAgentsMd: false\n---\nb")
+		assert.Equal(t, []string{"file_read", "file_grep"}, typed.list("tools"))
+		assert.Equal(t, 12, typed.intValue("maxTurns", 0))
+		assert.False(t, typed.boolean("injectAgentsMd", true))
+		assert.Equal(t, 7, typed.intValue("missing", 7))
+
+		// 未闭合的 --- 块不是 frontmatter，整体当正文处理（否则会把正文吃掉）
+		broken := "---\ndescription: broken"
+		bfm := splitFrontMatter(broken)
+		assert.Equal(t, broken, bfm.body)
+		assert.Empty(t, bfm.get("description"))
+	})
 }
 
 // TestLoadDefinitionFiles 目录级加载：坏文件跳过、好文件进入注册表（不因一个文件写坏而整体失败）。
@@ -166,56 +140,60 @@ func TestLoadDefinitionFiles(t *testing.T) {
 	assert.Equal(t, "", WorkspaceCommandDir(""))
 }
 
-// TestAgentFileModelOverride 模型与推理强度的映射与拒绝规则。
-func TestAgentFileModelOverride(t *testing.T) {
+// TestAgentModelThinking 模型与推理强度的映射和校验。
+//
+// 两个入口同一套规则：定义文件（parseAgentFile）与设置页（validateProfileReq）。
+// 规则的核心是「推理强度脱离模型就没有意义」——只配强度不配模型会让用户当次的
+// 推理档位选择静默失效，所以两处都直接拒绝而不是存下来。
+func TestAgentModelThinking(t *testing.T) {
 	builtin := map[string]struct{}{"default": {}}
 
-	// model + thoughtLevel：两者都生效
-	def, ok := parseAgentFile([]byte(
-		"---\nname: heavy\ndescription: 重活\ntools: \"*\"\nmodel: gpt-5\nthoughtLevel: HIGH\n---\nbody",
-	), "heavy.md", builtin)
-	require.True(t, ok)
-	assert.Equal(t, "gpt-5", def.Model)
-	assert.Equal(t, "high", def.Thinking, "推理强度应归一为小写")
-	assert.Equal(t, "gpt-5", def.EffectiveModel("session-model"))
-	// 未指定模型：跟随会话
-	assert.Equal(t, "session-model", harness.Definition{}.EffectiveModel("session-model"))
+	t.Run("定义文件入口", func(t *testing.T) {
+		// model + thoughtLevel：两者都生效
+		def, ok := parseAgentFile([]byte(
+			"---\nname: heavy\ndescription: 重活\ntools: \"*\"\nmodel: gpt-5\nthoughtLevel: HIGH\n---\nbody",
+		), "heavy.md", builtin)
+		require.True(t, ok)
+		assert.Equal(t, "gpt-5", def.Model)
+		assert.Equal(t, "high", def.Thinking, "推理强度应归一为小写")
+		assert.Equal(t, "gpt-5", def.EffectiveModel("session-model"))
+		// 未指定模型：跟随会话
+		assert.Equal(t, "session-model", harness.Definition{}.EffectiveModel("session-model"))
 
-	// thoughtLevel 未配 model：不生效（否则会让用户当次的推理档位选择失效）
-	only, ok := parseAgentFile([]byte("---\nname: level-only\ndescription: d\nthoughtLevel: high\n---\nbody"), "l.md", builtin)
-	require.True(t, ok)
-	assert.Empty(t, only.Thinking)
+		// thoughtLevel 未配 model：不生效（否则会让用户当次的推理档位选择失效）
+		only, ok := parseAgentFile([]byte("---\nname: level-only\ndescription: d\nthoughtLevel: high\n---\nbody"), "l.md", builtin)
+		require.True(t, ok)
+		assert.Empty(t, only.Thinking)
 
-	// 非法档位：丢弃而不是写入
-	bad, ok := parseAgentFile([]byte("---\nname: bad\ndescription: d\nmodel: m\nthoughtLevel: ultra\n---\nbody"), "b.md", builtin)
-	require.True(t, ok)
-	assert.Empty(t, bad.Thinking)
+		// 非法档位：丢弃而不是写入
+		bad, ok := parseAgentFile([]byte("---\nname: bad\ndescription: d\nmodel: m\nthoughtLevel: ultra\n---\nbody"), "b.md", builtin)
+		require.True(t, ok)
+		assert.Empty(t, bad.Thinking)
 
-	// inherit 与不写等价
-	inherit, ok := parseAgentFile([]byte("---\nname: inh\ndescription: d\nmodel: inherit\n---\nbody"), "i.md", builtin)
-	require.True(t, ok)
-	assert.Empty(t, inherit.Model)
-}
-
-// TestProfileThinkingRequiresModel 设置页保存时的护栏：缺模型的推理强度直接拒绝，
-// 而不是存进库后静默不生效（用户无从发现自己的配置没起作用）。
-func TestProfileThinkingRequiresModel(t *testing.T) {
-	base := domain.AgentProfileREQ{Name: "reviewer", Description: "审查"}
-
-	_, err := validateProfileReq(&domain.AgentProfileREQ{Name: base.Name, Description: base.Description, Thinking: "high"})
-	require.Error(t, err, "只给推理强度不给模型必须被拒")
-
-	_, err = validateProfileReq(&domain.AgentProfileREQ{Name: base.Name, Description: base.Description, Model: "gpt-5", Thinking: "ultra"})
-	require.Error(t, err, "非法档位必须被拒")
-
-	row, err := validateProfileReq(&domain.AgentProfileREQ{
-		Name: base.Name, Description: base.Description, Model: "gpt-5", Thinking: "HIGH",
+		// inherit 与不写等价
+		inherit, ok := parseAgentFile([]byte("---\nname: inh\ndescription: d\nmodel: inherit\n---\nbody"), "i.md", builtin)
+		require.True(t, ok)
+		assert.Empty(t, inherit.Model)
 	})
-	require.NoError(t, err)
-	assert.Equal(t, "gpt-5", row.Model)
-	assert.Equal(t, "high", row.Thinking)
 
-	def := profileToDefinition(row)
-	assert.Equal(t, "gpt-5", def.Model)
-	assert.Equal(t, "high", def.Thinking)
+	t.Run("设置页入口", func(t *testing.T) {
+		base := domain.AgentProfileREQ{Name: "reviewer", Description: "审查"}
+
+		_, err := validateProfileReq(&domain.AgentProfileREQ{Name: base.Name, Description: base.Description, Thinking: "high"})
+		require.Error(t, err, "只给推理强度不给模型必须被拒")
+
+		_, err = validateProfileReq(&domain.AgentProfileREQ{Name: base.Name, Description: base.Description, Model: "gpt-5", Thinking: "ultra"})
+		require.Error(t, err, "非法档位必须被拒")
+
+		row, err := validateProfileReq(&domain.AgentProfileREQ{
+			Name: base.Name, Description: base.Description, Model: "gpt-5", Thinking: "HIGH",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "gpt-5", row.Model)
+		assert.Equal(t, "high", row.Thinking)
+
+		def := profileToDefinition(row)
+		assert.Equal(t, "gpt-5", def.Model)
+		assert.Equal(t, "high", def.Thinking)
+	})
 }

@@ -58,7 +58,7 @@ function resolveBlock(block: MessageBlock): ResolvedBlock {
  * 消息 → 渲染块序列（按 seq 升序；空/脏块过滤）。
  *
  * 优先取持久化 blocks；无块且消息带 tool_calls_json 时降级从 tool_calls_json 重建
- * tool_call 块（兼容 P0-M1 之前的历史消息，至少能看到调用过什么）。
+ * tool_call 块（兼容无块的历史消息，至少能看到调用过什么）。
  */
 export function resolveMessageBlocks(msg: Message): ResolvedBlock[] {
   if (msg.blocks && msg.blocks.length > 0) {
